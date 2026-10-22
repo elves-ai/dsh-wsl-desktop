@@ -48,6 +48,7 @@ jobs:
         uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
         with:
           workspaces: src-tauri -> target
+          cache-on-failure: true
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Install frontend dependencies
         run: npm ci --no-audit --no-fund
@@ -89,6 +90,7 @@ jobs:
         uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
         with:
           workspaces: src-tauri -> target
+          cache-on-failure: true
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Install frontend dependencies
         run: npm ci --no-audit --no-fund
@@ -96,12 +98,26 @@ jobs:
         run: npm run build
       - name: Test on Windows without launching the app
         run: |
-          npm test
-          if ($LASTEXITCODE -ne 0) { throw 'Frontend tests failed.' }
-          cargo test --manifest-path src-tauri/Cargo.toml --lib --locked
-          if ($LASTEXITCODE -ne 0) { throw 'Windows Rust tests failed.' }
+          npm test 2>&1 | Tee-Object -FilePath windows-frontend-test.log
+          if ($LASTEXITCODE -ne 0) {
+            $details = ((Get-Content windows-frontend-test.log -Tail 60) -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Windows frontend tests::$details"
+            throw 'Frontend tests failed.'
+          }
+          cargo test --manifest-path src-tauri/Cargo.toml --lib --locked 2>&1 | Tee-Object -FilePath windows-rust-test.log
+          if ($LASTEXITCODE -ne 0) {
+            $details = ((Get-Content windows-rust-test.log -Tail 100) -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Windows Rust tests::$details"
+            throw 'Windows Rust tests failed.'
+          }
       - name: Build Windows application and NSIS installer
-        run: npm run desktop:build -- --ci --target x86_64-pc-windows-msvc --bundles nsis -- --locked
+        run: |
+          npm run desktop:build -- --ci --target x86_64-pc-windows-msvc --bundles nsis -- --locked 2>&1 | Tee-Object -FilePath windows-build.log
+          if ($LASTEXITCODE -ne 0) {
+            $details = ((Get-Content windows-build.log -Tail 100) -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Windows installer build::$details"
+            throw 'Windows installer build failed.'
+          }
       - name: Collect executable, installer and SHA256 checksums
         run: |
           $ErrorActionPreference = 'Stop'
@@ -136,3 +152,11 @@ jobs:
           - This build is unsigned. Windows SmartScreen may warn; verify the source and SHA256 before running.
           - CI builds and tests the application; it does not run or restart your WSL service.
           "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+      - name: Upload failed Windows build diagnostics
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-build-diagnostics-${{ github.run_number }}
+          path: windows-*.log
+          if-no-files-found: ignore
+          retention-days: 7
