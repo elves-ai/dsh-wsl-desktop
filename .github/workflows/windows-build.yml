@@ -35,6 +35,11 @@ jobs:
         with:
           node-version: '24'
           cache: npm
+      - name: Validate release tag against application versions
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: node scripts/release.mjs validate
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
@@ -126,8 +131,10 @@ jobs:
           New-Item -ItemType Directory -Path $output -Force | Out-Null
           Copy-Item -LiteralPath (Join-Path $release 'dsh-wsl-desktop.exe') -Destination $output
           $installers = @(Get-ChildItem -LiteralPath (Join-Path $release 'bundle/nsis') -Filter '*-setup.exe' -File)
-          if ($installers.Count -eq 0) { throw 'No NSIS installer was produced.' }
-          foreach ($installer in $installers) { Copy-Item -LiteralPath $installer.FullName -Destination $output }
+          if ($installers.Count -ne 1) { throw 'Expected exactly one NSIS installer.' }
+          $version = (Get-Content -LiteralPath (Join-Path $PWD 'package.json') -Raw | ConvertFrom-Json).version
+          $installerName = 'dsh-wsl-desktop_' + $version + '_x64-setup.exe'
+          Copy-Item -LiteralPath $installers[0].FullName -Destination (Join-Path $output $installerName)
           $checksums = Get-ChildItem -LiteralPath $output -Filter '*.exe' -File | Sort-Object Name | ForEach-Object {
             $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
             "$hash  $($_.Name)"
@@ -160,3 +167,69 @@ jobs:
           path: windows-*.log
           if-no-files-found: ignore
           retention-days: 7
+
+  publish-release:
+    name: Publish tagged GitHub Release
+    needs: build-windows
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - name: Validate release version
+        id: version
+        run: node scripts/release.mjs validate
+      - name: Download verified Windows build
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: dsh-wsl-desktop-windows-x64-${{ github.run_number }}
+          path: artifacts/windows
+      - name: Verify release files and checksums
+        run: node scripts/release.mjs verify artifacts/windows
+      - name: Publish complete release without overwriting published versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IS_PRERELEASE: ${{ steps.version.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/release-notes.md"
+          printf '%s\n' \
+            "Windows x64 release built from commit $GITHUB_SHA." \
+            "" \
+            "Includes the NSIS installer, standalone executable and SHA256SUMS.txt." \
+            "" \
+            "Current builds are unsigned. SignPath Foundation application is pending review; Windows SmartScreen may warn." \
+            "MIT license. Requires an existing WSL DSH installation and Microsoft WebView2 Runtime." \
+            "" \
+            "[Usage and privacy information](https://github.com/$GITHUB_REPOSITORY/blob/$RELEASE_TAG/DOWNLOADS.md)" > "$notes"
+          if is_draft=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft); then
+            if [[ "$is_draft" != true ]]; then
+              echo "::error::This version is already published; refusing to overwrite release assets."
+              exit 1
+            fi
+          else
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --target "$GITHUB_SHA" --title "DSH WSL Desktop $RELEASE_TAG" --notes-file "$notes" --draft
+          fi
+          assets=(artifacts/windows/*.exe artifacts/windows/SHA256SUMS.txt)
+          gh release upload "$RELEASE_TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+          printf '%s\n' "${assets[@]##*/}" | sort > "$RUNNER_TEMP/expected-assets.txt"
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | sort > "$RUNNER_TEMP/actual-assets.txt"
+          diff -u "$RUNNER_TEMP/expected-assets.txt" "$RUNNER_TEMP/actual-assets.txt"
+          latest=true
+          if [[ "$IS_PRERELEASE" == true ]]; then latest=false; fi
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false \
+            --prerelease="$IS_PRERELEASE" --latest="$latest" --notes-file "$notes"
+          printf '[Download Release %s](https://github.com/%s/releases/tag/%s)\n' \
+            "$RELEASE_TAG" "$GITHUB_REPOSITORY" "$RELEASE_TAG" >> "$GITHUB_STEP_SUMMARY"

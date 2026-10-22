@@ -73,9 +73,22 @@ WebView 数据：%LOCALAPPDATA%\io.local.dsh-wsl-desktop\webview
 
 1. Ubuntu runner 验证前端、Rust 和 fake-service Python 测试。
 2. 测试通过后，Windows Server 2022 runner 使用 MSVC 编译，执行 Windows 单元测试并生成 x64 NSIS 安装包。
-3. 从 [Actions 页面](https://github.com/elves-ai/dsh-wsl-desktop/actions/workflows/windows-build.yml)选择成功的运行，在 Summary 或 Artifacts 下载 Windows 产物；也可点击 Run workflow 手动重建。下载 Artifact 通常需要登录 GitHub。
+3. 普通 main、PR 和手动构建上传 Artifacts；推送版本标签时，在测试和 Windows 打包成功后创建 GitHub Release 并上传长期下载附件。
 
-每份产物包含独立可执行文件、NSIS 安装包和 SHA256SUMS.txt，保留 30 天。此流程只上传 Actions 产物，不自动创建 Release，不需要额外仓库 Secrets。GitHub Token 仅 contents:read 权限，第三方 Actions 固定到提交 SHA。
+每份产物包含独立可执行文件、NSIS 安装包和 SHA256SUMS.txt。Actions Artifacts 保留 30 天，下载通常需要登录 GitHub；正式版本请从 [Releases 页面](https://github.com/elves-ai/dsh-wsl-desktop/releases)下载，公开 Release 附件不受这 30 天保留期限制。
+
+默认 GitHub Token 为 contents:read，仅标签发布 job 获得 contents:write；PR、main 和手动构建不会发布 Release。不需要额外仓库 Secrets，第三方 Actions 固定到提交 SHA。
+
+### 发布新版本
+
+版本标签必须匹配四份元数据：[package.json](<package.json>)、[package-lock.json](<package-lock.json>)、[Cargo.toml](<src-tauri/Cargo.toml>)、[tauri.conf.json](<src-tauri/tauri.conf.json>)。支持 vX.Y.Z 和 vX.Y.Z-预发布标识；版本不一致会在构建前失败。修改版本并提交后，例如：
+
+~~~bash
+git tag v0.1.0
+git push origin v0.1.0
+~~~
+
+发布 job 先下载同一次工作流的 Windows 产物并重新验证全部 EXE 校验和，再创建草稿 Release、上传三个附件、核对附件清单，最后公开 Release。预发布标签会标记为 Pre-release，不取代最新稳定版。失败时可能留下草稿，重跑可继续；已经公开的版本拒绝覆盖，应修复后发布新版本，不移动旧标签。维护者应限制版本标签的推送权限。
 
 **构建未配置代码签名**：Windows SmartScreen 可能警告，请核对来源和 SHA256。构建机不需要你的 WSL 或 DSH 凭据；CI 不启动应用，不会连接或重启你电脑中的服务。
 
