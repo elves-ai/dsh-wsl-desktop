@@ -1,0 +1,699 @@
+use crate::{
+    backend::Backend,
+    config,
+    protocol::{redact, validated_launch_url, BackendReply},
+};
+use serde::Serialize;
+use std::{
+    fs::{self, OpenOptions},
+    io::Write,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    thread,
+    time::{Duration, Instant},
+};
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
+};
+use url::Url;
+
+#[derive(Clone, Serialize)]
+pub struct Snapshot {
+    state: String,
+    phase: String,
+    message: String,
+    busy: bool,
+    managed: bool,
+    origin: String,
+    last_error: Option<String>,
+    logs: Vec<String>,
+}
+struct Controller {
+    backend: Option<Backend>,
+    snapshot: Mutex<Snapshot>,
+    busy: AtomicBool,
+    exiting: AtomicBool,
+    log_path: PathBuf,
+}
+impl Controller {
+    fn snapshot(&self) -> Snapshot {
+        let mut snapshot = self
+            .snapshot
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        snapshot.busy = self.busy.load(Ordering::SeqCst);
+        snapshot
+    }
+    fn publish(&self, app: &tauri::AppHandle) {
+        let snapshot = self.snapshot();
+        let _ = app.emit_to("launcher", "launcher-state", snapshot.clone());
+        if let Some(tray) = app.tray_by_id("dsh-tray") {
+            let status = match snapshot.state.as_str() {
+                "ready" => "运行中",
+                "starting" => "启动中",
+                "stopped" => "已停止",
+                "error" => "需要处理",
+                _ => "正在检查",
+            };
+            let _ = tray.set_tooltip(Some(format!("DSH · {status}")));
+        }
+    }
+    fn record(&self, app: &tauri::AppHandle, message: &str) {
+        let message = redact(message);
+        {
+            let mut s = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
+            s.logs.push(message.clone());
+            if s.logs.len() > 120 {
+                s.logs.remove(0);
+            }
+        }
+        // This is only the launcher's own sanitized activity log, never DSH web.log.
+        if let Some(parent) = self.log_path.parent() {
+            let _ = fs::create_dir_all(parent);
+            let oversized = fs::metadata(&self.log_path).is_ok_and(|m| m.len() > 512 * 1024);
+            let file = if oversized {
+                OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .truncate(true)
+                    .open(&self.log_path)
+            } else {
+                OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&self.log_path)
+            };
+            if let Ok(mut file) = file {
+                let _ = writeln!(file, "{message}");
+            }
+        }
+        self.publish(app);
+    }
+    fn phase(&self, app: &tauri::AppHandle, phase: &str, message: &str) {
+        {
+            let mut s = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
+            s.phase = phase.into();
+            s.message = message.into();
+            s.last_error = None;
+        }
+        self.record(app, message);
+    }
+    fn apply(&self, app: &tauri::AppHandle, reply: &BackendReply, idle: bool) {
+        let mut s = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
+        s.state = reply.state.clone();
+        s.managed = reply.state == "ready" && reply.authenticated;
+        if idle {
+            s.phase = match reply.state.as_str() {
+                "ready" => "已就绪",
+                "stopped" => "服务已停止",
+                "starting" => "服务正在启动",
+                _ => "检查状态",
+            }
+            .into();
+            s.message = match reply.state.as_str() {
+                "ready" if reply.authenticated => "DSH 已就绪，可以打开工作窗口。",
+                "ready" => "检测到外部启动的服务；可尝试连接，但不会自动停止它。",
+                "stopped" => "服务未运行，点击打开 DSH 即可启动。",
+                _ => "正在等待服务就绪。",
+            }
+            .into();
+        }
+        drop(s);
+        self.publish(app);
+    }
+    fn failure(&self, app: &tauri::AppHandle, error: &str) {
+        let error = redact(error);
+        {
+            let mut s = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
+            s.state = "error".into();
+            s.phase = "操作未完成".into();
+            s.message = error.clone();
+            s.last_error = Some(error.clone());
+        }
+        self.record(app, &error);
+        show_launcher(app);
+    }
+    fn backend(&self) -> Result<&Backend, String> {
+        self.backend.as_ref().ok_or_else(|| {
+            self.snapshot()
+                .last_error
+                .unwrap_or_else(|| "启动配置不可用。".into())
+        })
+    }
+}
+
+fn assert_local(window: &WebviewWindow) -> Result<(), String> {
+    let url = window.url().map_err(|_| "无法验证调用窗口。")?;
+    let packaged = (url.scheme() == "tauri" && url.host_str() == Some("localhost"))
+        || (url.scheme() == "http" && url.host_str() == Some("tauri.localhost"));
+    let dev = cfg!(debug_assertions)
+        && url.scheme() == "http"
+        && url.host_str() == Some("127.0.0.1")
+        && url.port() == Some(1420);
+    if window.label() != "launcher" || !(packaged || dev) {
+        return Err("此页面无权控制本机服务。".into());
+    }
+    Ok(())
+}
+#[tauri::command]
+fn get_snapshot(
+    window: WebviewWindow,
+    state: tauri::State<'_, Arc<Controller>>,
+) -> Result<Snapshot, String> {
+    assert_local(&window)?;
+    Ok(state.snapshot())
+}
+#[tauri::command]
+async fn perform_action(
+    window: WebviewWindow,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<Controller>>,
+    action: String,
+) -> Result<Snapshot, String> {
+    assert_local(&window)?;
+    let controller = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || perform(&app, &controller, &action))
+        .await
+        .map_err(|_| "操作线程异常结束。".to_owned())?
+}
+
+fn show_launcher(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("launcher") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+fn activate(app: &tauri::AppHandle) {
+    if let Some(controller) = app.try_state::<Arc<Controller>>() {
+        let snapshot = controller.snapshot();
+        if snapshot.state == "ready" && app.get_webview_window("dsh").is_some() {
+            show_dsh(app);
+        } else {
+            show_launcher(app);
+            if !snapshot.busy {
+                dispatch(app, "open");
+            }
+        }
+    } else {
+        show_launcher(app);
+    }
+}
+
+fn show_dsh(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("dsh") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    } else {
+        show_launcher(app);
+    }
+}
+
+/// Native confirmation defaults to NO, including when invoked from the tray.
+fn confirm(action: &str) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        MessageBoxW, IDYES, MB_DEFBUTTON2, MB_ICONWARNING, MB_SETFOREGROUND, MB_YESNO,
+    };
+    let verb = match action {
+        "stop" => "停止服务",
+        "restart" => "重启服务",
+        _ => "停止服务并退出",
+    };
+    let text: Vec<u16> = format!("确定要{verb}吗？\n\n这会中断 DSH 中所有正在运行的任务和连接，包括旧启动器连接的会话。不会关闭整个 WSL。\n\n如只想退出窗口，请选择“仅退出启动器”。").encode_utf16().chain(Some(0)).collect();
+    let title: Vec<u16> = "DeepSeek Harness".encode_utf16().chain(Some(0)).collect();
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            text.as_ptr(),
+            title.as_ptr(),
+            MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2 | MB_SETFOREGROUND,
+        ) == IDYES
+    }
+}
+
+fn windows_status(origin: &str) -> Option<u16> {
+    reqwest::blocking::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(2))
+        .build()
+        .ok()?
+        .get(format!("{origin}/"))
+        .send()
+        .ok()
+        .map(|r| r.status().as_u16())
+}
+fn ensure_ready(
+    app: &tauri::AppHandle,
+    controller: &Controller,
+    open_window: bool,
+) -> Result<(), String> {
+    let backend = controller.backend()?;
+    let deadline = Instant::now() + Duration::from_secs(backend.config.startup_timeout_seconds);
+    let mut started = false;
+    let mut supervisor = None;
+    controller.phase(app, "检查 WSL", "正在检查已有 DSH 服务，不会重复启动。 ");
+    loop {
+        let reply = backend.invoke("probe")?;
+        controller.apply(app, &reply, false);
+        match reply.state.as_str() {
+            "ready" => {
+                let url = validated_launch_url(&reply, backend.config.port)?;
+                controller.phase(
+                    app,
+                    "检查本机连接",
+                    "服务已就绪，正在确认 Windows 可以访问。 ",
+                );
+                if let Some(status @ (200 | 401)) = windows_status(&backend.config.origin()) {
+                    if open_window {
+                        if status == 401 && !reply.authenticated {
+                            return Err("服务由外部启动，无法为新窗口自动认证。请使用原启动终端中的认证链接；启动器不会停止该服务。".into());
+                        }
+                        controller.phase(app, "打开工作窗口", "正在加载 DSH 工作窗口。 ");
+                        open_dsh(app, &backend.config, url)?;
+                    }
+                    controller.phase(
+                        app,
+                        "已就绪",
+                        if open_window {
+                            "DSH 已就绪；关闭工作窗口不会停止后台任务。"
+                        } else {
+                            "DSH 已启动，可以打开工作窗口。"
+                        },
+                    );
+                    return Ok(());
+                }
+            }
+            "stopped" => {
+                if started {
+                    return Err("DSH 在就绪前退出，请检查 WSL 服务日志；未自动重启。".into());
+                }
+                controller.phase(
+                    app,
+                    "启动服务",
+                    "正在启动 WSL 内的 DSH，首次启动可能需要一些时间。 ",
+                );
+                supervisor = Some(backend.start()?);
+                started = true;
+            }
+            "starting" => (),
+            _ => return Err("后端返回了非预期的服务状态。".into()),
+        }
+        if let Some(child) = supervisor.as_mut() {
+            if let Some(status) = child.try_wait().map_err(|_| "无法检查后台启动状态。")?
+            {
+                if !status.success() {
+                    return Err("WSL 后台进程启动失败，请检查 WSL 服务日志。".into());
+                }
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err(
+                "等待 DSH 就绪超时。服务可能仍在启动；不会自动停止现有服务，请稍后重试。".into(),
+            );
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+}
+fn stop_service(app: &tauri::AppHandle, controller: &Controller) -> Result<(), String> {
+    let backend = controller.backend()?;
+    let reply = backend.invoke("probe")?;
+    if reply.state == "stopped" {
+        controller.apply(app, &reply, false);
+        return Ok(());
+    }
+    // The legacy helper's authenticated URL is issued only for its own locked run.
+    // Do not assume that any Node process on this port is managed by the launcher.
+    if reply.state != "ready" || !reply.authenticated {
+        return Err("当前服务尚未就绪，或不是启动器管理的实例，未发送停止信号。请稍后重试，或在原终端中操作。".into());
+    }
+    validated_launch_url(&reply, backend.config.port)?;
+    controller.phase(
+        app,
+        "停止服务",
+        "正在请求 DSH 正常退出，不会强制结束进程或关闭 WSL。 ",
+    );
+    let expected_pid = reply
+        .pid
+        .filter(|pid| *pid > 0)
+        .ok_or("后端没有返回可验证的服务进程。")?;
+    let stopped = backend.stop(expected_pid)?;
+    if stopped.state != "stopped" {
+        return Err("未确认服务停止，不会继续执行重启或退出。".into());
+    }
+    controller.apply(app, &stopped, false);
+    controller.phase(app, "服务已停止", "DSH 已确认停止。 ");
+    Ok(())
+}
+
+fn open_external(url: &Url, trusted: &Url) {
+    // Never send loopback launch credentials, userinfo or non-web schemes to a shell.
+    if !["http", "https"].contains(&url.scheme())
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url
+            .query_pairs()
+            .any(|(key, _)| key.eq_ignore_ascii_case("token"))
+    {
+        return;
+    }
+    if url.origin() == trusted.origin() {
+        return;
+    }
+    let target = url.to_string();
+    thread::spawn(move || {
+        let _ = open::that_detached(target);
+    });
+}
+fn open_dsh(app: &tauri::AppHandle, config: &config::Config, url: Url) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("dsh") {
+        window
+            .navigate(url)
+            .map_err(|_| "无法重新连接 DSH 工作窗口。")?;
+        show_dsh(app);
+        return Ok(());
+    }
+    let data = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|_| "无法确定 WebView 数据目录。")?
+        .join("webview");
+    fs::create_dir_all(&data).map_err(|_| "无法创建 WebView 数据目录。")?;
+    let trusted = Url::parse(&config.origin()).map_err(|_| "本机地址配置错误。")?;
+    let nav_origin = trusted.clone();
+    let popup_origin = trusted.clone();
+    let page_origin = trusted.clone();
+    let app_on_load = app.clone();
+    let window = WebviewWindowBuilder::new(app, "dsh", WebviewUrl::External(url))
+        .title("DeepSeek Harness · WSL")
+        .inner_size(config.window_width as f64, config.window_height as f64)
+        .min_inner_size(600.0, 400.0)
+        .visible(false)
+        .data_directory(data)
+        .on_navigation(move |target| {
+            if target.origin() == nav_origin.origin() {
+                true
+            } else {
+                open_external(target, &nav_origin);
+                false
+            }
+        })
+        .on_new_window(move |target, _| {
+            // Internal previews stay in the existing app window instead of gaining IPC.
+            if target.origin() == popup_origin.origin() {
+                if let Some(window) = app_on_load.get_webview_window("dsh") {
+                    let _ = window.navigate(target);
+                }
+            } else {
+                open_external(&target, &popup_origin);
+            }
+            tauri::webview::NewWindowResponse::Deny
+        })
+        .on_page_load(move |window, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Finished
+                && payload.url().origin() == page_origin.origin()
+            {
+                let _ = window.show();
+                let _ = window.set_focus();
+                if let Some(launcher) = window.app_handle().get_webview_window("launcher") {
+                    let _ = launcher.hide();
+                }
+            }
+        })
+        .build()
+        .map_err(|_| "无法创建 WebView2 工作窗口，请检查 WebView2 Runtime。")?;
+    fit_window(&window, config.window_width, config.window_height);
+    // Show a native window immediately; page-load completion dismisses the loading UI.
+    let _ = window.show();
+    let _ = window.set_focus();
+    Ok(())
+}
+fn fit_window(window: &WebviewWindow, width: u32, height: u32) {
+    // Tauri's monitor conversion handles mixed DPI. Clamp to 90% of the work area.
+    let monitor = window
+        .app_handle()
+        .cursor_position()
+        .ok()
+        .and_then(|point| window.monitor_from_point(point.x, point.y).ok().flatten())
+        .or_else(|| window.current_monitor().ok().flatten());
+    if let Some(monitor) = monitor {
+        let scale = monitor.scale_factor();
+        let work = monitor.work_area();
+        let w = (width as f64).min(work.size.width as f64 / scale * 0.90);
+        let h = (height as f64).min(work.size.height as f64 / scale * 0.90);
+        let _ = window.set_size(tauri::LogicalSize::new(w, h));
+        let actual = window.outer_size().ok();
+        if let Some(actual) = actual {
+            let x = work.position.x + (work.size.width as i32 - actual.width as i32) / 2;
+            let y = work.position.y + (work.size.height as i32 - actual.height as i32) / 2;
+            let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+        }
+    } else {
+        let _ = window.center();
+    }
+}
+
+fn perform(
+    app: &tauri::AppHandle,
+    controller: &Arc<Controller>,
+    action: &str,
+) -> Result<Snapshot, String> {
+    if !["open", "start", "stop", "restart", "logs", "quit", "exit"].contains(&action) {
+        return Err("不支持的操作。".into());
+    }
+    if action == "logs" {
+        show_launcher(app);
+        let _ = app.emit_to("launcher", "launcher-show-logs", ());
+        return Ok(controller.snapshot());
+    }
+    if controller
+        .busy
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Err("已有操作正在进行，请稍候。".into());
+    }
+    controller.publish(app);
+    let result = (|| -> Result<(), String> {
+        if ["stop", "restart", "exit"].contains(&action) && !confirm(action) {
+            controller.phase(app, "操作已取消", "已取消操作，后台服务保持原状。 ");
+            return Ok(());
+        }
+        match action {
+            "open" => ensure_ready(app, controller, true),
+            "start" => ensure_ready(app, controller, false),
+            "stop" => stop_service(app, controller),
+            "restart" => {
+                stop_service(app, controller)?;
+                ensure_ready(app, controller, true)
+            }
+            "exit" => {
+                stop_service(app, controller)?;
+                controller.exiting.store(true, Ordering::SeqCst);
+                app.exit(0);
+                Ok(())
+            }
+            "quit" => {
+                controller.record(app, "仅退出启动器，WSL 后台服务保持运行。");
+                controller.exiting.store(true, Ordering::SeqCst);
+                app.exit(0);
+                Ok(())
+            }
+            _ => unreachable!(),
+        }
+    })();
+    controller.busy.store(false, Ordering::SeqCst);
+    if let Err(error) = result {
+        controller.failure(app, &error);
+        return Err(error);
+    }
+    controller.publish(app);
+    Ok(controller.snapshot())
+}
+fn dispatch(app: &tauri::AppHandle, action: &'static str) {
+    let app = app.clone();
+    let controller = app.state::<Arc<Controller>>().inner().clone();
+    thread::spawn(move || {
+        let _ = perform(&app, &controller, action);
+    });
+}
+
+pub fn run() {
+    let app = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            activate(app);
+        }))
+        .invoke_handler(tauri::generate_handler![get_snapshot, perform_action])
+        .setup(|app| {
+            let directory = app.path().app_config_dir()?;
+            let legacy = std::env::var_os("LOCALAPPDATA")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| directory.clone())
+                .join("DeepSeekHarnessLauncher/config.json");
+            let loaded = config::load(&directory, &legacy);
+            let (backend, error, imported) = match loaded {
+                Ok(loaded) => {
+                    let _ = loaded.path;
+                    (Some(Backend::new(loaded.config)), None, loaded.imported)
+                }
+                Err(error) => (None, Some(error), false),
+            };
+            let origin = backend
+                .as_ref()
+                .map(|b| b.config.origin())
+                .unwrap_or_else(|| "http://127.0.0.1:3080".into());
+            let controller = Arc::new(Controller {
+                backend,
+                snapshot: Mutex::new(Snapshot {
+                    state: if error.is_some() { "error" } else { "unknown" }.into(),
+                    phase: "准备启动".into(),
+                    message: error
+                        .clone()
+                        .unwrap_or_else(|| "正在准备 WSL 运行环境。".into()),
+                    busy: false,
+                    managed: false,
+                    origin,
+                    last_error: error,
+                    logs: Vec::new(),
+                }),
+                busy: AtomicBool::new(false),
+                exiting: AtomicBool::new(false),
+                log_path: directory.join("launcher.log"),
+            });
+            app.manage(controller.clone());
+            if imported {
+                controller.record(
+                    app.handle(),
+                    "已导入旧启动器配置；旧脚本、浏览器数据和 DSH 配置未修改。",
+                );
+            }
+            WebviewWindowBuilder::new(app, "launcher", WebviewUrl::App("index.html".into()))
+                .title("DSH · WSL Desktop")
+                .inner_size(760.0, 640.0)
+                .min_inner_size(600.0, 500.0)
+                .center()
+                .on_navigation(|target| {
+                    (target.scheme() == "tauri" && target.host_str() == Some("localhost"))
+                        || (target.scheme() == "http"
+                            && target.host_str() == Some("tauri.localhost"))
+                        || (cfg!(debug_assertions)
+                            && target.scheme() == "http"
+                            && target.host_str() == Some("127.0.0.1")
+                            && target.port() == Some(1420))
+                })
+                .build()?;
+            let open = MenuItem::with_id(app, "open", "打开 DSH", true, None::<&str>)?;
+            let control = MenuItem::with_id(app, "logs", "状态与操作日志", true, None::<&str>)?;
+            let start = MenuItem::with_id(app, "start", "启动服务", true, None::<&str>)?;
+            let stop = MenuItem::with_id(app, "stop", "停止服务…", true, None::<&str>)?;
+            let restart = MenuItem::with_id(app, "restart", "重启服务…", true, None::<&str>)?;
+            let quit =
+                MenuItem::with_id(app, "quit", "仅退出启动器（保留服务）", true, None::<&str>)?;
+            let exit = MenuItem::with_id(app, "exit", "停止服务并退出…", true, None::<&str>)?;
+            let menu = Menu::with_items(
+                app,
+                &[&open, &control, &start, &stop, &restart, &quit, &exit],
+            )?;
+            TrayIconBuilder::with_id("dsh-tray")
+                .icon(app.default_window_icon().cloned().ok_or("缺少应用图标")?)
+                .tooltip("DSH · 正在启动")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "open" => dispatch(app, "open"),
+                    "logs" => dispatch(app, "logs"),
+                    "start" => dispatch(app, "start"),
+                    "stop" => dispatch(app, "stop"),
+                    "restart" => dispatch(app, "restart"),
+                    "quit" => dispatch(app, "quit"),
+                    "exit" => dispatch(app, "exit"),
+                    _ => (),
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        activate(tray.app_handle());
+                    }
+                })
+                .build(app)?;
+            if controller.backend.is_some() {
+                dispatch(app.handle(), "open");
+            }
+            let monitor_app = app.handle().clone();
+            thread::spawn(move || loop {
+                thread::sleep(Duration::from_secs(15));
+                if controller.exiting.load(Ordering::SeqCst) {
+                    break;
+                }
+                if controller.snapshot().state == "stopped" {
+                    continue;
+                } // Do not repeatedly wake a stopped WSL.
+                if controller
+                    .busy
+                    .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_err()
+                {
+                    continue;
+                }
+                if let Some(backend) = &controller.backend {
+                    match backend.invoke("probe") {
+                        Ok(reply) => {
+                            controller.apply(&monitor_app, &reply, true);
+                            controller.busy.store(false, Ordering::SeqCst);
+                            controller.publish(&monitor_app);
+                        }
+                        Err(error) => {
+                            {
+                                let mut s = controller
+                                    .snapshot
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner());
+                                s.state = "error".into();
+                                s.last_error = Some(redact(&error));
+                                s.phase = "状态查询失败".into();
+                                s.message = redact(&error);
+                            }
+                            controller.record(&monitor_app, &error);
+                            controller.busy.store(false, Ordering::SeqCst);
+                            controller.publish(&monitor_app);
+                        }
+                    }
+                } else {
+                    controller.busy.store(false, Ordering::SeqCst);
+                }
+            });
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                if let Some(controller) = window.app_handle().try_state::<Arc<Controller>>() {
+                    if !controller.exiting.load(Ordering::SeqCst) {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
+                }
+            }
+        })
+        .build(tauri::generate_context!())
+        .expect("Failed to initialize DSH WSL Desktop");
+    app.run(|app, event| {
+        if let tauri::RunEvent::ExitRequested { api, .. } = event {
+            if let Some(controller) = app.try_state::<Arc<Controller>>() {
+                if !controller.exiting.load(Ordering::SeqCst) {
+                    api.prevent_exit();
+                }
+            }
+        }
+    });
+}

@@ -1,0 +1,9 @@
+.codegraph/
+node_modules/
+dist/
+src-tauri/target/
+.tools/
+*.log
+__pycache__/
+src-tauri/gen/
+artifacts/
