@@ -57,8 +57,8 @@ jobs:
         run: npm test
       - name: Build frontend
         run: npm run build
-      - name: Test stop ownership guard with fake services
-        run: python -m unittest discover -s tests -p test_guarded_stop.py -v
+      - name: Test environment checks and stop ownership with fixtures
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
       - name: Test Rust core without touching WSL

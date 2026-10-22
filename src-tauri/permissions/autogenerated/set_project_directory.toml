@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-project-directory"
+description = "Enables the set_project_directory command without any pre-configured scope."
+commands.allow = ["set_project_directory"]
+
+[[permission]]
+identifier = "deny-set-project-directory"
+description = "Denies the set_project_directory command without any pre-configured scope."
+commands.deny = ["set_project_directory"]

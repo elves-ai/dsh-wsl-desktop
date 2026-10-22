@@ -50,7 +50,7 @@ WebView 数据：%LOCALAPPDATA%\io.local.dsh-wsl-desktop\webview
 旧配置来源：%LOCALAPPDATA%\DeepSeekHarnessLauncher\config.json
 ~~~
 
-没有旧配置时，在上述新配置位置放置以下内容。修改后重新启动应用，Windows 与 WSL 配置端口必须一致。
+没有旧配置时，在上述新配置位置放置以下内容。修改后点击“重新检测”，Windows 与 WSL 配置端口必须一致。
 
 ~~~json
 {
@@ -68,6 +68,14 @@ WebView 数据：%LOCALAPPDATA%\io.local.dsh-wsl-desktop\webview
 ~~~
 
 更新 nvm/Node 后，若原绝对路径失效，需要更新 WSL 管理配置；应用不依赖交互 shell 初始化。
+
+## 启动环境检查
+
+启动时自动检查 WSL、启动配置、发行版、Linux 用户、Python、管理脚本、WSL 服务配置、DSH 项目目录、Node.js、已安装依赖与 Web 产物。全部通过后检查/启动服务并自动打开 DSH，无需点击继续。
+
+检查失败时停留在环境页：异常项标红并给出提示；依赖上游的项目显示“暂未检测”，不连锁全部报错。仅检测，不自动安装软件、克隆项目、安装依赖或执行构建。手动处理后点击“重新检测”，会重新读取配置，无需重开启动器。
+
+可填写 **WSL 内的 DSH 绝对路径**（不是 Windows 路径），点击“保存目录并重新检测”会验证项目入口，并只更新已有 Linux 服务配置的 repository 字段，保留其他字段和文件权限。缺少管理脚本或 Linux 配置仍需手动准备，不会自动生成。服务运行时须先停止才可修改目录，不会自动停止或重启已有服务。环境已通过时，可从控制页底部“运行环境 / DSH 目录”再次查看。
 
 ## 系统通知
 
@@ -143,7 +151,7 @@ npm ci
 npm test
 npm run build
 cargo test --manifest-path src-tauri/Cargo.toml --lib
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -p test_guarded_stop.py -v
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -p 'test_*.py' -v
 ~~~
 
 前端测试使用 Node TypeScript stripping，推荐 Node 24。Rust Linux 单测不依赖 GTK/WebKit；Python 测试使用 fake helper，不操作真实服务。

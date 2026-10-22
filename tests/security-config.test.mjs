@@ -8,7 +8,7 @@ test('only trusted launcher window receives narrowly scoped IPC capabilities', (
   assert.deepEqual(config.app.security.capabilities, ['launcher']);
   assert.deepEqual(capability.windows, ['launcher']);
   assert.equal(capability.local, true); assert.equal(capability.remote, undefined);
-  assert.deepEqual([...capability.permissions].sort(), ['allow-get-snapshot', 'allow-perform-action', 'allow-get-update-snapshot', 'allow-check-update', 'allow-install-update', 'allow-get-notification-snapshot', 'allow-set-notifications-enabled', 'allow-test-notification', 'core:event:allow-listen', 'core:event:allow-unlisten'].sort());
+  assert.deepEqual([...capability.permissions].sort(), ['allow-get-snapshot', 'allow-perform-action', 'allow-set-project-directory', 'allow-get-update-snapshot', 'allow-check-update', 'allow-install-update', 'allow-get-notification-snapshot', 'allow-set-notifications-enabled', 'allow-test-notification', 'core:event:allow-listen', 'core:event:allow-unlisten'].sort());
   assert.ok(config.app.security.csp.includes("object-src 'none'"));
 });
 test('destructive actions require guarded PID adapter and native default-no confirmation', () => {
@@ -81,6 +81,25 @@ test('notification commands stay local, fixed-purpose and independent of DSH IPC
   assert.ok(source.includes('foreground(&app)'));
   assert.ok(!source.includes('initialization_script'));
   assert.ok(!source.includes('get_webview_window("dsh").emit'));
+});
+
+test('startup checks gate service launch and missing environments are never overwritten by monitor probes', () => {
+  const source = read('src-tauri/src/desktop.rs');
+  const ensure = source.slice(source.indexOf('fn ensure_ready('), source.indexOf('fn stop_service('));
+  assert.ok(ensure.indexOf('check_environment(app, controller)?') < ensure.indexOf('backend.invoke("probe")'));
+  assert.ok(ensure.indexOf('check_environment(app, controller)?') < ensure.indexOf('backend.start()'));
+  assert.ok(source.includes('dispatch(app.handle(), "open")'));
+  assert.ok(source.includes('!snapshot.environment.passed()'));
+  const check = source.slice(source.indexOf('fn check_environment('), source.indexOf('fn ensure_ready('));
+  assert.ok(check.includes('reload_config(controller)'));
+  assert.ok(check.includes('if !passed'));
+  const save = source.slice(source.indexOf('async fn set_project_directory('), source.indexOf('fn show_launcher('));
+  assert.ok(save.includes('assert_local(&window)?;'));
+  assert.ok(save.includes('compare_exchange(false, true'));
+  assert.ok(save.includes('environment::save_repository'));
+  assert.ok(save.includes('ensure_ready(&app, &controller, true)'));
+  assert.doesNotMatch(save, /stop_service|backend[.](stop|start)/);
+  assert.ok(read('src-tauri/build.rs').includes('"set_project_directory"'));
 });
 
 test('local builds explicitly avoid production updater signing secrets', () => {

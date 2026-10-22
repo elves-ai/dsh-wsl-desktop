@@ -2,6 +2,7 @@ pub mod backend;
 pub mod config;
 #[cfg(windows)]
 mod desktop;
+pub mod environment;
 pub mod notification_transport;
 pub mod notifications;
 pub mod protocol;

@@ -1,6 +1,7 @@
 use crate::{
     backend::Backend,
     config,
+    environment::{self, EnvironmentReport},
     protocol::{redact, validated_launch_url, BackendReply},
 };
 use serde::Serialize;
@@ -37,9 +38,14 @@ pub struct Snapshot {
     origin: String,
     last_error: Option<String>,
     logs: Vec<String>,
+    environment: EnvironmentReport,
+    environment_checking: bool,
+    config_path: String,
 }
 struct Controller {
-    backend: Option<Backend>,
+    backend: Mutex<Option<config::Config>>,
+    config_directory: PathBuf,
+    legacy_config: PathBuf,
     snapshot: Mutex<Snapshot>,
     busy: AtomicBool,
     exiting: AtomicBool,
@@ -144,12 +150,15 @@ impl Controller {
         self.record(app, &error);
         show_launcher(app);
     }
-    fn backend(&self) -> Result<&Backend, String> {
-        self.backend.as_ref().ok_or_else(|| {
-            self.snapshot()
-                .last_error
-                .unwrap_or_else(|| "启动配置不可用。".into())
-        })
+    fn backend(&self) -> Result<Backend, String> {
+        let config = self
+            .backend
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        config
+            .map(Backend::new)
+            .ok_or_else(|| "启动配置不可用，请按环境检查提示处理。".into())
     }
 }
 
@@ -186,6 +195,48 @@ async fn perform_action(
     tauri::async_runtime::spawn_blocking(move || perform(&app, &controller, &action))
         .await
         .map_err(|_| "操作线程异常结束。".to_owned())?
+}
+
+#[tauri::command]
+async fn set_project_directory(
+    window: WebviewWindow,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<Controller>>,
+    repository: String,
+) -> Result<Snapshot, String> {
+    assert_local(&window)?;
+    let controller = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if controller
+            .busy
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return Err("已有操作正在进行，请稍候。".into());
+        }
+        controller.publish(&app);
+        let result = (|| -> Result<(), String> {
+            if ["ready", "starting"].contains(&controller.snapshot().state.as_str()) {
+                return Err("服务运行时不能修改 DSH 目录，请先停止服务。".into());
+            }
+            let config = reload_config(&controller)?;
+            environment::save_repository(&config, &repository)?;
+            controller.record(
+                &app,
+                "已保存 DSH 目录，正在重新检测；未安装软件或重启现有服务。",
+            );
+            ensure_ready(&app, &controller, true)
+        })();
+        controller.busy.store(false, Ordering::SeqCst);
+        if let Err(error) = result {
+            controller.failure(&app, &error);
+            return Err(error);
+        }
+        controller.publish(&app);
+        Ok(controller.snapshot())
+    })
+    .await
+    .map_err(|_| "配置线程异常结束。".to_owned())?
 }
 
 fn show_launcher(app: &tauri::AppHandle) {
@@ -255,11 +306,61 @@ fn windows_status(origin: &str) -> Option<u16> {
         .ok()
         .map(|r| r.status().as_u16())
 }
+// Refresh from disk so fixing configuration never requires restarting the launcher.
+fn reload_config(controller: &Controller) -> Result<config::Config, String> {
+    let loaded = config::load(&controller.config_directory, &controller.legacy_config);
+    // Keep the last valid control target on a malformed edit, so an owned
+    // running service can still be stopped safely using its original settings.
+    if let Ok(loaded) = &loaded {
+        *controller.backend.lock().unwrap_or_else(|e| e.into_inner()) = Some(loaded.config.clone());
+    }
+    loaded.map(|loaded| loaded.config)
+}
+
+fn check_environment(app: &tauri::AppHandle, controller: &Controller) -> Result<(), String> {
+    {
+        let mut s = controller
+            .snapshot
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        s.environment = EnvironmentReport::pending();
+        s.environment_checking = true;
+    }
+    controller.phase(
+        app,
+        "检测运行环境",
+        "正在检查运行环境；不会安装软件或修改系统配置。 ",
+    );
+    let loaded = reload_config(controller);
+    let report = environment::inspect(
+        loaded.as_ref().ok(),
+        loaded.as_ref().err().map(String::as_str),
+    );
+    let passed = report.passed();
+    {
+        let mut s = controller
+            .snapshot
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Ok(config) = &loaded {
+            s.origin = config.origin();
+        }
+        s.environment = report;
+        s.environment_checking = false;
+    }
+    controller.publish(app);
+    if !passed {
+        return Err("运行环境尚未准备好，请按检查列表处理后重新检测。".into());
+    }
+    Ok(())
+}
+
 fn ensure_ready(
     app: &tauri::AppHandle,
     controller: &Controller,
     open_window: bool,
 ) -> Result<(), String> {
+    check_environment(app, controller)?;
     let backend = controller.backend()?;
     let deadline = Instant::now() + Duration::from_secs(backend.config.startup_timeout_seconds);
     let mut started = false;
@@ -476,7 +577,11 @@ fn perform(
     controller: &Arc<Controller>,
     action: &str,
 ) -> Result<Snapshot, String> {
-    if !["open", "start", "stop", "restart", "logs", "quit", "exit"].contains(&action) {
+    if ![
+        "open", "check", "start", "stop", "restart", "logs", "quit", "exit",
+    ]
+    .contains(&action)
+    {
         return Err("不支持的操作。".into());
     }
     if action == "logs" {
@@ -498,7 +603,7 @@ fn perform(
             return Ok(());
         }
         match action {
-            "open" => ensure_ready(app, controller, true),
+            "open" | "check" => ensure_ready(app, controller, true),
             "start" => ensure_ready(app, controller, false),
             "stop" => stop_service(app, controller),
             "restart" => {
@@ -546,6 +651,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_snapshot,
             perform_action,
+            set_project_directory,
             updates::get_update_snapshot,
             updates::check_update,
             updates::install_update,
@@ -572,7 +678,9 @@ pub fn run() {
                 .map(|b| b.config.origin())
                 .unwrap_or_else(|| "http://127.0.0.1:3080".into());
             let controller = Arc::new(Controller {
-                backend,
+                backend: Mutex::new(backend.map(|b| b.config)),
+                config_directory: directory.clone(),
+                legacy_config: legacy,
                 snapshot: Mutex::new(Snapshot {
                     state: if error.is_some() { "error" } else { "unknown" }.into(),
                     phase: "准备启动".into(),
@@ -584,6 +692,9 @@ pub fn run() {
                     origin,
                     last_error: error,
                     logs: Vec::new(),
+                    environment: EnvironmentReport::pending(),
+                    environment_checking: true,
+                    config_path: directory.join("config.json").to_string_lossy().into_owned(),
                 }),
                 busy: AtomicBool::new(false),
                 exiting: AtomicBool::new(false),
@@ -666,16 +777,16 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
-            if controller.backend.is_some() {
-                dispatch(app.handle(), "open");
-            }
+            // Always diagnose, including first run with no launcher configuration.
+            dispatch(app.handle(), "open");
             let monitor_app = app.handle().clone();
             thread::spawn(move || loop {
                 thread::sleep(Duration::from_secs(15));
                 if controller.exiting.load(Ordering::SeqCst) {
                     break;
                 }
-                if controller.snapshot().state == "stopped" {
+                let snapshot = controller.snapshot();
+                if snapshot.state == "stopped" || !snapshot.environment.passed() {
                     continue;
                 } // Do not repeatedly wake a stopped WSL.
                 if controller
@@ -685,7 +796,7 @@ pub fn run() {
                 {
                     continue;
                 }
-                if let Some(backend) = &controller.backend {
+                if let Ok(backend) = controller.backend() {
                     match backend.invoke("probe") {
                         Ok(reply) => {
                             controller.apply(&monitor_app, &reply, true);

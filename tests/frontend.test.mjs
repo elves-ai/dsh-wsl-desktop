@@ -6,7 +6,9 @@ import vm from 'node:vm';
 
 const source = stripTypeScriptTypes(readFileSync(new URL('../src/main.ts', import.meta.url), 'utf8').replace(/^import .*;\r?\n/gm, ''));
 const flush = () => new Promise(resolve => setImmediate(resolve));
-const base = (extra = {}) => ({ state: 'ready', phase: '已就绪', message: '正常', busy: false, managed: true, origin: 'http://127.0.0.1:3080', last_error: null, logs: [], ...extra });
+const checkIds = ['wsl', 'config', 'distribution', 'user', 'python', 'launcher', 'linux_config', 'repository', 'node', 'dependencies', 'web_assets'];
+const environment = (extra = {}) => ({ checks: checkIds.map(id => ({ id, label: id, status: 'passed', message: '已通过', hint: '' })), repository: '/home/test/deepseek-harness', ...extra });
+const base = (extra = {}) => ({ state: 'ready', phase: '已就绪', message: '正常', busy: false, managed: true, origin: 'http://127.0.0.1:3080', last_error: null, logs: [], environment: environment(), environment_checking: false, config_path: 'C:/test/config.json', ...extra });
 const update = (extra = {}) => ({ current_version: '0.1.0', phase: 'idle', version: null, notes: null, downloaded: 0, total: null, message: '可检查更新', busy: false, ...extra });
 const notification = (extra = {}) => ({ enabled: false, phase: 'disabled', message: '未启用系统通知。', ...extra });
 const listening = (extra = {}) => notification({ enabled: true, phase: 'listening', message: '通知检查正常', ...extra });
@@ -25,7 +27,7 @@ async function mount(native, initial = base(), options = {}) {
     invoke: async (name, args) => {
       calls.push([name, args]);
       const fallback = () => {
-        if (name === 'get_snapshot' || name === 'perform_action') return initial;
+        if (name === 'get_snapshot' || name === 'perform_action' || name === 'set_project_directory') return initial;
         if (['get_update_snapshot', 'check_update', 'install_update'].includes(name)) return options.initialUpdate || update();
         if (name === 'get_notification_snapshot' || name === 'test_notification') return options.initialNotification || notification();
         if (name === 'set_notifications_enabled') return args.enabled ? listening() : notification();
@@ -40,7 +42,7 @@ async function mount(native, initial = base(), options = {}) {
 
 test('browser preview cannot invoke native commands or subscribe to events', async () => {
   const app = await mount(false); assert.equal(app.calls.length, 0); assert.equal(app.subscriptions.size, 0); assert.equal(app.listenCalls.length, 0);
-  for (const id of ['open', 'start', 'stop', 'restart', 'quit', 'exit', 'logs', 'check-update', 'install-update', 'notifications-enabled', 'test-notification']) { assert.equal(app.node(id).disabled, true); await app.click(id); }
+  for (const id of ['check', 'save-repository', 'open', 'start', 'stop', 'restart', 'quit', 'exit', 'logs', 'check-update', 'install-update', 'notifications-enabled', 'test-notification']) { assert.equal(app.node(id).disabled, true); await app.click(id); }
   await app.change('notifications-enabled', true);
   assert.equal(app.node('notifications-enabled').checked, false);
   assert.match(app.node('notification-message').textContent, /预览.*不会请求网页通知权限/);
@@ -394,6 +396,92 @@ test('unload cleans notification listeners even when registration resolves late'
   assert.equal(app.calls.filter(([name]) => name === 'get_notification_snapshot').length, 0);
   await app.change('notifications-enabled', true);
   assert.equal(app.calls.filter(([name]) => name === 'set_notifications_enabled').length, 0);
+});
+
+test('missing WSL shows one actionable error and skips dependent checks', async () => {
+  const checks = environment().checks.map(item => ({ ...item, status: item.id === 'wsl' ? 'error' : item.id === 'config' ? 'passed' : 'skipped', message: item.id === 'wsl' ? '未检测到可用的 WSL' : '前置条件未满足', hint: item.id === 'wsl' ? '请手动安装 WSL 后重新检测。' : '' }));
+  const app = await mount(true, base({ state: 'error', managed: false, environment: environment({ checks }) }));
+  assert.equal(app.node('environment-panel').hidden, false);
+  assert.equal(app.node('service-card').hidden, true);
+  assert.equal(app.node('check-wsl').dataset.status, 'error');
+  assert.equal(app.node('check-repository').dataset.status, 'skipped');
+  assert.match(app.node('check-wsl-hint').textContent, /手动安装/);
+  assert.equal(app.node('environment-summary').textContent, '1 项需要处理');
+  assert.equal(app.node('repository-input').disabled, true);
+  assert.equal(app.node('open').disabled, true);
+  assert.equal(app.node('check').disabled, false);
+  await app.click('check');
+  assert.equal(app.calls.at(-1)[1].action, 'check');
+});
+
+test('all checks passing leaves initialization automatically without a frontend launch command', async () => {
+  const app = await mount(true);
+  assert.equal(app.node('environment-panel').hidden, true);
+  assert.equal(app.node('service-card').hidden, false);
+  assert.equal(app.calls.filter(([name]) => name === 'perform_action').length, 0);
+  await app.click('show-environment');
+  assert.equal(app.node('environment-panel').hidden, false);
+  assert.equal(app.node('environment-summary').textContent, '全部通过');
+  assert.equal(app.node('repository-input').value, '/home/test/deepseek-harness');
+  assert.equal(app.node('repository-input').disabled, true); // Must stop before switching checkout.
+});
+
+test('pending environment and duplicate checks cannot start a service', async () => {
+  const checks = environment().checks.map(item => ({ ...item, status: 'pending' }));
+  const app = await mount(true, base({ state: 'unknown', managed: false, busy: true, environment_checking: true, environment: environment({ checks }) }));
+  assert.match(app.node('environment-summary').textContent, /正在检测/);
+  for (const id of ['check', 'open', 'start', 'save-repository']) {
+    assert.equal(app.node(id).disabled, true);
+    await app.click(id);
+  }
+  assert.equal(app.calls.filter(([name]) => ['perform_action', 'set_project_directory'].includes(name)).length, 0);
+});
+
+test('manual DSH directory validates WSL paths and saves only after explicit action', async () => {
+  const app = await mount(true, base({ state: 'stopped', managed: false }));
+  assert.equal(app.calls.filter(([name]) => name === 'set_project_directory').length, 0);
+  app.node('repository-input').value = 'C:\projects\dsh';
+  app.node('repository-input').handlers.input();
+  assert.equal(app.node('save-repository').disabled, true);
+  assert.match(app.node('repository-notice').textContent, /绝对路径/);
+  app.node('repository-input').value = '/home/test/DSH with spaces';
+  app.node('repository-input').handlers.input();
+  assert.equal(app.node('save-repository').disabled, false);
+  app.event(base({ state: 'stopped', managed: false }));
+  assert.equal(app.node('repository-input').value, '/home/test/DSH with spaces');
+  await app.click('save-repository');
+  assert.equal(app.calls.at(-1)[0], 'set_project_directory');
+  assert.equal(app.calls.at(-1)[1].repository, '/home/test/DSH with spaces');
+});
+
+test('directory save is serialized with service actions and errors preserve user input', async () => {
+  const saving = deferred();
+  const app = await mount(true, base({ state: 'stopped', managed: false }), { invoke(name, _args, { fallback }) { return name === 'set_project_directory' ? saving.promise : fallback(); } });
+  app.node('repository-input').value = '/home/test/missing';
+  app.node('repository-input').handlers.input();
+  await app.click('save-repository');
+  for (const id of ['save-repository', 'check', 'open', 'start', 'quit']) assert.equal(app.node(id).disabled, true);
+  await app.click('save-repository'); await app.click('check');
+  assert.equal(app.calls.filter(([name]) => name === 'set_project_directory').length, 1);
+  saving.reject(new Error('未找到有效的 DSH 项目')); await flush();
+  assert.equal(app.node('repository-input').value, '/home/test/missing');
+  assert.equal(app.node('save-repository').disabled, false);
+  assert.match(app.node('environment-error').textContent, /未找到有效的 DSH 项目/);
+});
+
+test('environment diagnostics remain text-only, redacted, and events beat delayed replies', async () => {
+  const saving = deferred();
+  const app = await mount(true, base({ state: 'stopped', managed: false }), { invoke(name, _args, { fallback }) { return name === 'set_project_directory' ? saving.promise : fallback(); } });
+  app.node('repository-input').value = '/home/test/new'; app.node('repository-input').handlers.input();
+  await app.click('save-repository');
+  const checks = environment().checks.map(item => item.id === 'repository' ? { ...item, status: 'error', message: '<script>bad</script> token=private-value', hint: 'Bearer private-value' } : item);
+  app.event(base({ state: 'error', managed: false, environment: environment({ checks }) }));
+  saving.resolve(base()); await flush();
+  assert.equal(app.node('check-repository').dataset.status, 'error');
+  assert.ok(app.node('check-repository-message').textContent.includes('<script>'));
+  assert.ok(!app.node('check-repository-message').textContent.includes('private-value'));
+  assert.ok(!app.node('check-repository-hint').textContent.includes('private-value'));
+  assert.equal(app.node('environment-panel').hidden, false);
 });
 
 test('quit remains distinct from stop-and-exit and tray log requests expand the log panel', async () => {

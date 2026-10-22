@@ -11,6 +11,7 @@
     "core:event:allow-unlisten",
     "allow-get-snapshot",
     "allow-perform-action",
+    "allow-set-project-directory",
     "allow-get-update-snapshot",
     "allow-check-update",
     "allow-install-update",

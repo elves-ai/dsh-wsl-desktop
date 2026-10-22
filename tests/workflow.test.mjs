@@ -14,6 +14,13 @@ test('CI is valid YAML, defaults to read-only tokens and runs only on version ta
     if (name !== 'publish-release') assert.ok(!job.permissions || job.permissions.contents !== 'write');
   }
 });
+test('environment inspection and directory save fixture tests run before packaging', () => {
+  const step = workflow.jobs.verify.steps.find(step => step.run?.includes('python -m unittest discover'));
+  assert.ok(step);
+  assert.ok(step.run.includes("-p 'test_*.py'"));
+  assert.equal(workflow.env.PYTHONDONTWRITEBYTECODE, '1');
+});
+
 test('Windows packaging waits for verification and pins every third-party action', () => {
   assert.equal(workflow.jobs['build-windows'].needs, 'verify');
   assert.equal(workflow.jobs['build-windows']['runs-on'], 'windows-2022');

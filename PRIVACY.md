@@ -16,6 +16,8 @@ The application invokes the configured helper through Windows Subsystem for Linu
 
 The helper and DSH can access local projects, credentials, conversations, model providers, and other tools according to their own configuration and permissions. Review their settings and upstream documentation before use. This launcher does not audit, replace, or disable those systems' data handling or telemetry.
 
+Startup environment checks read WSL availability, the configured Linux files and project metadata, and run bounded Node version/module-resolution probes without importing project code. They do not install software, clone repositories, or build the project. Only when you explicitly save a DSH project directory does the launcher update the repository field in the existing Linux helper configuration; other fields and file permissions are preserved. Detection results and the configured project path are shown locally and are not uploaded to the maintainer.
+
 ## Embedded browser and external services
 
 The working window loads the locally running DSH website using WebView2. A launch authentication URL can be passed to that local service, and browser data such as cookies, cached content, or local storage may persist in the WebView profile. Authentication URLs and browser-profile files should be treated as sensitive.

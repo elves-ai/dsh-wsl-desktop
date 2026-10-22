@@ -4,6 +4,7 @@ fn main() {
             tauri_build::AppManifest::new().commands(&[
                 "get_snapshot",
                 "perform_action",
+                "set_project_directory",
                 "get_update_snapshot",
                 "check_update",
                 "install_update",
