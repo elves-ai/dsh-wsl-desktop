@@ -2,6 +2,14 @@
 
 Windows 原生 **Tauri 2 + WebView2** 启动器。DSH、Node、会话与项目继续运行在 WSL，桌面应用只负责服务控制和展示现有 Web 页面。
 
+## 项目与下载
+
+个人维护者：Evan Yang。项目代码采用 [MIT 许可证](<LICENSE>)；第三方组件保留各自许可证。
+
+- [下载与安装说明](<DOWNLOADS.md>)
+- [隐私说明](<PRIVACY.md>)
+- [Code signing policy](<CODE_SIGNING.md>)：当前构建未签名，正在准备申请 SignPath Foundation 支持，尚未获得批准。
+
 ## 第一版
 
 - 自动导入旧启动器配置，复用现有 WSL Python 管理器。

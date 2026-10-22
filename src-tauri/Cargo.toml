@@ -4,6 +4,9 @@ version = "0.1.0"
 description = "Windows launcher for DeepSeek Harness in WSL"
 edition = "2021"
 rust-version = "1.85"
+license = "MIT"
+authors = ["Evan Yang"]
+repository = "https://github.com/elves-ai/dsh-wsl-desktop"
 
 [lib]
 name = "dsh_wsl_desktop"

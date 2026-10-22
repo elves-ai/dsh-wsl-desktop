@@ -20,6 +20,10 @@
   },
   "bundle": {
     "active": true,
+    "publisher": "Evan Yang",
+    "license": "MIT",
+    "licenseFile": "../LICENSE",
+    "homepage": "https://github.com/elves-ai/dsh-wsl-desktop",
     "targets": [
       "nsis"
     ],
