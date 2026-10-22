@@ -4,7 +4,7 @@ DSH WSL Desktop is a Windows desktop launcher for an existing DeepSeek Harness i
 
 ## Windows x64 releases
 
-Use the [GitHub Releases page](https://github.com/elves-ai/dsh-wsl-desktop/releases) for versioned downloads. Each published release contains the standalone executable, an NSIS installer, and SHA256SUMS.txt. These public release assets do not use the 30-day Actions artifact retention period and normally do not require GitHub login. A release appears only after its version-tag workflow completes successfully; prereleases are marked separately.
+Use the [GitHub Releases page](https://github.com/elves-ai/dsh-wsl-desktop/releases) for versioned downloads. Each published release contains the standalone executable, an NSIS installer, and SHA256SUMS.txt. Releases enabling in-app updates also include the installer signature and latest.json update manifest. These public release assets do not use the 30-day Actions artifact retention period and normally do not require GitHub login. A release appears only after its version-tag workflow completes successfully; prereleases are marked separately.
 
 ## Development builds and fallback
 
@@ -15,6 +15,12 @@ Use the [GitHub Releases page](https://github.com/elves-ai/dsh-wsl-desktop/relea
 The development artifacts linked above normally require GitHub login and expire after 30 days; they are separate from GitHub Release assets. If a development artifact has expired, use a published Release, select a newer successful run, or build the reviewed source. A successful CI build verifies compilation/tests/packaging, not end-to-end operation against every user's WSL installation.
 
 Unpack the downloaded artifact. Run the NSIS setup executable to install, or use the standalone executable with WebView2 Runtime available. The launcher imports the existing Windows launcher's configuration; users without that setup must configure the helper and paths as described in the [usage guide](<README.md#配置>). Keep the checksums with the exact downloaded build. Use Windows Installed apps to uninstall an installed copy; see [data retention notes](<PRIVACY.md#storage-and-removal>) before removing data directories.
+
+## In-app launcher updates
+
+The new updater checks GitHub Releases once at startup, or on request from the tray/control page. Downloads and installation require explicit confirmation; installation verifies a version-bound update signature first. It updates only the Windows launcher, not the WSL DSH installation. DSH windows temporarily close, but WSL service tasks are not stopped. Network/signature failures do not run an installer.
+
+v0.1.0 has no updater: manually install the first updater-enabled release. Updates use the NSIS installer, not in-place replacement of a standalone downloaded EXE; use the installed application for subsequent launches. See [update setup and behavior](<UPDATES.md>). An update signature is separate from Windows Authenticode code signing.
 
 ## Code signing policy
 

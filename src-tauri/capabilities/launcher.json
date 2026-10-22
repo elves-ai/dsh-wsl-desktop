@@ -10,6 +10,9 @@
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "allow-get-snapshot",
-    "allow-perform-action"
+    "allow-perform-action",
+    "allow-get-update-snapshot",
+    "allow-check-update",
+    "allow-install-update"
   ]
 }

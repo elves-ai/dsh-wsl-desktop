@@ -86,6 +86,14 @@ jobs:
         with:
           node-version: '24'
           cache: npm
+      - name: Require updater signing key for trusted tag build
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
+            throw 'Tagged releases require the TAURI_SIGNING_PRIVATE_KEY secret.'
+          }
       - name: Set up Rust MSVC
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
@@ -115,7 +123,11 @@ jobs:
             Write-Output "::error title=Windows Rust tests::$details"
             throw 'Windows Rust tests failed.'
           }
-      - name: Build Windows application and NSIS installer
+      - name: Build signed Windows application and NSIS installer
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           npm run desktop:build -- --ci --target x86_64-pc-windows-msvc --bundles nsis -- --locked 2>&1 | Tee-Object -FilePath windows-build.log
           if ($LASTEXITCODE -ne 0) {
@@ -123,7 +135,16 @@ jobs:
             Write-Output "::error title=Windows installer build::$details"
             throw 'Windows installer build failed.'
           }
+      - name: Build Windows application and NSIS installer
+        if: ${{ !(github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) }}
+        run: |
+          $override = Join-Path $env:RUNNER_TEMP 'tauri-no-updater.json'
+          '{"bundle":{"createUpdaterArtifacts":false}}' | Set-Content -LiteralPath $override -Encoding utf8
+          npm run desktop:build -- --ci --config $override --target x86_64-pc-windows-msvc --bundles nsis -- --locked 2>&1 | Tee-Object -FilePath windows-build.log
+          if ($LASTEXITCODE -ne 0) { throw 'Unsigned Windows installer build failed.' }
       - name: Collect executable, installer and SHA256 checksums
+        env:
+          IS_RELEASE: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
         run: |
           $ErrorActionPreference = 'Stop'
           $release = Join-Path $PWD 'src-tauri/target/x86_64-pc-windows-msvc/release'
@@ -135,11 +156,21 @@ jobs:
           $version = (Get-Content -LiteralPath (Join-Path $PWD 'package.json') -Raw | ConvertFrom-Json).version
           $installerName = 'dsh-wsl-desktop_' + $version + '_x64-setup.exe'
           Copy-Item -LiteralPath $installers[0].FullName -Destination (Join-Path $output $installerName)
+          if ($env:IS_RELEASE -eq 'true') {
+            Copy-Item -LiteralPath ($installers[0].FullName + '.sig') -Destination (Join-Path $output ($installerName + '.sig'))
+          }
           $checksums = Get-ChildItem -LiteralPath $output -Filter '*.exe' -File | Sort-Object Name | ForEach-Object {
             $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
             "$hash  $($_.Name)"
           }
           $checksums | Set-Content -LiteralPath (Join-Path $output 'SHA256SUMS.txt') -Encoding ascii
+      - name: Prepare and verify signed updater release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          node scripts/release.mjs prepare artifacts/windows
+          if ($LASTEXITCODE -ne 0) { throw 'Signed updater release validation failed.' }
       - name: Upload Windows downloads
         id: upload
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -156,7 +187,7 @@ jobs:
           ## Windows x64 build
           - [Download installer, executable and checksums]($env:DOWNLOAD_URL)
           - The application uses the existing WSL installation and imports the legacy launcher configuration.
-          - This build is unsigned. Windows SmartScreen may warn; verify the source and SHA256 before running.
+          - No Authenticode signature yet: Windows SmartScreen may warn. Tag releases have separate Tauri updater signatures.
           - CI builds and tests the application; it does not run or restart your WSL service.
           "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
       - name: Upload failed Windows build diagnostics
@@ -207,9 +238,9 @@ jobs:
           printf '%s\n' \
             "Windows x64 release built from commit $GITHUB_SHA." \
             "" \
-            "Includes the NSIS installer, standalone executable and SHA256SUMS.txt." \
+            "Includes the signed NSIS updater, standalone executable, latest.json and SHA256SUMS.txt." \
             "" \
-            "Current builds are unsigned. SignPath Foundation application is pending review; Windows SmartScreen may warn." \
+            "Updater signatures verify authenticity in-app; Authenticode signing is still pending and Windows SmartScreen may warn." \
             "MIT license. Requires an existing WSL DSH installation and Microsoft WebView2 Runtime." \
             "" \
             "[Usage and privacy information](https://github.com/$GITHUB_REPOSITORY/blob/$RELEASE_TAG/DOWNLOADS.md)" > "$notes"
@@ -222,7 +253,7 @@ jobs:
             gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
               --target "$GITHUB_SHA" --title "DSH WSL Desktop $RELEASE_TAG" --notes-file "$notes" --draft
           fi
-          assets=(artifacts/windows/*.exe artifacts/windows/SHA256SUMS.txt)
+          assets=(artifacts/windows/*.exe artifacts/windows/*.exe.sig artifacts/windows/latest.json artifacts/windows/SHA256SUMS.txt)
           gh release upload "$RELEASE_TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
           printf '%s\n' "${assets[@]##*/}" | sort > "$RUNNER_TEMP/expected-assets.txt"
           gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | sort > "$RUNNER_TEMP/actual-assets.txt"

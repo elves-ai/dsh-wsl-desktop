@@ -13,6 +13,17 @@ interface Snapshot {
   logs: string[];
 }
 
+interface UpdateSnapshot {
+  current_version: string;
+  phase: 'idle' | 'checking' | 'available' | 'up_to_date' | 'downloading' | 'installing' | 'error';
+  version: string | null;
+  notes: string | null;
+  downloaded: number;
+  total: number | null;
+  message: string;
+  busy: boolean;
+}
+
 type Action = 'open' | 'start' | 'stop' | 'restart' | 'logs' | 'quit' | 'exit';
 const native = isTauri();
 const app = document.querySelector<HTMLDivElement>('#app');
@@ -47,6 +58,15 @@ app.innerHTML = `
       <p id="ownership-hint">只有由本启动器管理的服务才能停止或重启。</p>
     </section>
 
+    <details class="update-panel" id="updates-panel"><summary><span>启动器更新</span><span class="update-version" id="update-current-version">正在读取版本</span></summary><div class="update-content">
+      <p class="update-new-version" id="update-new-version" hidden></p>
+      <p id="update-message" role="status" aria-live="polite" tabindex="-1">正在读取更新状态。</p>
+      <pre id="update-notes" aria-label="更新说明" hidden></pre>
+      <div id="update-progress-row" hidden><progress id="update-progress" aria-label="更新下载进度"></progress><span id="update-progress-label"></span></div>
+      <div class="update-actions"><button class="button secondary" type="button" id="check-update" disabled>检查更新</button><button class="button primary" type="button" id="install-update" hidden disabled>下载并安装</button></div>
+      <p class="update-hint">仅更新 Windows 启动器，不会更新或停止 WSL 服务；安装前会请求系统确认。</p>
+    </div></details>
+
     <details class="logs-panel" id="logs-panel"><summary><span><span class="log-symbol" aria-hidden="true">≡</span>操作日志 <span class="log-count" id="log-count">0</span></span><span class="log-summary-hint">脱敏显示 <span class="chevron" aria-hidden="true">⌄</span></span></summary><div class="logs-content"><div class="logs-toolbar"><span>仅显示本地启动与控制记录</span><button class="text-button" id="logs" type="button" disabled>刷新日志</button></div><pre id="log-output" tabindex="0" aria-label="脱敏操作日志">暂无操作日志</pre></div></details>
 
     <footer class="footer"><div class="background-note"><span aria-hidden="true">◌</span><p>关闭窗口后，服务仍可在后台运行。<br><span>需要停止服务时，请选择“停止”或“停止并退出”。</span></p></div><div class="exit-actions"><button class="text-button" type="button" id="quit" disabled>退出启动器</button><span aria-hidden="true">/</span><button class="text-button danger" type="button" id="exit" disabled>停止并退出</button></div></footer>
@@ -67,6 +87,19 @@ let localError = '';
 let eventRevision = 0;
 let unlisten: UnlistenFn | undefined;
 let unlistenShowLogs: UnlistenFn | undefined;
+let unlistenUpdates: UnlistenFn | undefined;
+let unlistenShowUpdates: UnlistenFn | undefined;
+let updateSnapshot: UpdateSnapshot = { current_version: '', phase: 'idle', version: null, notes: null, downloaded: 0, total: null, message: '正在读取更新状态。', busy: false };
+let updateConnected = false;
+let updatePending: 'check_update' | 'install_update' | null = null;
+let updateError = '';
+let updateRevision = 0;
+const checkUpdateButton = element<HTMLButtonElement>('check-update');
+const installUpdateButton = element<HTMLButtonElement>('install-update');
+
+function updateLocksService(): boolean {
+  return updatePending === 'install_update' || ['downloading', 'installing'].includes(updateSnapshot.phase);
+}
 
 const states: Record<string, { label: string; title: string }> = {
   stopped: { label: '未运行', title: '工作空间尚未启动' },
@@ -97,7 +130,7 @@ function render(): void {
   const knownState = Object.prototype.hasOwnProperty.call(states, snapshot.state) ? snapshot.state : 'unknown';
   const status = states[knownState] ?? { label: '待检查', title: '暂时无法确认服务状态' };
   const busy = snapshot.busy || pending;
-  const disabled = !native || !connected || busy;
+  const disabled = !native || !connected || busy || updateLocksService();
   const ready = snapshot.state === 'ready';
   const running = ready || snapshot.state === 'starting';
   element('status-badge').dataset.state = knownState;
@@ -129,6 +162,66 @@ function render(): void {
   output.textContent = lines.length ? lines.join('\n') : '暂无操作日志';
   element('log-count').textContent = String(lines.length);
   if (atBottom) output.scrollTop = output.scrollHeight;
+  renderUpdate();
+}
+
+function renderUpdate(): void {
+  const update = updateSnapshot;
+  const busy = update.busy || updatePending !== null || ['checking', 'downloading', 'installing'].includes(update.phase);
+  const available = Boolean(update.version) && update.phase === 'available';
+  element('update-current-version').textContent = update.current_version ? '当前版本 ' + update.current_version : native ? '版本待读取' : '仅桌面应用可用';
+  element('update-new-version').hidden = !update.version;
+  element('update-new-version').textContent = update.version ? '新版本 ' + update.version : '';
+  element('update-message').textContent = !native ? '浏览器预览不检查更新，也不会下载或安装。' : redact(updateError || update.message || '可检查启动器更新。');
+  element('update-message').dataset.error = String(Boolean(updateError) || update.phase === 'error');
+  // Release notes are untrusted plain text, never HTML or rendered Markdown.
+  element('update-notes').textContent = update.notes || '';
+  element('update-notes').hidden = !update.notes;
+  const downloading = update.phase === 'downloading';
+  element('update-progress-row').hidden = !downloading && update.phase !== 'installing';
+  const progress = element<HTMLProgressElement>('update-progress');
+  if (downloading && update.total !== null && update.total > 0) {
+    progress.max = update.total;
+    progress.value = Math.min(Math.max(0, update.downloaded), update.total);
+    element('update-progress-label').textContent = Math.floor(progress.value / update.total * 100) + '% · ' + formatBytes(update.downloaded) + ' / ' + formatBytes(update.total);
+  } else {
+    progress.removeAttribute('value');
+    element('update-progress-label').textContent = downloading ? '已下载 ' + formatBytes(update.downloaded) + ' · 总大小未知' : '正在安装…';
+  }
+  checkUpdateButton.disabled = !native || !updateConnected || busy;
+  checkUpdateButton.textContent = update.phase === 'checking' || updatePending === 'check_update' ? '正在检查…' : '检查更新';
+  installUpdateButton.hidden = !available;
+  installUpdateButton.disabled = !native || !updateConnected || !available || busy || !connected || snapshot.busy || pending;
+}
+
+function formatBytes(bytes: number): string {
+  const safe = Math.max(0, bytes);
+  return safe < 1024 * 1024 ? (safe / 1024).toFixed(1) + ' KB' : (safe / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function showUpdates(): void {
+  element<HTMLDetailsElement>('updates-panel').open = true;
+  element('update-message').focus({ preventScroll: true });
+  element('updates-panel').scrollIntoView({ block: 'nearest' });
+}
+
+async function performUpdate(command: 'check_update' | 'install_update'): Promise<void> {
+  const button = command === 'check_update' ? checkUpdateButton : installUpdateButton;
+  if (!native || button.disabled || updatePending !== null) return;
+  updatePending = command;
+  updateError = '';
+  render();
+  const revision = updateRevision;
+  try {
+    // Rust alone owns confirmation, release validation, download, and installation.
+    const result = await invoke<UpdateSnapshot>(command);
+    if (updateRevision === revision) updateSnapshot = result;
+  } catch (error) {
+    if (updateRevision === revision) updateError = '更新操作未完成，可重试：' + String(error);
+  } finally {
+    updatePending = null;
+    render();
+  }
 }
 
 function showLogs(): void {
@@ -198,6 +291,42 @@ async function initialize(): Promise<void> {
   render();
 }
 
-window.addEventListener('beforeunload', () => { unlisten?.(); unlistenShowLogs?.(); }, { once: true });
+checkUpdateButton.addEventListener('click', () => { void performUpdate('check_update'); });
+installUpdateButton.addEventListener('click', () => { void performUpdate('install_update'); });
+
+async function initializeUpdates(): Promise<void> {
+  if (!native) return;
+  try {
+    // Listen before querying: a late query/command reply must not replace newer events.
+    unlistenUpdates = await listen<UpdateSnapshot>('launcher-update-state', event => {
+      updateRevision += 1;
+      updateSnapshot = event.payload;
+      updateConnected = true;
+      updateError = '';
+      render();
+    });
+    unlistenShowUpdates = await listen('launcher-show-updates', showUpdates);
+  } catch (error) {
+    updateError = '无法订阅更新状态，请重新打开启动器：' + String(error);
+    render();
+    return;
+  }
+  const revision = updateRevision;
+  try {
+    const initial = await invoke<UpdateSnapshot>('get_update_snapshot');
+    if (updateRevision === revision) updateSnapshot = initial;
+  } catch (error) {
+    if (updateRevision === revision) updateError = '无法读取更新状态，可重试检查：' + String(error);
+  }
+  updateConnected = true;
+  render();
+  // A tray reveal can precede subscriptions during startup; recover from the snapshot.
+  if (updateSnapshot.phase === 'available') showUpdates();
+  // Checking is safe alongside service startup. Never download without a user action.
+  if (!checkUpdateButton.disabled && ['idle', 'up_to_date', 'error'].includes(updateSnapshot.phase)) await performUpdate('check_update');
+}
+
+window.addEventListener('beforeunload', () => { unlisten?.(); unlistenShowLogs?.(); unlistenUpdates?.(); unlistenShowUpdates?.(); }, { once: true });
 render();
 void initialize();
+void initializeUpdates();

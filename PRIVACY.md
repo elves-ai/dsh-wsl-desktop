@@ -24,6 +24,12 @@ Top-level navigation and popup restrictions are not a network sandbox for page s
 
 Permitted external web links are opened using the system's default handler. Data processing at the destination is governed by that site's and browser's policies. The installer may download/install Microsoft WebView2 Runtime when it is required. Microsoft's [privacy statement](https://privacy.microsoft.com/privacystatement) applies to Microsoft services and components.
 
+## Update checks and downloads
+
+Updater-enabled versions check this project’s latest stable GitHub Release once at launcher startup and when requested. These requests expose the client IP address and ordinary HTTP/TLS metadata to GitHub and its download infrastructure. The launcher does not attach DSH tokens, conversations, launcher configuration, or activity logs to these requests. It uses system network/proxy settings and Windows TLS trust; an environment-controlled proxy may also observe connection metadata.
+
+After explicit native confirmation, the launcher downloads an NSIS update package from this project’s GitHub Release, verifies its version-bound update signature, and runs the installer. The Windows launcher/workspace closes and restarts, but this operation does not stop or upgrade the WSL service. Installer temporary files may remain in Windows temporary storage, especially after failures; automatic cleanup is not guaranteed. There is no mirror or maintainer-operated update server. See [update behavior](<UPDATES.md>).
+
 ## Activity logs
 
 The launcher keeps a recent in-memory activity list and a local activity log for startup stages, service-control actions, and errors. It does not intentionally copy DSH conversations or the existing helper's service log into this activity log. Common token and Bearer forms are redacted, but redaction is not a guarantee that arbitrary user-supplied text is free of sensitive information.

@@ -10,7 +10,7 @@ Windows 原生 **Tauri 2 + WebView2** 启动器。DSH、Node、会话与项目�
 - [隐私说明](<PRIVACY.md>)
 - [Code signing policy](<CODE_SIGNING.md>)：当前构建未签名；已于 2026-10-22 提交 SignPath Foundation 申请，等待审核，尚未获得批准。
 
-## 第一版
+## 功能
 
 - 自动导入旧启动器配置，复用现有 WSL Python 管理器。
 - 自动检查/启动服务，确认 Windows 可访问后在 WebView 中打开 DSH。
@@ -18,6 +18,7 @@ Windows 原生 **Tauri 2 + WebView2** 启动器。DSH、Node、会话与项目�
 - 启动进度、托盘、启动/停止/重启与脱敏操作日志。
 - 关窗隐藏到托盘，不停止任务；“仅退出启动器”保留服务。
 - “停止服务并退出”先确认停止成功再退出；危险操作原生确认框默认选中“否”。
+- 启动时检查 GitHub 正式版本，手动确认后下载、验签、安装更新；仅更新 Windows 启动器。详见[更新与密钥配置](<UPDATES.md>)。
 
 不安装/升级 DSH，不修改原启动器，不迁移 Edge 登录数据，不接管整个 WSL，不自动强杀进程。
 
@@ -75,20 +76,20 @@ WebView 数据：%LOCALAPPDATA%\io.local.dsh-wsl-desktop\webview
 2. 测试通过后，Windows Server 2022 runner 使用 MSVC 编译，执行 Windows 单元测试并生成 x64 NSIS 安装包。
 3. 普通 main、PR 和手动构建上传 Artifacts；推送版本标签时，在测试和 Windows 打包成功后创建 GitHub Release 并上传长期下载附件。
 
-每份产物包含独立可执行文件、NSIS 安装包和 SHA256SUMS.txt。Actions Artifacts 保留 30 天，下载通常需要登录 GitHub；正式版本请从 [Releases 页面](https://github.com/elves-ai/dsh-wsl-desktop/releases)下载，公开 Release 附件不受这 30 天保留期限制。
+普通构建包含独立可执行文件、NSIS 安装包和 SHA256SUMS.txt；版本标签构建还包含更新签名和版本清单。Actions Artifacts 保留 30 天，下载通常需要登录 GitHub；正式版本请从 [Releases 页面](https://github.com/elves-ai/dsh-wsl-desktop/releases)下载，公开 Release 附件不受这 30 天保留期限制。
 
-默认 GitHub Token 为 contents:read，仅标签发布 job 获得 contents:write；PR、main 和手动构建不会发布 Release。不需要额外仓库 Secrets，第三方 Actions 固定到提交 SHA。
+默认 GitHub Token 为 contents:read，仅标签发布 job 获得 contents:write；PR、main 和手动构建不会发布 Release。正式标签构建需要更新签名私钥 Secret，普通构建不需要；配置见[更新说明](<UPDATES.md#发布维护者首次配置>)。第三方 Actions 固定到提交 SHA。
 
 ### 发布新版本
 
 版本标签必须匹配四份元数据：[package.json](<package.json>)、[package-lock.json](<package-lock.json>)、[Cargo.toml](<src-tauri/Cargo.toml>)、[tauri.conf.json](<src-tauri/tauri.conf.json>)。支持 vX.Y.Z 和 vX.Y.Z-预发布标识；版本不一致会在构建前失败。修改版本并提交后，例如：
 
 ~~~bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.2
+git push origin v0.1.2
 ~~~
 
-发布 job 先下载同一次工作流的 Windows 产物并重新验证全部 EXE 校验和，再创建草稿 Release、上传三个附件、核对附件清单，最后公开 Release。预发布标签会标记为 Pre-release，不取代最新稳定版。失败时可能留下草稿，重跑可继续；已经公开的版本拒绝覆盖，应修复后发布新版本，不移动旧标签。维护者应限制版本标签的推送权限。
+发布 job 先下载同一次工作流的 Windows 产物，重新验证全部附件校验和、更新签名和版本清单，再创建草稿 Release、上传完整附件、核对附件清单，最后公开 Release。预发布标签会标记为 Pre-release，不取代最新稳定版。失败时可能留下草稿，重跑可继续；已经公开的版本拒绝覆盖，应修复后发布新版本，不移动旧标签。维护者应限制版本标签的推送权限。
 
 **构建未配置代码签名**：Windows SmartScreen 可能警告，请核对来源和 SHA256。构建机不需要你的 WSL 或 DSH 凭据；CI 不启动应用，不会连接或重启你电脑中的服务。
 
@@ -111,7 +112,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "\\wsl.localhost\Ubuntu-
 ~~~powershell
 npm ci
 npm run desktop:dev
-npm run desktop:build
+npm run desktop:build -- --config src-tauri/tauri.local-build.conf.json
 ~~~
 
 不要在 WSL 中执行普通 tauri build 并期待 Windows 应用。本项目不提供 Linux GUI；Linux 仅用于编辑、纯逻辑测试和交叉编译检查。
@@ -145,6 +146,7 @@ Windows 验收还需覆盖：首次认证及重开登录状态、流式响应、
 ## 主要代码
 
 - [原生生命周期](<src-tauri/src/desktop.rs>)
+- [原生更新适配](<src-tauri/src/desktop_updates.rs>)与[更新策略](<src-tauri/src/update.rs>)
 - [配置导入](<src-tauri/src/config.rs>)
 - [WSL 适配](<src-tauri/src/backend.rs>)
 - [协议与凭证脱敏](<src-tauri/src/protocol.rs>)

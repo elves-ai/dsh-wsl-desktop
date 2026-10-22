@@ -1,6 +1,6 @@
 {
   "name": "dsh-wsl-desktop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "license": "MIT",
   "author": "Evan Yang",
@@ -18,7 +18,7 @@
     "@tauri-apps/api": "^2.9.0"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.9.0",
+    "@tauri-apps/cli": "^2.12.4",
     "typescript": "~5.9.3",
     "vite": "^7.2.0",
     "yaml": "^2.9.1"

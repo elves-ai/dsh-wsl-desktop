@@ -14,7 +14,7 @@ if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { throw 'LOCALAPPDATA is un
 $buildRoot = Join-Path $env:LOCALAPPDATA 'DSHWslDesktopBuild'
 $stage = Join-Path $buildRoot ('source-' + [Guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory($stage)
-$rootFiles = @('package.json', 'package-lock.json', 'tsconfig.json', 'vite.config.ts', 'index.html', 'LICENSE', 'README.md', 'PRIVACY.md', 'CODE_SIGNING.md', 'DOWNLOADS.md')
+$rootFiles = @('package.json', 'package-lock.json', 'tsconfig.json', 'vite.config.ts', 'index.html', 'LICENSE', 'README.md', 'PRIVACY.md', 'CODE_SIGNING.md', 'DOWNLOADS.md', 'UPDATES.md')
 foreach ($file in $rootFiles) { Copy-Item -LiteralPath (Join-Path $source $file) -Destination (Join-Path $stage $file) }
 $folders = @('src', 'tests', 'scripts', '.github/workflows', 'src-tauri/src', 'src-tauri/helpers', 'src-tauri/icons', 'src-tauri/capabilities')
 foreach ($folder in $folders) {
@@ -23,7 +23,7 @@ foreach ($folder in $folders) {
     & robocopy.exe (Join-Path $source $folder) $destination /E /NFL /NDL /NJH /NJS /NP | Out-Null
     if ($LASTEXITCODE -ge 8) { throw "Could not stage $folder (robocopy exit $LASTEXITCODE)." }
 }
-foreach ($file in @('Cargo.toml', 'Cargo.lock', 'build.rs', 'tauri.conf.json')) {
+foreach ($file in @('Cargo.toml', 'Cargo.lock', 'build.rs', 'tauri.conf.json', 'tauri.local-build.conf.json')) {
     Copy-Item -LiteralPath (Join-Path $source ('src-tauri/' + $file)) -Destination (Join-Path $stage ('src-tauri/' + $file))
 }
 $oldTarget = $env:CARGO_TARGET_DIR
@@ -38,7 +38,8 @@ try {
         & cargo.exe test --manifest-path src-tauri/Cargo.toml --lib --locked
         if ($LASTEXITCODE -ne 0) { throw 'Rust tests failed.' }
     }
-    & npm.cmd run desktop:build -- --target x86_64-pc-windows-msvc
+    # Local builds do not use the production updater private key or produce update signatures.
+    & npm.cmd run desktop:build -- --target x86_64-pc-windows-msvc --config src-tauri/tauri.local-build.conf.json
     if ($LASTEXITCODE -ne 0) { throw 'Windows Tauri build failed. Check the C++ toolchain and Windows SDK.' }
     $artifacts = Join-Path $source 'artifacts/windows'
     [void][IO.Directory]::CreateDirectory($artifacts)

@@ -22,6 +22,9 @@ use tauri::{
 };
 use url::Url;
 
+#[path = "desktop_updates.rs"]
+mod updates;
+
 #[derive(Clone, Serialize)]
 pub struct Snapshot {
     state: String,
@@ -423,7 +426,13 @@ fn open_dsh(app: &tauri::AppHandle, config: &config::Config, url: Url) -> Result
                 let _ = window.show();
                 let _ = window.set_focus();
                 if let Some(launcher) = window.app_handle().get_webview_window("launcher") {
-                    let _ = launcher.hide();
+                    let available = window
+                        .app_handle()
+                        .state::<Arc<updates::Updates>>()
+                        .available();
+                    if !available {
+                        let _ = launcher.hide();
+                    }
                 }
             }
         })
@@ -530,7 +539,14 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             activate(app);
         }))
-        .invoke_handler(tauri::generate_handler![get_snapshot, perform_action])
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .invoke_handler(tauri::generate_handler![
+            get_snapshot,
+            perform_action,
+            updates::get_update_snapshot,
+            updates::check_update,
+            updates::install_update
+        ])
         .setup(|app| {
             let directory = app.path().app_config_dir()?;
             let legacy = std::env::var_os("LOCALAPPDATA")
@@ -568,6 +584,9 @@ pub fn run() {
                 log_path: directory.join("launcher.log"),
             });
             app.manage(controller.clone());
+            app.manage(Arc::new(updates::Updates::new(
+                &app.package_info().version.to_string(),
+            )));
             if imported {
                 controller.record(
                     app.handle(),
@@ -591,6 +610,7 @@ pub fn run() {
                 .build()?;
             let open = MenuItem::with_id(app, "open", "打开 DSH", true, None::<&str>)?;
             let control = MenuItem::with_id(app, "logs", "状态与操作日志", true, None::<&str>)?;
+            let update = MenuItem::with_id(app, "updates", "检查启动器更新…", true, None::<&str>)?;
             let start = MenuItem::with_id(app, "start", "启动服务", true, None::<&str>)?;
             let stop = MenuItem::with_id(app, "stop", "停止服务…", true, None::<&str>)?;
             let restart = MenuItem::with_id(app, "restart", "重启服务…", true, None::<&str>)?;
@@ -599,7 +619,9 @@ pub fn run() {
             let exit = MenuItem::with_id(app, "exit", "停止服务并退出…", true, None::<&str>)?;
             let menu = Menu::with_items(
                 app,
-                &[&open, &control, &start, &stop, &restart, &quit, &exit],
+                &[
+                    &open, &control, &update, &start, &stop, &restart, &quit, &exit,
+                ],
             )?;
             TrayIconBuilder::with_id("dsh-tray")
                 .icon(app.default_window_icon().cloned().ok_or("缺少应用图标")?)
@@ -609,6 +631,14 @@ pub fn run() {
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "open" => dispatch(app, "open"),
                     "logs" => dispatch(app, "logs"),
+                    "updates" => {
+                        updates::show_updates(app);
+                        let app = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let state = app.state::<Arc<updates::Updates>>().inner().clone();
+                            updates::check(&app, &state).await;
+                        });
+                    }
                     "start" => dispatch(app, "start"),
                     "stop" => dispatch(app, "stop"),
                     "restart" => dispatch(app, "restart"),

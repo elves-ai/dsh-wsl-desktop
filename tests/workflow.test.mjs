@@ -59,3 +59,70 @@ test('only successful tag pushes may publish a release with narrowly scoped writ
   assert.match(run, /--verify-tag/); assert.match(run, /refusing to overwrite/);
   assert.match(run, /--prerelease=/); assert.match(run, /--latest=/);
 });
+
+const trustedTag = "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')";
+test('signing secrets exist only in explicitly trusted tag steps and never in job/global environment', () => {
+  assert.ok(!JSON.stringify(workflow.env).includes('TAURI_SIGNING_'));
+  const secretSteps = [];
+  for (const job of Object.values(workflow.jobs)) {
+    assert.ok(!JSON.stringify(job.env ?? {}).includes('secrets.TAURI_SIGNING_'));
+    for (const step of job.steps) {
+      if (JSON.stringify(step.env ?? {}).includes('secrets.TAURI_SIGNING_')) {
+        secretSteps.push(step);
+        assert.equal(step.if, trustedTag);
+        assert.doesNotMatch(step.run, /Write-(?:Output|Host).*TAURI_SIGNING_|echo.*TAURI_SIGNING_|printenv|Get-ChildItem Env:/);
+      }
+    }
+  }
+  assert.equal(secretSteps.length, 2);
+  const steps = workflow.jobs['build-windows'].steps;
+  const guard = steps.find(s => s.name === 'Require updater signing key for trusted tag build');
+  assert.match(guard.run, /IsNullOrWhiteSpace\(\$env:TAURI_SIGNING_PRIVATE_KEY\)/);
+  assert.match(guard.run, /throw/);
+  assert.ok(steps.indexOf(guard) < steps.findIndex(s => s.name === 'Set up Rust MSVC'));
+  assert.equal(guard.env.TAURI_SIGNING_PRIVATE_KEY, '${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}');
+  const signed = steps.find(s => s.name === 'Build signed Windows application and NSIS installer');
+  assert.equal(signed.if, trustedTag);
+  assert.equal(signed.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD, '${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}');
+  assert.match(signed.run, /--bundles nsis/);
+  assert.doesNotMatch(signed.run, /createUpdaterArtifacts.*false|--config/);
+});
+
+test('PRs, branches and manual builds explicitly disable updater artifacts without signing secrets', () => {
+  const step = workflow.jobs['build-windows'].steps.find(s => s.name === 'Build Windows application and NSIS installer');
+  assert.equal(step.if, '${{ !(' + trustedTag + ') }}');
+  assert.deepEqual(step.env ?? {}, {});
+  assert.match(step.run, /"bundle":\{"createUpdaterArtifacts":false\}/);
+  assert.match(step.run, /--config \$override/);
+  assert.match(step.run, /-- --locked/);
+  assert.doesNotMatch(step.run, /secrets\.|TAURI_SIGNING_/);
+});
+
+test('tag artifacts preserve installer signature and prepare manifest before upload', () => {
+  const steps = workflow.jobs['build-windows'].steps;
+  const collect = steps.find(s => s.name.startsWith('Collect executable'));
+  assert.equal(collect.env.IS_RELEASE, '${{ ' + trustedTag + ' }}');
+  assert.match(collect.run, /\$env:IS_RELEASE -eq 'true'/);
+  assert.match(collect.run, /FullName \+ '\.sig'/);
+  assert.match(collect.run, /\$installerName \+ '\.sig'/);
+  const prepare = steps.find(s => s.name === 'Prepare and verify signed updater release');
+  assert.equal(prepare.if, trustedTag);
+  assert.match(prepare.run, /node scripts\/release\.mjs prepare artifacts\/windows/);
+  assert.match(prepare.run, /LASTEXITCODE/);
+  assert.ok(steps.indexOf(collect) < steps.indexOf(prepare));
+  assert.ok(steps.indexOf(prepare) < steps.findIndex(s => s.name === 'Upload Windows downloads'));
+});
+
+test('publish includes updater signature and manifest, verifies the full asset set, and never marks prereleases latest', () => {
+  const job = workflow.jobs['publish-release'];
+  const validation = job.steps.find(s => s.name === 'Verify release files and checksums');
+  assert.match(validation.run, /release\.mjs verify artifacts\/windows/);
+  const run = job.steps.find(s => s.name.startsWith('Publish complete release')).run;
+  assert.match(run, /assets=\(artifacts\/windows\/\*\.exe artifacts\/windows\/\*\.exe\.sig artifacts\/windows\/latest\.json artifacts\/windows\/SHA256SUMS\.txt\)/);
+  assert.ok(run.indexOf('refusing to overwrite') < run.indexOf('gh release upload'));
+  assert.ok(run.indexOf('--draft') < run.indexOf('gh release upload'));
+  assert.ok(run.indexOf('gh release upload') < run.indexOf('diff -u'));
+  assert.ok(run.indexOf('diff -u') < run.indexOf('--draft=false'));
+  assert.match(run, /if \[\[ "\$IS_PRERELEASE" == true \]\]; then latest=false; fi/);
+  assert.match(run, /--prerelease="\$IS_PRERELEASE" --latest="\$latest"/);
+});
