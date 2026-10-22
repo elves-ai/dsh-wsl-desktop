@@ -24,6 +24,12 @@ interface UpdateSnapshot {
   busy: boolean;
 }
 
+interface NotificationSnapshot {
+  enabled: boolean;
+  phase: 'disabled' | 'connecting' | 'listening' | 'error';
+  message: string;
+}
+
 type Action = 'open' | 'start' | 'stop' | 'restart' | 'logs' | 'quit' | 'exit';
 const native = isTauri();
 const app = document.querySelector<HTMLDivElement>('#app');
@@ -56,6 +62,13 @@ app.innerHTML = `
       <div><span class="field-label">服务地址</span><code id="origin">尚未连接</code></div>
       <div><span class="field-label">进程归属</span><span class="ownership" id="ownership">等待检查</span></div>
       <p id="ownership-hint">只有由本启动器管理的服务才能停止或重启。</p>
+    </section>
+
+    <section class="notification-panel" aria-labelledby="notification-heading">
+      <div class="notification-controls"><h2 id="notification-heading">系统通知</h2><label class="notification-toggle"><input id="notifications-enabled" type="checkbox" aria-describedby="notification-hint" disabled>启用系统通知</label><button class="button secondary" id="test-notification" type="button" disabled>测试通知</button></div>
+      <p id="notification-message" role="status" aria-live="polite" aria-atomic="true">未启用系统通知。</p>
+      <p class="notification-hint" id="notification-hint">默认关闭，需主动开启。仅在 DSH 处于后台时提醒；本轮结束不等于整个长任务目标完成。通知不显示正文；退出启动器后不再提醒。</p>
+      <p class="notification-hint">测试通知提交成功不保证显示横幅，Windows 勿扰模式可能屏蔽通知。</p>
     </section>
 
     <details class="update-panel" id="updates-panel"><summary><span>启动器更新</span><span class="update-version" id="update-current-version">正在读取版本</span></summary><div class="update-content">
@@ -96,6 +109,15 @@ let updateError = '';
 let updateRevision = 0;
 const checkUpdateButton = element<HTMLButtonElement>('check-update');
 const installUpdateButton = element<HTMLButtonElement>('install-update');
+const notificationsEnabled = element<HTMLInputElement>('notifications-enabled');
+const testNotificationButton = element<HTMLButtonElement>('test-notification');
+let notificationSnapshot: NotificationSnapshot = { enabled: false, phase: 'disabled', message: '未启用系统通知。' };
+let notificationPending = false;
+let notificationRevision = 0;
+let notificationError = '';
+let notificationNotice = '';
+let unlistenNotifications: UnlistenFn | undefined;
+let notificationsDisposed = false;
 
 function updateLocksService(): boolean {
   return updatePending === 'install_update' || ['downloading', 'installing'].includes(updateSnapshot.phase);
@@ -163,6 +185,7 @@ function render(): void {
   element('log-count').textContent = String(lines.length);
   if (atBottom) output.scrollTop = output.scrollHeight;
   renderUpdate();
+  renderNotifications();
 }
 
 function renderUpdate(): void {
@@ -193,6 +216,65 @@ function renderUpdate(): void {
   installUpdateButton.hidden = !available;
   installUpdateButton.disabled = !native || !updateConnected || !available || busy || !connected || snapshot.busy || pending;
 }
+
+function renderNotifications(): void {
+  const state = notificationSnapshot;
+  const labels = { disabled: '未启用', connecting: '连接中', listening: '正在检查', error: '通知异常' };
+  notificationsEnabled.checked = state.enabled;
+  notificationsEnabled.disabled = !native || notificationPending || notificationsDisposed;
+  testNotificationButton.disabled = notificationsEnabled.disabled || !state.enabled;
+  testNotificationButton.textContent = notificationPending ? '处理中…' : '测试通知';
+  const message = element('notification-message');
+  message.dataset.error = String(Boolean(notificationError) || state.phase === 'error');
+  message.dataset.phase = state.phase;
+  message.textContent = !native ? '浏览器预览不连接通知服务，也不会请求网页通知权限。' : redact(notificationError || notificationNotice || labels[state.phase] + ' · ' + state.message);
+}
+
+async function subscribeNotifications(): Promise<boolean> {
+  if (notificationsDisposed) return false;
+  if (unlistenNotifications) return true;
+  const stop = await listen<NotificationSnapshot>('launcher-notification-state', event => {
+    if (notificationsDisposed) return;
+    notificationRevision += 1;
+    notificationSnapshot = event.payload;
+    notificationError = '';
+    notificationNotice = '';
+    renderNotifications();
+  });
+  // The window may close while the native listener registration is in flight.
+  if (notificationsDisposed) { stop(); return false; }
+  unlistenNotifications = stop;
+  return true;
+}
+
+async function performNotification(command: 'get_notification_snapshot' | 'set_notifications_enabled' | 'test_notification', enabled?: boolean): Promise<void> {
+  if (!native || notificationsDisposed || notificationPending || (command === 'test_notification' && testNotificationButton.disabled)) {
+    renderNotifications();
+    return;
+  }
+  notificationPending = true;
+  notificationError = '';
+  notificationNotice = '';
+  renderNotifications();
+  // Capture before subscribing, not after: events delivered during registration win too.
+  const revision = notificationRevision;
+  try {
+    if (!await subscribeNotifications() || notificationsDisposed) return;
+    const result = await invoke<NotificationSnapshot>(command, command === 'set_notifications_enabled' ? { enabled } : undefined);
+    if (!notificationsDisposed && notificationRevision === revision) {
+      notificationSnapshot = result;
+      if (command === 'test_notification' && result.phase !== 'error') notificationNotice = result.message + ' · 测试通知已提交，不保证显示横幅；Windows 勿扰模式可能屏蔽。';
+    }
+  } catch (error) {
+    if (!notificationsDisposed && notificationRevision === revision) notificationError = '通知操作未完成，可重试：' + String(error);
+  } finally {
+    notificationPending = false;
+    if (!notificationsDisposed) renderNotifications();
+  }
+}
+
+notificationsEnabled.addEventListener('change', () => { void performNotification('set_notifications_enabled', notificationsEnabled.checked); });
+testNotificationButton.addEventListener('click', () => { void performNotification('test_notification'); });
 
 function formatBytes(bytes: number): string {
   const safe = Math.max(0, bytes);
@@ -326,7 +408,13 @@ async function initializeUpdates(): Promise<void> {
   if (!checkUpdateButton.disabled && ['idle', 'up_to_date', 'error'].includes(updateSnapshot.phase)) await performUpdate('check_update');
 }
 
-window.addEventListener('beforeunload', () => { unlisten?.(); unlistenShowLogs?.(); unlistenUpdates?.(); unlistenShowUpdates?.(); }, { once: true });
+window.addEventListener('beforeunload', () => {
+  notificationsDisposed = true;
+  unlistenNotifications?.();
+  unlistenNotifications = undefined;
+  unlisten?.(); unlistenShowLogs?.(); unlistenUpdates?.(); unlistenShowUpdates?.();
+}, { once: true });
 render();
 void initialize();
 void initializeUpdates();
+void performNotification('get_notification_snapshot');

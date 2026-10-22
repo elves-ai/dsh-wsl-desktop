@@ -14,7 +14,7 @@ body { margin: 0; min-width: 360px; }
 button { font: inherit; cursor: pointer; }
 button, summary { -webkit-tap-highlight-color: transparent; }
 button:disabled { cursor: not-allowed; }
-button:focus-visible, summary:focus-visible, pre:focus-visible { outline: 2px solid #88b1ff; outline-offset: 4px; }
+button:focus-visible, input:focus-visible, summary:focus-visible, pre:focus-visible { outline: 2px solid #88b1ff; outline-offset: 4px; }
 ::selection { color: #fff; background: #315b9d; }
 .launcher { width: min(100%, 800px); margin: 0 auto; padding: 36px 40px 26px; }
 .header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 30px; }
@@ -67,6 +67,15 @@ h3 { margin: 0; font-size: 23px; line-height: 1.4; letter-spacing: -.5px; font-w
 #origin { color: #b8c9e1; font-family: "Cascadia Code", Consolas, monospace; font-size: 11px; overflow-wrap: anywhere; }
 .ownership { color: #bec9da; }
 .connection-card p { margin: 14px 0 0; padding-top: 12px; border-top: 1px solid #ffffff08; color: #7e8da4; font-size: 10px; line-height: 1.75; }
+.notification-panel { margin: 15px 0; padding: 14px 18px; border: 1px solid var(--border); border-radius: 10px; background: #111822; }
+.notification-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.notification-toggle { display: inline-flex; align-items: center; gap: 7px; color: #bcc8da; font-size: 12px; cursor: pointer; }
+.notification-toggle input { margin: 0; width: 15px; height: 15px; accent-color: #4d88f5; }
+.notification-toggle:has(input:disabled) { color: #63738b; cursor: not-allowed; }
+.notification-controls .button { margin-left: auto; min-height: 32px; padding: 4px 12px; font-size: 12px; }
+#notification-message { margin: 10px 0 7px; color: #a5b3c8; font-size: 11px; line-height: 1.7; overflow-wrap: anywhere; white-space: pre-wrap; }
+#notification-message[data-error="true"] { color: #f3b3b8; }
+.notification-hint { margin: 3px 0 0; color: #7e8da4; font-size: 10px; line-height: 1.75; }
 .update-panel { margin: 15px 0; border: 1px solid var(--border); border-radius: 10px; background: #111822; }
 .update-panel summary { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 18px; cursor: pointer; color: #bcc8da; font-size: 12px; }
 .update-version { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }

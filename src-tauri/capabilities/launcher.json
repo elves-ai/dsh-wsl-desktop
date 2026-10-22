@@ -13,6 +13,9 @@
     "allow-perform-action",
     "allow-get-update-snapshot",
     "allow-check-update",
-    "allow-install-update"
+    "allow-install-update",
+    "allow-get-notification-snapshot",
+    "allow-set-notifications-enabled",
+    "allow-test-notification"
   ]
 }

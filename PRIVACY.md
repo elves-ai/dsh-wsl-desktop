@@ -24,6 +24,14 @@ Top-level navigation and popup restrictions are not a network sandbox for page s
 
 Permitted external web links are opened using the system's default handler. Data processing at the destination is governed by that site's and browser's policies. The installer may download/install Microsoft WebView2 Runtime when it is required. Microsoft's [privacy statement](https://privacy.microsoft.com/privacystatement) applies to Microsoft services and components.
 
+## Optional desktop notifications
+
+Desktop notifications are off by default. If enabled, the native launcher reads only the HttpOnly authentication cookie bound to the configured loopback service authority from the DSH working WebView and uses it in memory for read-only session-list and recent-history requests, approximately every three seconds. These requests bypass proxies and do not follow redirects. No launch token is reused and no authentication data is exposed to the local control page, notification text, or launcher logs.
+
+The session API may return conversation data in the inspected history page. The launcher only classifies the latest turn-ending reason and sequence; it does not persist that response or copy it to notifications or activity logs. Notification text is fixed and contains no response body, error details, workspace path, or credentials. Windows may retain the generic notifications in its notification center according to system settings. Disabling notifications stops new checks and submissions, but does not remove notifications already submitted to Windows. Quitting the launcher stops notification monitoring without stopping DSH.
+
+Only the non-secret enabled preference is stored in a separate local notifications.json file. Initial connections and reconnections establish a fresh baseline rather than replaying old results.
+
 ## Update checks and downloads
 
 Updater-enabled versions check this project’s latest stable GitHub Release once at launcher startup and when requested. These requests expose the client IP address and ordinary HTTP/TLS metadata to GitHub and its download infrastructure. The launcher does not attach DSH tokens, conversations, launcher configuration, or activity logs to these requests. It uses system network/proxy settings and Windows TLS trust; an environment-controlled proxy may also observe connection metadata.
@@ -42,6 +50,7 @@ Typical Windows locations are:
 
 ~~~text
 %APPDATA%\io.local.dsh-wsl-desktop\config.json
+%APPDATA%\io.local.dsh-wsl-desktop\notifications.json
 %APPDATA%\io.local.dsh-wsl-desktop\launcher.log
 %LOCALAPPDATA%\io.local.dsh-wsl-desktop\webview
 ~~~

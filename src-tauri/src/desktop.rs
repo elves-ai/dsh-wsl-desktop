@@ -22,6 +22,8 @@ use tauri::{
 };
 use url::Url;
 
+#[path = "desktop_notifications.rs"]
+mod notifications;
 #[path = "desktop_updates.rs"]
 mod updates;
 
@@ -540,12 +542,16 @@ pub fn run() {
             activate(app);
         }))
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             get_snapshot,
             perform_action,
             updates::get_update_snapshot,
             updates::check_update,
-            updates::install_update
+            updates::install_update,
+            notifications::get_notification_snapshot,
+            notifications::set_notifications_enabled,
+            notifications::test_notification
         ])
         .setup(|app| {
             let directory = app.path().app_config_dir()?;
@@ -584,6 +590,9 @@ pub fn run() {
                 log_path: directory.join("launcher.log"),
             });
             app.manage(controller.clone());
+            let notification_state = Arc::new(notifications::Notifications::new(directory.clone()));
+            app.manage(notification_state.clone());
+            notifications::start(app.handle().clone(), controller.clone(), notification_state);
             app.manage(Arc::new(updates::Updates::new(
                 &app.package_info().version.to_string(),
             )));

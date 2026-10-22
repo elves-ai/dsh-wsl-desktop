@@ -7,6 +7,9 @@ fn main() {
                 "get_update_snapshot",
                 "check_update",
                 "install_update",
+                "get_notification_snapshot",
+                "set_notifications_enabled",
+                "test_notification",
             ]),
         ))
         .expect("Failed to build Tauri resources");

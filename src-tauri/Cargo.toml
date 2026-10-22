@@ -17,13 +17,19 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 url = "2"
 semver = "1"
+# Pure read-only RPC transport is also tested on Linux without a GUI.
+reqwest = { version = "0.12", default-features = false, features = ["blocking"] }
 
 [target.'cfg(windows)'.dependencies]
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-single-instance = "2"
+# Pin the verified desktop API; Cargo.lock also holds notify-rust at 4.11.7
+# (later backend releases raise the minimum Rust version).
+tauri-plugin-notification = "=2.3.3"
+sha2 = "0.10"
+base64 = "0.22"
 # Windows system TLS/certificate store; updater packages are direct NSIS EXEs, not legacy ZIPs.
 tauri-plugin-updater = { version = "2.14", default-features = false, features = ["native-tls", "system-proxy"] }
-reqwest = { version = "0.12", default-features = false, features = ["blocking"] }
 open = "5"
 windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
 

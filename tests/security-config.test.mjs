@@ -8,7 +8,7 @@ test('only trusted launcher window receives narrowly scoped IPC capabilities', (
   assert.deepEqual(config.app.security.capabilities, ['launcher']);
   assert.deepEqual(capability.windows, ['launcher']);
   assert.equal(capability.local, true); assert.equal(capability.remote, undefined);
-  assert.deepEqual([...capability.permissions].sort(), ['allow-get-snapshot', 'allow-perform-action', 'allow-get-update-snapshot', 'allow-check-update', 'allow-install-update', 'core:event:allow-listen', 'core:event:allow-unlisten'].sort());
+  assert.deepEqual([...capability.permissions].sort(), ['allow-get-snapshot', 'allow-perform-action', 'allow-get-update-snapshot', 'allow-check-update', 'allow-install-update', 'allow-get-notification-snapshot', 'allow-set-notifications-enabled', 'allow-test-notification', 'core:event:allow-listen', 'core:event:allow-unlisten'].sort());
   assert.ok(config.app.security.csp.includes("object-src 'none'"));
 });
 test('destructive actions require guarded PID adapter and native default-no confirmation', () => {
@@ -58,6 +58,29 @@ test('native update serializes with service/tray operations and preserves retry 
   assert.match(source, /data\.package = None/);
   assert.match(source, /on_before_exit\(\|\| \{\}\)/);
   assert.doesNotMatch(source, /cleanup_before_exit\(/);
+});
+
+test('notification commands stay local, fixed-purpose and independent of DSH IPC', () => {
+  const source = read('src-tauri/src/desktop_notifications.rs');
+  const capability = JSON.parse(read('src-tauri/capabilities/launcher.json'));
+  assert.ok(!capability.permissions.some(permission => permission.startsWith('notification:')));
+  for (const command of ['get_notification_snapshot', 'set_notifications_enabled', 'test_notification']) {
+    const declaration = source.slice(source.indexOf('fn ' + command + '('));
+    const body = declaration.slice(declaration.indexOf(') ->'));
+    assert.ok(body.slice(body.indexOf('{') + 1).trimStart().startsWith('assert_local(&window)?;'));
+    const params = declaration.slice(0, declaration.indexOf(') ->'));
+    for (const name of ['title:', 'body:', 'url:', 'path:', 'cookie:', 'token:', 'session_id:']) assert.ok(!params.includes(name));
+    assert.ok(read('src-tauri/build.rs').includes('\"' + command + '\"'));
+    assert.ok(read('src-tauri/src/desktop.rs').includes('notifications::' + command));
+  }
+  assert.ok(source.includes('cookies_for_url'));
+  assert.ok(source.includes('Sha256::digest(authority.as_bytes())'));
+  assert.ok(source.includes('cookie.name() == name'));
+  assert.ok(source.includes('NoticeKind::Completed'));
+  assert.ok(source.includes('NoticeKind::Failed'));
+  assert.ok(source.includes('foreground(&app)'));
+  assert.ok(!source.includes('initialization_script'));
+  assert.ok(!source.includes('get_webview_window("dsh").emit'));
 });
 
 test('local builds explicitly avoid production updater signing secrets', () => {
