@@ -21,7 +21,11 @@ impl Backend {
         #[cfg(windows)]
         {
             let root = std::env::var_os("SystemRoot").ok_or("找不到 Windows 系统目录。")?;
-            let mut command = Command::new(std::path::PathBuf::from(root).join("System32/wsl.exe"));
+            let mut command = Command::new(
+                std::path::PathBuf::from(root)
+                    .join("System32")
+                    .join("wsl.exe"),
+            );
             command.args(args);
             Ok(command)
         }
@@ -180,11 +184,15 @@ mod tests {
         #[cfg(windows)]
         {
             let root = std::env::var_os("SystemRoot").expect("Windows system directory");
-            let child = Command::new(std::path::PathBuf::from(root).join("System32/cmd.exe"))
-                .args(["/d", "/c", "echo hello"])
-                .stdout(Stdio::piped())
-                .spawn()
-                .unwrap();
+            let child = Command::new(
+                std::path::PathBuf::from(root)
+                    .join("System32")
+                    .join("cmd.exe"),
+            )
+            .args(["/d", "/c", "echo", "hello"])
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
             let output = capture(child, Duration::from_secs(5)).unwrap();
             assert_eq!(String::from_utf8(output).unwrap().trim(), "hello");
         }
@@ -207,7 +215,10 @@ mod tests {
             let root = std::env::var_os("SystemRoot").expect("Windows system directory");
             let child = Command::new(
                 std::path::PathBuf::from(root)
-                    .join("System32/WindowsPowerShell/v1.0/powershell.exe"),
+                    .join("System32")
+                    .join("WindowsPowerShell")
+                    .join("v1.0")
+                    .join("powershell.exe"),
             )
             .args([
                 "-NoProfile",
