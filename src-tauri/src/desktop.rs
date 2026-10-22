@@ -2,7 +2,7 @@ use crate::{
     backend::Backend,
     config,
     environment::{self, EnvironmentReport},
-    protocol::{redact, validated_launch_url, BackendReply},
+    protocol::{backend_error, redact, validated_launch_url, validated_stop_pid, BackendReply},
 };
 use serde::Serialize;
 use std::{
@@ -52,6 +52,8 @@ struct Controller {
     snapshot: Mutex<Snapshot>,
     busy: AtomicBool,
     exiting: AtomicBool,
+    // Serialize explicit quit with installer admission, not with WSL detection.
+    installation: Mutex<bool>,
     log_path: PathBuf,
 }
 impl Controller {
@@ -123,7 +125,7 @@ impl Controller {
     fn apply(&self, app: &tauri::AppHandle, reply: &BackendReply, idle: bool) {
         let mut s = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
         s.state = reply.state.clone();
-        s.managed = reply.state == "ready" && reply.authenticated;
+        s.managed = ["ready", "starting"].contains(&reply.state.as_str()) && reply.managed;
         if idle {
             s.phase = match reply.state.as_str() {
                 "ready" => "已就绪",
@@ -133,8 +135,8 @@ impl Controller {
             }
             .into();
             s.message = match reply.state.as_str() {
-                "ready" if reply.authenticated => "DSH 已就绪，可以打开工作窗口。",
-                "ready" => "检测到外部启动的服务；可尝试连接，但不会自动停止它。",
+                "ready" if reply.managed => "DSH 已就绪，可以打开工作窗口。",
+                "ready" => "发现运行中的 DSH，尚未验证托管归属；不会自动停止它。",
                 "stopped" => "服务未运行，点击打开 DSH 即可启动。",
                 _ => "正在等待服务就绪。",
             }
@@ -148,7 +150,8 @@ impl Controller {
         {
             let mut s = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
             s.state = "error".into();
-            s.phase = "操作未完成".into();
+            // Preserve which stage failed so the splash does not blame environment checks.
+            s.environment_checking = false;
             s.message = error.clone();
             s.last_error = Some(error.clone());
         }
@@ -285,12 +288,14 @@ async fn set_project_directory(
             );
             ensure_ready(&app, &controller, true)
         })();
-        controller.busy.store(false, Ordering::SeqCst);
         if let Err(error) = result {
             // Keep invalid directory/save errors in Settings; do not steal focus.
             controller.failure(&app, &error, false);
+            controller.busy.store(false, Ordering::SeqCst);
+            controller.publish(&app);
             return Err(error);
         }
+        controller.busy.store(false, Ordering::SeqCst);
         controller.publish(&app);
         Ok(controller.snapshot())
     })
@@ -474,13 +479,40 @@ fn ensure_ready(
     open_window: bool,
 ) -> Result<(), String> {
     check_environment(app, controller)?;
+    if controller.exiting.load(Ordering::SeqCst) {
+        return Ok(());
+    }
     let backend = controller.backend()?;
     let deadline = Instant::now() + Duration::from_secs(backend.config.startup_timeout_seconds);
     let mut started = false;
+    let mut bootstrap_deadline = deadline;
     let mut supervisor = None;
+    let mut authentication_deadline = None;
     controller.phase(app, "检查 WSL", "正在检查已有 DSH 服务，不会重复启动。 ");
     loop {
-        let reply = backend.invoke("probe")?;
+        if controller.exiting.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        let reply = match backend.invoke("probe") {
+            Ok(reply) => reply,
+            Err(error)
+                if started
+                    && Instant::now() < bootstrap_deadline
+                    && [
+                        backend_error(Some("unverified_startup")),
+                        backend_error(Some("process_changed")),
+                    ]
+                    .contains(&error) =>
+            {
+                // A fresh child can listen just before its supervisor publishes run.json.
+                thread::sleep(Duration::from_millis(500));
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        if controller.exiting.load(Ordering::SeqCst) {
+            return Ok(());
+        }
         controller.apply(app, &reply, false);
         match reply.state.as_str() {
             "ready" => {
@@ -491,9 +523,27 @@ fn ensure_ready(
                     "服务已就绪，正在确认 Windows 可以访问。 ",
                 );
                 if let Some(status @ (200 | 401)) = windows_status(&backend.config.origin()) {
+                    if controller.exiting.load(Ordering::SeqCst) {
+                        return Ok(());
+                    }
                     if open_window {
                         if status == 401 && !reply.authenticated {
-                            return Err("服务由外部启动，无法为新窗口自动认证。请使用原启动终端中的认证链接；启动器不会停止该服务。".into());
+                            // The listener can become ready just before its auth link is flushed.
+                            // Retry briefly, never relabel a verified owner as external or restart it.
+                            if reply.managed {
+                                let grace = authentication_deadline.get_or_insert_with(|| {
+                                    (Instant::now() + Duration::from_secs(3)).min(deadline)
+                                });
+                                if Instant::now() < *grace {
+                                    thread::sleep(Duration::from_millis(500));
+                                    continue;
+                                }
+                            }
+                            return Err(if reply.managed {
+                                backend_error(Some("managed_auth_unavailable"))
+                            } else {
+                                "服务正在运行，但未验证托管归属，无法为新窗口自动认证。请使用原启动终端的认证链接；也可选择“仅退出启动器”。".into()
+                            });
                         }
                         controller.phase(app, "打开工作窗口", "正在加载 DSH 工作窗口。 ");
                         open_dsh(app, &backend.config, url)?;
@@ -510,16 +560,29 @@ fn ensure_ready(
                     return Ok(());
                 }
             }
-            "stopped" => {
-                if started {
+            "stopped" if started => {
+                // The detached wrapper can finish before the supervisor takes its lock.
+                // Wait briefly for that handoff, without spawning a duplicate supervisor.
+                if Instant::now() >= bootstrap_deadline {
                     return Err("DSH 在就绪前退出，请检查 WSL 服务日志；未自动重启。".into());
                 }
+            }
+            "stopped" => {
                 controller.phase(
                     app,
                     "启动服务",
                     "正在启动 WSL 内的 DSH，首次启动可能需要一些时间。 ",
                 );
+                // Do not spawn a supervisor after a concurrent explicit quit.
+                let _admission = controller
+                    .installation
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                if controller.exiting.load(Ordering::SeqCst) {
+                    return Ok(());
+                }
                 supervisor = Some(backend.start()?);
+                bootstrap_deadline = (Instant::now() + Duration::from_secs(3)).min(deadline);
                 started = true;
             }
             "starting" => (),
@@ -548,21 +611,14 @@ fn stop_service(app: &tauri::AppHandle, controller: &Controller) -> Result<(), S
         controller.apply(app, &reply, false);
         return Ok(());
     }
-    // The legacy helper's authenticated URL is issued only for its own locked run.
-    // Do not assume that any Node process on this port is managed by the launcher.
-    if reply.state != "ready" || !reply.authenticated {
-        return Err("当前服务尚未就绪，或不是启动器管理的实例，未发送停止信号。请稍后重试，或在原终端中操作。".into());
-    }
-    validated_launch_url(&reply, backend.config.port)?;
+    // Authorize by verified PID/lock/start time, never by a browser launch token.
+    // The adapter rechecks identity under operation.lock immediately before signaling.
+    let expected_pid = validated_stop_pid(&reply)?;
     controller.phase(
         app,
         "停止服务",
         "正在请求 DSH 正常退出，不会强制结束进程或关闭 WSL。 ",
     );
-    let expected_pid = reply
-        .pid
-        .filter(|pid| *pid > 0)
-        .ok_or("后端没有返回可验证的服务进程。")?;
     let stopped = backend.stop(expected_pid)?;
     if stopped.state != "stopped" {
         return Err("未确认服务停止，不会继续执行重启或退出。".into());
@@ -709,6 +765,29 @@ fn perform(
         show_settings(app, "logs")?;
         return Ok(controller.snapshot());
     }
+    // A read-only probe or a stalled startup must never trap the user in the UI.
+    // Keep installer admission serialized, but do not wait for the WSL busy flag.
+    if action == "quit" {
+        {
+            let installing = controller
+                .installation
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if *installing {
+                return Err("更新安装正在进行，请完成或取消后退出。".into());
+            }
+            controller.exiting.store(true, Ordering::SeqCst);
+        }
+        controller.record(
+            app,
+            "仅退出启动器，不再等待服务操作；不会额外停止 WSL 服务。",
+        );
+        app.exit(0);
+        return Ok(controller.snapshot());
+    }
+    if controller.exiting.load(Ordering::SeqCst) {
+        return Err("启动器正在退出。".into());
+    }
     if controller
         .busy
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -736,20 +815,17 @@ fn perform(
                 app.exit(0);
                 Ok(())
             }
-            "quit" => {
-                controller.record(app, "仅退出启动器，WSL 后台服务保持运行。");
-                controller.exiting.store(true, Ordering::SeqCst);
-                app.exit(0);
-                Ok(())
-            }
             _ => unreachable!(),
         }
     })();
-    controller.busy.store(false, Ordering::SeqCst);
     if let Err(error) = result {
+        // Publish the failure while still owning the operation slot.
         controller.failure(app, &error, true);
+        controller.busy.store(false, Ordering::SeqCst);
+        controller.publish(app);
         return Err(error);
     }
+    controller.busy.store(false, Ordering::SeqCst);
     controller.publish(app);
     Ok(controller.snapshot())
 }
@@ -858,6 +934,7 @@ pub fn run() {
                 }),
                 busy: AtomicBool::new(false),
                 exiting: AtomicBool::new(false),
+                installation: Mutex::new(false),
                 log_path: directory.join("launcher.log"),
             });
             app.manage(controller.clone());
@@ -930,7 +1007,7 @@ pub fn run() {
                     break;
                 }
                 let snapshot = controller.snapshot();
-                if snapshot.state == "stopped" || !snapshot.environment.passed() {
+                if snapshot.state != "ready" || !snapshot.environment.passed() {
                     continue;
                 } // Do not repeatedly wake a stopped WSL.
                 if controller
@@ -938,6 +1015,16 @@ pub fn run() {
                     .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
                     .is_err()
                 {
+                    continue;
+                }
+                // The pre-lock snapshot may predate a just-completed failed operation.
+                // Never erase its recovery/error UI with a late monitor result.
+                let current = controller.snapshot();
+                if current.state != "ready"
+                    || current.last_error.is_some()
+                    || !current.environment.passed()
+                {
+                    controller.busy.store(false, Ordering::SeqCst);
                     continue;
                 }
                 if let Ok(backend) = controller.backend() {

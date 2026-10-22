@@ -159,6 +159,10 @@ struct ServiceLease {
 impl ServiceLease {
     fn enter(app: &tauri::AppHandle) -> Result<Self, String> {
         let controller = app.state::<Arc<Controller>>().inner().clone();
+        let mut installing = controller
+            .installation
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if controller.exiting.load(Ordering::SeqCst)
             || controller
                 .busy
@@ -172,6 +176,8 @@ impl ServiceLease {
             controller.busy.store(false, Ordering::SeqCst);
             return Err("启动器正在退出。".into());
         }
+        *installing = true;
+        drop(installing);
         controller.publish(app);
         Ok(Self {
             app: app.clone(),
@@ -181,6 +187,11 @@ impl ServiceLease {
 }
 impl Drop for ServiceLease {
     fn drop(&mut self) {
+        *self
+            .controller
+            .installation
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = false;
         self.controller.busy.store(false, Ordering::SeqCst);
         self.controller.publish(&self.app);
     }

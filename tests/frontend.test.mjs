@@ -454,6 +454,109 @@ test('all checks passing complete startup stages with no extra frontend launch i
   assert.equal(app.calls.filter(([name]) => name === 'perform_action').length, 0);
 });
 
+test('owned starting service shows sanitized backend progress rather than an environment placeholder', async () => {
+  const app = await mount(true, base({ state: 'starting', phase: '启动服务', busy: true, managed: true,
+    message: '<script>正在等待已有服务就绪</script> token=private-progress Bearer private-progress' }), { mode: 'startup' });
+  assert.equal(app.node('stage-environment').dataset.state, 'passed');
+  assert.equal(app.node('stage-service').dataset.state, 'active');
+  assert.equal(app.node('stage-window').dataset.state, 'pending');
+  assert.equal(app.node('status-title').textContent, '正在连接本地服务');
+  assert.ok(app.node('status-message').textContent.startsWith('<script>正在等待已有服务就绪</script>'));
+  assert.ok(!app.node('status-message').textContent.includes('private-progress'));
+  assert.equal(app.node('startup-progress').hidden, false);
+  assert.equal(app.node('startup-actions').hidden, true);
+  assert.equal(app.calls.filter(([name]) => name === 'perform_action').length, 0);
+});
+
+test('ready busy service stays in connection stage until actual window loading', async () => {
+  const app = await mount(true, base({ phase: '检查本机连接', busy: true, message: '服务已就绪，正在确认 Windows 可以访问。' }), { mode: 'startup' });
+  assert.equal(app.node('stage-environment').dataset.state, 'passed');
+  assert.equal(app.node('stage-service').dataset.state, 'active');
+  assert.equal(app.node('stage-window').dataset.state, 'pending');
+  assert.equal(app.node('status-message').textContent, '服务已就绪，正在确认 Windows 可以访问。');
+  assert.equal(app.node('startup-progress').hidden, false);
+  app.event(base({ phase: '打开工作窗口', busy: true, message: '正在加载 DSH 工作窗口。' }));
+  assert.equal(app.node('stage-service').dataset.state, 'passed');
+  assert.equal(app.node('stage-window').dataset.state, 'active');
+  assert.equal(app.node('status-title').textContent, '正在打开工作空间');
+  assert.equal(app.node('status-message').textContent, '正在加载 DSH 工作窗口。');
+  assert.equal(app.node('startup-progress').hidden, false);
+});
+
+test('service and authentication failures after environment passes remain actionable despite stale checking', async () => {
+  for (const phase of ['启动服务', '检查本机连接', '操作未完成']) {
+    const app = await mount(true, base({ state: 'error', phase, environment_checking: true,
+      last_error: '服务认证不可用，请检查服务日志后重试。 token=private-error' }), { mode: 'startup' });
+    assert.equal(app.node('startup-shell').dataset.state, 'error');
+    assert.equal(app.node('stage-environment').dataset.state, 'passed');
+    assert.equal(app.node('stage-service').dataset.state, 'error');
+    assert.equal(app.node('stage-window').dataset.state, 'pending');
+    assert.equal(app.node('environment-summary').textContent, '全部通过');
+    assert.equal(app.node('error-notice').hidden, false);
+    assert.match(app.node('error-notice').textContent, /检查服务日志后重试/);
+    assert.ok(!app.node('error-notice').textContent.includes('private-error'));
+    assert.equal(app.node('startup-progress').hidden, true);
+    assert.equal(app.node('startup-actions').hidden, false);
+    assert.equal(app.node('check').disabled, false);
+    assert.equal(app.node('open-settings').hidden, false);
+  }
+});
+
+test('idle last_error is not hidden by stale checking or a nonerror service state', async () => {
+  const app = await mount(true, base({ environment_checking: true, last_error: '停止未完成，请稍后重试。' }), { mode: 'startup' });
+  assert.equal(app.node('startup-shell').dataset.state, 'error');
+  assert.equal(app.node('error-notice').hidden, false);
+  assert.match(app.node('error-notice').textContent, /停止未完成/);
+  assert.equal(app.node('startup-progress').hidden, true);
+  assert.equal(app.node('check').disabled, false);
+});
+
+test('window loading failure marks window instead of service or environment', async () => {
+  const app = await mount(true, base({ phase: '打开工作窗口', busy: true }), { mode: 'startup' });
+  app.event(base({ state: 'error', phase: '打开工作窗口', last_error: '无法创建工作窗口，请重试。' }));
+  assert.equal(app.node('stage-environment').dataset.state, 'passed');
+  assert.equal(app.node('stage-service').dataset.state, 'passed');
+  assert.equal(app.node('stage-window').dataset.state, 'error');
+  assert.equal(app.node('error-notice').hidden, false);
+  assert.equal(app.node('startup-progress').hidden, true);
+  // A later connection attempt must not retain an old window failure stage.
+  app.event(base({ state: 'starting', phase: '启动服务', busy: true }));
+  app.event(base({ state: 'error', phase: '操作未完成', last_error: '服务启动失败' }));
+  assert.equal(app.node('stage-service').dataset.state, 'error');
+  assert.equal(app.node('stage-window').dataset.state, 'pending');
+});
+
+test('stop progress uses sanitized backend message and stopped idle does not pretend to connect', async () => {
+  const app = await mount(true, base({ phase: '停止服务', busy: true,
+    message: '正在请求 DSH 正常退出，不会强制结束进程。 password=private-stop' }), { mode: 'startup' });
+  assert.equal(app.node('status-title').textContent, '正在停止服务');
+  assert.match(app.node('status-message').textContent, /正常退出/);
+  assert.ok(!app.node('status-message').textContent.includes('private-stop'));
+  assert.equal(app.node('stage-service').dataset.state, 'active');
+  assert.equal(app.node('stage-window').dataset.state, 'pending');
+  app.event(base({ state: 'stopped', phase: '服务已停止', managed: false, environment_checking: true }));
+  assert.equal(app.node('startup-shell').dataset.state, 'stopped');
+  assert.equal(app.node('status-title').textContent, '工作空间已停止');
+  assert.equal(app.node('stage-environment').dataset.state, 'passed');
+  assert.equal(app.node('stage-service').dataset.state, 'pending');
+  assert.equal(app.node('stage-window').dataset.state, 'pending');
+  assert.equal(app.node('startup-progress').hidden, true);
+  assert.equal(app.node('startup-actions').hidden, false);
+  assert.equal(app.node('open').hidden, false);
+  assert.equal(app.node('open').disabled, false);
+});
+
+test('settings ownership follows managed during starting and error without inferring external launch', async () => {
+  const app = await mount(true, base({ state: 'starting', busy: true, managed: true }));
+  assert.equal(app.node('ownership').textContent, '由启动器管理');
+  app.event(base({ state: 'error', managed: true, last_error: '认证链接不可用' }));
+  assert.equal(app.node('ownership').textContent, '由启动器管理');
+  app.event(base({ managed: false }));
+  assert.equal(app.node('ownership').textContent, '未验证归属');
+  assert.match(app.node('ownership-hint').textContent, /尚未验证/);
+  assert.doesNotMatch(app.node('ownership').textContent + app.node('ownership-hint').textContent, /外部/);
+});
+
 test('settings has only check and logs service actions and navigation never invokes IPC', async () => {
   const app = await mount(true, base({ state: 'stopped', managed: false }));
   assert.equal(app.has('settings-shell'), true);

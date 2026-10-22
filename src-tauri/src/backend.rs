@@ -42,13 +42,31 @@ impl Backend {
         if action == "stop" {
             return Err("停止操作必须提供预期进程身份。".into());
         }
-        let command = self.command(action)?;
+        let command = if action == "probe" {
+            self.adapter_command(&[
+                "--probe",
+                &self.config.linux_launcher,
+                &self.config.linux_config,
+            ])?
+        } else {
+            self.command(action)?
+        };
         self.request(command, action)
     }
     pub fn stop(&self, expected_pid: u32) -> Result<BackendReply, String> {
         if expected_pid == 0 {
             return Err("无法确认待停止的服务身份。".into());
         }
+        self.request(
+            self.adapter_command(&[
+                &self.config.linux_launcher,
+                &self.config.linux_config,
+                &expected_pid.to_string(),
+            ])?,
+            "stop",
+        )
+    }
+    fn adapter_command(&self, adapter_args: &[&str]) -> Result<Command, String> {
         let mut command = self.command("probe")?;
         // Start from a fresh command to replace (rather than append to) helper argv.
         let program = command.get_program().to_owned();
@@ -58,12 +76,10 @@ impl Backend {
         args.extend([
             "-c".into(),
             include_str!("../helpers/guarded_stop.py").into(),
-            self.config.linux_launcher.clone(),
-            self.config.linux_config.clone(),
-            expected_pid.to_string(),
         ]);
+        args.extend(adapter_args.iter().map(|arg| (*arg).to_owned()));
         command.args(args);
-        self.request(command, "stop")
+        Ok(command)
     }
     fn request(&self, mut command: Command, action: &str) -> Result<BackendReply, String> {
         command
@@ -86,9 +102,20 @@ impl Backend {
         let bytes = capture(child, Duration::from_secs(timeout))?;
         parse_reply(&bytes)
     }
-    /// No pipes or job object tie the persistent WSL supervisor to this UI process.
+    /// The short WSL bootstrap creates an independent, SIGHUP-ignoring Linux
+    /// supervisor; Windows detached flags alone do not provide that guarantee.
     pub fn start(&self) -> Result<Child, String> {
-        let mut command = self.command("run")?;
+        let command = self.command("run")?;
+        let mut args = self.config.wsl_args("run")?;
+        args.truncate(6);
+        args.extend([
+            "-c".into(),
+            include_str!("../helpers/detached_run.py").into(),
+            self.config.linux_launcher.clone(),
+            self.config.linux_config.clone(),
+        ]);
+        let mut command = Command::new(command.get_program());
+        command.args(args);
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())

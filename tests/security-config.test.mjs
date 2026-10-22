@@ -87,6 +87,49 @@ test('destructive actions require guarded PID adapter and native default-no conf
   assert.match(desktop, /\(window\.label\(\), window\.window\(\)\.label\(\)\)/);
 });
 
+test('verified ownership is independent of browser authentication for probing and stopping', () => {
+  const desktop = read('src-tauri/src/desktop.rs');
+  const backend = read('src-tauri/src/backend.rs');
+  const stop = desktop.slice(desktop.indexOf('fn stop_service('), desktop.indexOf('fn open_external('));
+  assert.ok(stop.includes('validated_stop_pid(&reply)?'));
+  assert.doesNotMatch(stop, /reply[.]authenticated|validated_launch_url/);
+  assert.match(backend, /self[.]adapter_command\(&\[\s*"--probe"/);
+  assert.ok(desktop.includes('&& reply.managed'));
+  assert.ok(desktop.includes('backend_error(Some("managed_auth_unavailable"))'));
+  // A failed startup must remain actionable, not turn into a false ready splash on the next timer.
+  assert.ok(desktop.includes('snapshot.state != "ready" || !snapshot.environment.passed()'));
+  const monitor = desktop.slice(desktop.indexOf('let monitor_app ='), desktop.indexOf('.on_window_event('));
+  assert.ok(monitor.indexOf('let current = controller.snapshot()') > monitor.indexOf('compare_exchange(false, true'));
+  assert.ok(monitor.includes('current.last_error.is_some()'));
+  const perform = desktop.slice(desktop.indexOf('fn perform('), desktop.indexOf('fn dispatch('));
+  const failurePath = perform.slice(perform.indexOf('if let Err(error) = result'));
+  assert.ok(failurePath.indexOf('controller.failure(app, &error, true)') < failurePath.indexOf('controller.busy.store(false'));
+  assert.ok(desktop.includes('authentication_deadline.get_or_insert_with'));
+  assert.ok(desktop.includes('Duration::from_secs(3)).min(deadline)'));
+  const failure = desktop.slice(desktop.indexOf('fn failure('), desktop.indexOf('fn backend('));
+  assert.ok(failure.includes('s.environment_checking = false'));
+  assert.ok(!failure.includes('s.phase = "操作未完成"'));
+  const updates = read('src-tauri/src/desktop_updates.rs');
+  const lease = updates.slice(updates.indexOf('impl ServiceLease'), updates.indexOf('fn confirm_install('));
+  const normalizedLease = lease.replace(/\s+/g, '');
+  assert.ok(normalizedLease.indexOf('controller.installation.lock()') < normalizedLease.indexOf('controller.exiting.load'));
+  assert.ok(lease.includes('*installing = true'));
+  assert.ok(normalizedLease.includes('installation.lock()'));
+});
+
+test('detached WSL startup preserves the Linux supervisor and bounds initial handoff', () => {
+  const backend = read('src-tauri/src/backend.rs');
+  const desktop = read('src-tauri/src/desktop.rs');
+  const start = backend.slice(backend.indexOf('pub fn start('), backend.indexOf('fn capture('));
+  assert.ok(start.includes('include_str!("../helpers/detached_run.py")'));
+  assert.ok(start.includes('0x00000008 | 0x00000200'));
+  const wrapper = read('src-tauri/helpers/detached_run.py');
+  for (const guard of ['signal.signal(signal.SIGHUP, signal.SIG_IGN)', 'start_new_session=True', 'close_fds=True', 'shell=False', 'stdin=subprocess.DEVNULL', 'stdout=subprocess.DEVNULL', 'stderr=subprocess.DEVNULL']) assert.ok(wrapper.includes(guard), guard);
+  assert.ok(desktop.includes('"stopped" if started =>'));
+  assert.ok(desktop.includes('Instant::now() >= bootstrap_deadline'));
+  assert.ok(desktop.includes('bootstrap_deadline = (Instant::now() + Duration::from_secs(3)).min(deadline)'));
+});
+
 test('updater uses only the project HTTPS stable feed and version-bound signatures', () => {
   const config = JSON.parse(read('src-tauri/tauri.conf.json'));
   const updater = config.plugins.updater;
@@ -246,9 +289,12 @@ test('File and tray service controls remain native, guarded and distinct from se
   const perform = desktop.slice(desktop.indexOf('fn perform('), desktop.indexOf('fn dispatch('));
   assert.ok(perform.includes('["stop", "restart", "exit"].contains(&action) && !confirm(action)'));
   assert.ok(perform.includes('compare_exchange(false, true'));
-  const quit = perform.slice(perform.indexOf('"quit" =>'), perform.indexOf('_ => unreachable!()'));
+  const quit = perform.slice(perform.indexOf('if action == "quit"'), perform.indexOf('if controller.exiting.load', perform.indexOf('if action == "quit"')));
   assert.ok(quit.includes('app.exit(0)')); assert.doesNotMatch(quit, /stop_service|backend[.]stop/);
-  const exit = perform.slice(perform.indexOf('"exit" =>'), perform.indexOf('"quit" =>'));
+  assert.ok(perform.indexOf('if action == "quit"') < perform.indexOf('compare_exchange(false, true'));
+  assert.match(quit, /controller\s*[.]installation\s*[.]lock\(\)/);
+  assert.ok(quit.includes('controller.exiting.store(true'));
+  const exit = perform.slice(perform.indexOf('"exit" =>'), perform.indexOf('_ => unreachable!()'));
   assert.ok(exit.indexOf('stop_service(app, controller)?') < exit.indexOf('app.exit(0)'));
   assert.ok(perform.includes('show_settings(app, "logs")?'));
 });

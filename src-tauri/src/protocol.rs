@@ -13,6 +13,9 @@ pub struct BackendReply {
     pub url: Option<String>,
     #[serde(default)]
     pub authenticated: bool,
+    /// Verified supervisor ownership; independent of browser authentication.
+    #[serde(default)]
+    pub managed: bool,
     pub pid: Option<u32>,
     pub code: Option<String>,
     pub service_log: Option<String>,
@@ -26,6 +29,7 @@ impl fmt::Debug for BackendReply {
             .field("state", &redact(&self.state))
             .field("url", &self.url.as_ref().map(|_| "[REDACTED]"))
             .field("authenticated", &self.authenticated)
+            .field("managed", &self.managed)
             .field("pid", &self.pid)
             .field("code", &self.code.as_deref().map(redact))
             .field("service_log", &self.service_log.as_deref().map(redact))
@@ -46,6 +50,18 @@ pub fn parse_reply(bytes: &[u8]) -> Result<BackendReply, String> {
         "error" => Err(backend_error(reply.code.as_deref())),
         _ => Err("后端返回了不支持的状态。".into()),
     }
+}
+
+/// Authentication is not proof of process ownership, and missing authentication
+/// must not prevent a verified supervisor from stopping its own starting service.
+pub fn validated_stop_pid(reply: &BackendReply) -> Result<u32, String> {
+    if !["ready", "starting"].contains(&reply.state.as_str()) || !reply.managed {
+        return Err("无法验证当前服务的托管归属，未发送停止信号。可选择“仅退出启动器”，或在原启动终端中处理。".into());
+    }
+    reply
+        .pid
+        .filter(|pid| *pid > 0)
+        .ok_or_else(|| "尚未取得托管服务的进程身份，请稍后重试；也可选择“仅退出启动器”。".into())
 }
 
 /// Only a ready reply may open the exact configured loopback root.
@@ -102,7 +118,8 @@ pub fn backend_error(code: Option<&str>) -> String {
         Some("port_in_use") => "端口被其它程序占用，未停止任何进程。",
         Some("stop_timeout") => "等待服务停止超时，未强制结束进程。",
         Some("stop_incomplete") => "服务尚未完全停止，请稍后重试。",
-        Some("process_changed") => "服务进程身份已变化，为安全起见取消停止。",
+        Some("process_changed") => "服务进程身份校验未通过，未发送停止信号。请重试或选择“仅退出启动器”。",
+        Some("managed_auth_unavailable") => "已确认服务由启动器托管，但未取得可用的网页登录认证链接。可先停止该服务再重新打开 DSH；不会自动强停或重启。",
         Some("unverified_startup") => "无法确认启动中的服务身份，未停止进程。",
         Some("launcher_failure") => "WSL 启动器执行失败，请检查配置和日志。",
         Some("confirmation_required") => "停止服务前需要确认。",
@@ -204,9 +221,33 @@ mod tests {
             state: "ready".into(),
             url: Some(url.into()),
             authenticated,
+            managed: false,
             pid: Some(42),
             code: None,
             service_log: None,
+        }
+    }
+
+    #[test]
+    fn stop_identity_does_not_depend_on_browser_authentication() {
+        for state in ["ready", "starting"] {
+            let reply = parse_reply(
+                format!(r#"{{"state":"{state}","managed":true,"authenticated":false,"pid":42}}"#)
+                    .as_bytes(),
+            )
+            .unwrap();
+            assert_eq!(validated_stop_pid(&reply).unwrap(), 42);
+        }
+        // Even an authenticated URL does not grant authority over an external PID.
+        let external = ready(&format!("http://127.0.0.1:3080/?token={TOKEN}"), true);
+        assert!(validated_stop_pid(&external).is_err());
+        for json in [
+            r#"{"state":"ready","managed":true}"#,
+            r#"{"state":"starting","managed":true,"pid":0}"#,
+            r#"{"state":"stopped","managed":true,"pid":42}"#,
+            r#"{"state":"ready","authenticated":true,"pid":42}"#,
+        ] {
+            assert!(validated_stop_pid(&parse_reply(json.as_bytes()).unwrap()).is_err());
         }
     }
 

@@ -174,15 +174,25 @@ function render(): void {
   renderNotifications();
 }
 function renderStartup(disabled: boolean, passed: boolean, busy: boolean, error: string): void {
-  const failed = !busy && !snapshot.environment_checking && (snapshot.state === 'error' || Boolean(error));
-  const idle = !busy && !snapshot.environment_checking;
-  const ready = snapshot.state === 'ready' && idle;
-  element('startup-shell').dataset.state = failed ? 'error' : ready ? 'ready' : 'starting';
-  element('status-title').textContent = failed ? '暂时无法启动' : ready ? 'DSH 已就绪' : snapshot.state === 'stopped' && idle ? '工作空间已停止' : passed ? '正在打开工作空间' : '正在启动 DSH';
+  // A completed operation's error must win over a stale environment-checking flag.
+  const failed = !busy && (snapshot.state === 'error' || Boolean(error));
+  const idle = !busy && (!snapshot.environment_checking || passed || failed || snapshot.state === 'stopped');
+  const stopped = snapshot.state === 'stopped' && idle && !failed;
+  const ready = snapshot.state === 'ready' && idle && !failed;
+  const stopping = busy && /停止|退出/.test(snapshot.phase);
+  // Windows reachability and authentication still belong to service preparation.
+  // The backend preserves the operation phase on failure.
+  const windowStage = passed && snapshot.phase === '打开工作窗口';
+  element('startup-shell').dataset.state = failed ? 'error' : ready ? 'ready' : stopped ? 'stopped' : 'starting';
+  element('status-title').textContent = failed ? '操作未能完成' : ready ? 'DSH 已就绪' : stopped ? '工作空间已停止' : stopping ? '正在停止服务' : windowStage ? '正在打开工作空间' : passed ? '正在连接本地服务' : '正在启动 DSH';
   const failures = snapshot.environment.checks.filter(item => item.status === 'error');
-  element('status-message').textContent = failed && failures.length ? '发现 ' + failures.length + ' 项环境问题，请处理后重新检测。' : failed ? '启动未能完成，请检查下方提示后重试。' : ready ? '环境检查通过，正在为你打开 DSH。' : snapshot.state === 'stopped' && idle ? '重新打开即可继续，原有配置和会话不会丢失。' : passed ? '运行环境已准备好，正在连接本地服务。' : '正在检查本地运行环境，就绪后自动进入。';
+  element('status-message').textContent = failed && failures.length ? '发现 ' + failures.length + ' 项环境问题，请处理后重新检测。' : failed ? '请检查下方提示后重新检测，或打开设置查看诊断日志。' : stopped ? '重新打开即可继续，原有配置和会话不会丢失。' : redact(snapshot.message) || (ready ? 'DSH 已就绪，可以打开工作窗口。' : passed ? '运行环境已准备好，正在连接本地服务。' : '正在检查本地运行环境，就绪后自动进入。');
   element('phase').textContent = redact(snapshot.phase || '准备启动');
-  const stageStates = [passed ? 'passed' : failed ? 'error' : 'active', !passed ? 'pending' : ready || snapshot.phase === '检查本机连接' || snapshot.phase === '打开工作窗口' ? 'passed' : failed ? 'error' : 'active', ready ? 'passed' : passed && !failed && (snapshot.phase === '检查本机连接' || snapshot.phase === '打开工作窗口') ? 'active' : 'pending'];
+  const stageStates = [
+    passed ? 'passed' : failed ? 'error' : idle ? 'pending' : 'active',
+    !passed || stopped ? 'pending' : ready || windowStage ? 'passed' : failed ? 'error' : 'active',
+    ready ? 'passed' : windowStage ? failed ? 'error' : 'active' : 'pending',
+  ];
   const stageLabels: Record<string, string> = { pending: '等待中', active: '进行中', passed: '已完成', error: '未通过' };
   ['environment', 'service', 'window'].forEach((id,index) => {
     const state = stageStates[index] || 'pending';
@@ -190,7 +200,7 @@ function renderStartup(disabled: boolean, passed: boolean, busy: boolean, error:
     element('stage-' + id + '-state').textContent = stageLabels[state] || '等待中';
     element('stage-' + id + '-mark').textContent = state === 'passed' ? '✓' : state === 'error' ? '!' : '';
   });
-  const detail = localError ? error : failures.length ? failures.map(item => item.label + '：' + item.message + (item.hint ? '\n' + item.hint : '')).join('\n\n') : error;
+  const detail = localError ? error : failures.length ? failures.map(item => item.label + '：' + item.message + (item.hint ? '\n' + item.hint : '')).join('\n\n') : error || snapshot.message || '操作未能完成，请重新检测或在设置中查看诊断日志。';
   element('error-notice').hidden = !failed;
   element('error-notice').textContent = redact(detail);
   element('startup-progress').hidden = idle || failed;
@@ -200,7 +210,7 @@ function renderStartup(disabled: boolean, passed: boolean, busy: boolean, error:
   element('open').hidden = !passed || failed;
   element('check').hidden = !failed && passed;
   if (buttons.check) buttons.check.textContent = '重新检测';
-  element('environment-summary').textContent = snapshot.environment_checking ? '检测中' : failures.length ? failures.length + ' 项需处理' : passed ? '全部通过' : '等待检测';
+  element('environment-summary').textContent = snapshot.environment_checking && !passed && !failed && !stopped ? '检测中' : failures.length ? failures.length + ' 项需处理' : passed ? '全部通过' : '等待检测';
   const statuses = { pending: '待检测', passed: '已通过', error: '需处理', skipped: '等待前置项' };
   for (const [id] of environmentItems) {
     const item = snapshot.environment.checks.find(check => check.id === id);
@@ -226,8 +236,8 @@ function renderSettings(disabled: boolean, passed: boolean, error: string): void
   element('repository-notice').textContent = repositoryPending ? '正在保存并重新检测…' : running ? '修改目录前，请先通过“文件”菜单停止服务。' : !canConfigure ? '请先准备好 WSL、启动器配置和 Python，再设置项目目录。' : repositoryDirty && !valid ? '请输入有效的 WSL 绝对路径，不能包含控制字符。' : '仅保存到现有服务配置；不会克隆项目或安装依赖。';
   element('status-label').textContent = snapshot.environment_checking ? '检测中' : passed ? '检查通过' : '需要检查';
   element('origin').textContent = safeOrigin(snapshot.origin);
-  element('ownership').textContent = snapshot.managed ? '由启动器管理' : snapshot.state === 'ready' ? '外部服务' : '未托管';
-  element('ownership-hint').textContent = snapshot.state === 'ready' && !snapshot.managed ? '外部服务不会被自动停止或重启。' : '服务操作位于“文件”菜单；停止或重启前会再次确认。';
+  element('ownership').textContent = snapshot.managed ? '由启动器管理' : snapshot.state === 'ready' ? '未验证归属' : '未托管';
+  element('ownership-hint').textContent = snapshot.state === 'ready' && !snapshot.managed ? '尚未验证该服务是否由启动器管理，不会自动停止或重启。' : '服务操作位于“文件”菜单；停止或重启前会再次确认。';
   element('config-location').textContent = redact(snapshot.config_path || '尚未读取');
   const output = element('log-output');
   const atBottom = output.scrollHeight - output.scrollTop - output.clientHeight < 30;
