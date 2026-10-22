@@ -1,5 +1,7 @@
 # DSH · WSL Desktop
 
+简体中文 | [English](<README.en.md>)
+
 Windows 原生 **Tauri 2 + WebView2** 启动器。DSH、Node、会话与项目继续运行在 WSL，桌面应用只负责服务控制和展示现有 Web 页面。
 
 ## 项目与下载
@@ -9,6 +11,86 @@ Windows 原生 **Tauri 2 + WebView2** 启动器。DSH、Node、会话与项目�
 - [下载与安装说明](<DOWNLOADS.md>)
 - [隐私说明](<PRIVACY.md>)
 - [Code signing policy](<CODE_SIGNING.md>)：当前构建未签名；已于 2026-10-22 提交 SignPath Foundation 申请，等待审核，尚未获得批准。
+
+## 使用方法
+
+> **这是已有 WSL Harness 环境的启动器，不是 Harness 安装器。** 选择目录不会自动克隆项目、安装依赖或打包。新克隆的 Harness 必须先在 WSL 中手动安装依赖并完成构建；本应用也不附带或自动创建 Linux Python 管理脚本与服务配置。
+
+### 1. 准备运行环境
+
+- Windows x64，并安装 WebView2 Runtime；从 [GitHub Releases](https://github.com/elves-ai/dsh-wsl-desktop/releases) 下载并运行 NSIS 安装包，或使用独立可执行文件。详见[下载与安装说明](<DOWNLOADS.md>)。
+- 已安装且可用的 WSL 发行版和 Linux 用户，WSL 中有 Python 3 和 `ss` 命令（通常由 iproute2 提供）。
+- WSL 中已有 DeepSeek Harness **源码项目**，以及满足该版本要求的 Node.js 和 pnpm；以 Harness 项目清单中的 `engines.node`、`packageManager` 及上游开发文档为准。
+- 已有兼容的 WSL Python 管理脚本及 Linux JSON 服务配置；Windows 启动器配置指向它们。已有旧启动器的用户可自动导入；其他用户需先手动准备，见[配置](<#配置>)。**只填写项目目录或 Windows 配置，不能替代缺失的管理脚本。**
+
+本启动器使用源码入口启动，不能把 npm 全局安装目录或普通工作项目目录当作 Harness 目录。
+
+### 2. 如果 Harness 是新克隆的项目
+
+在 **WSL 终端**中进入 Harness 项目根目录执行（不是本 Windows 启动器项目）：
+
+~~~bash
+# 替换为你在 WSL 中的 Harness 源码目录
+cd /home/your-user/deepseek-harness
+pnpm install
+pnpm run build
+~~~
+
+还未克隆时，先按 [Harness 上游源码运行说明](https://github.com/deepseek-ai/deepseek-harness#run-from-source) 获取项目。Node、pnpm 版本及原生编译工具等要求随 Harness 版本变化，按所克隆版本的文档准备；命令失败时先解决安装或构建报错，再回到启动器。
+
+`pnpm run build` 用于准备 Harness 运行所需的构建产物，包括 Web/客户端资源及相应运行时产物。后端能通过 tsx 运行源码，**不代表新克隆项目可以跳过构建**；仅执行 `build:web` 也不保证其他运行产物已经就绪。这里不需要生成 Windows 安装包，也不需要构建本启动器。已有完整环境可以跳过这一步；更新 Harness 源码后，应按该版本要求重新安装依赖、构建。
+
+### 3. 打开启动器并设置目录
+
+1. 启动 Windows 应用。它会导入已有旧配置并自动检查环境；全部通过时直接打开 DSH，无需点击继续。
+2. 要更换或补充项目目录，从菜单打开“设置 → 运行环境与项目目录”。已有受管理服务运行时，先通过“文件”菜单停止服务；若服务正在启动，先等待就绪。外部服务需在原启动终端中自行处理。
+3. 填写 **WSL 内的 Harness 项目根目录绝对路径**，例如：
+   ~~~text
+   /home/your-user/deepseek-harness
+   ~~~
+   不要填写 Windows 盘符路径、WSL UNC 路径、普通工作项目目录或 Harness 的子目录。
+4. 点击“保存并重新检测”。只更新已有 Linux 服务配置的 `repository` 字段，保留 Node、端口、数据目录等其他配置；不会安装依赖或运行构建。目录验证通过不代表依赖与构建产物都已就绪。
+5. 检查失败时按提示手动处理，然后点击“重新检测”；无需重开应用。检查通过后自动启动或连接服务并打开 DSH。
+
+这里选择的是 **Harness 程序所在目录**，不是让 AI 编辑的业务项目目录；业务项目应在进入 DSH 后选择。
+
+### 4. 选定目录后，实际如何启动
+
+~~~text
+保存 repository → 检查运行环境 → 探测已有服务
+  ├─ 已就绪：复用已有服务
+  └─ 未启动：wsl.exe → 配置的 Python 管理脚本 → Node 启动 Harness
+→ 等待服务就绪并确认 Windows 可访问 → 在 WebView 中打开 DSH
+~~~
+
+环境检查包括项目入口、Node 版本、已安装的 `tsx/esm` 依赖入口，以及 Web 页面和其引用的本地构建资源。以当前兼容的管理脚本为例，启动命令相当于在所选 Harness 根目录执行：
+
+~~~bash
+# 使用 Linux 服务配置中指定的 Node；端口以配置为准
+node --import tsx/esm apps/cli/src/bin.ts web \
+  --no-open --host 127.0.0.1 --port 3080
+~~~
+
+**启动阶段不会执行 `pnpm install` 或 `pnpm run build`。** 后端使用源码入口，Web 页面使用已生成的构建资源。检查未通过就不会进入服务启动阶段；如管理脚本启动后仍失败，需查看服务日志，不能把“检查通过”当作所有运行时功能都已验证。
+
+### 5. 日常使用与退出
+
+- 启动/停止/重启等服务操作位于“文件”菜单；停止和重启需要确认。
+- 关闭工作窗口只隐藏到托盘，后台任务继续；再次打开应用会唤起原窗口。
+- “仅退出启动器”保留 WSL 服务；“停止服务并退出”会先确认受管理服务已停止，再退出。
+- “设置 → 运行环境与项目目录”用于改目录；诊断信息在设置窗口查看。Windows 启动器更新不会更新 WSL 中的 Harness。
+
+### 常见问题
+
+| 现象 | 处理方式 |
+| --- | --- |
+| 新克隆的项目提示缺少依赖 | 在 WSL 的 Harness 根目录执行 `pnpm install`，成功后构建并重新检测；启动器不会代装。 |
+| Web 构建产物缺失、不完整或不可读 | 在同一 Harness 根目录执行 `pnpm run build`，确认构建成功、资源可读后重新检测。 |
+| 管理脚本或 Linux 配置缺失 | 先手动准备兼容的管理脚本和配置，并核对 Windows 配置中的路径；保存项目目录不会创建它们。 |
+| Node 不可执行或版本不兼容 | 检查 Linux 服务配置中 Node 的绝对路径和项目版本要求；nvm 更新后旧路径可能失效，启动器不读取交互 shell 初始化。 |
+| 目录无效或无法保存 | 使用有效的 Harness 源码根目录 WSL 绝对路径；确认已有 Linux 配置有效、服务已停止且配置端口空闲。 |
+| 端口不一致、被其他程序占用或无法认证外部服务 | 对齐 Windows/Linux 配置端口，确认占用进程归属；外部手动启动服务应使用原终端认证链接或自行管理，不会被自动强停。 |
+| 服务启动失败或等待超时 | 查看设置中的诊断日志及原 Python 管理器的服务日志；超时不表示服务已经停止，稍后重新检测，避免重复手动启动。 |
 
 ## 功能
 
@@ -51,7 +133,7 @@ WebView 数据：%LOCALAPPDATA%\io.local.dsh-wsl-desktop\webview
 旧配置来源：%LOCALAPPDATA%\DeepSeekHarnessLauncher\config.json
 ~~~
 
-没有旧配置时，在上述新配置位置放置以下内容。修改后点击“重新检测”，Windows 与 WSL 配置端口必须一致。
+没有旧配置时，先准备兼容的 Python 管理脚本和 Linux 服务配置，再在上述 Windows 应用配置位置放置以下内容。它仅告诉桌面应用去哪里控制服务，**不会生成所指向的脚本或 Linux 配置**。修改后点击“重新检测”，Windows 与 WSL 配置端口必须一致。
 
 ~~~json
 {
@@ -67,6 +149,24 @@ WebView 数据：%LOCALAPPDATA%\io.local.dsh-wsl-desktop\webview
   "WindowHeight": 800
 }
 ~~~
+
+### Windows 配置与 Linux 服务配置的区别
+
+- Windows 配置的 `Distribution`、`LinuxUser` 指定 WSL 发行版和用户；`LinuxLauncher` 指向已有 Python 管理脚本，`LinuxConfig` 指向它读取的 Linux JSON 配置。发行版名称可在 Windows PowerShell 中用 `wsl --list --verbose` 确认。
+- Linux 服务配置至少包含以下字段；示例路径均需替换，Node 应是 WSL 中真实存在、符合 Harness 版本要求的可执行文件。可在所选 WSL 用户的终端用 `node -p 'process.execPath'` 查看当前 Node 绝对路径。
+
+~~~json
+{
+  "repository": "/home/your-user/deepseek-harness",
+  "node": "/home/your-user/.nvm/versions/node/v24.22.0/bin/node",
+  "state_directory": "/home/your-user/.local/state/dsh-windows-launcher",
+  "port": 3080
+}
+~~~
+
+`repository` 是 Harness 源码根目录，`state_directory` 是 Python 管理器的状态/日志目录，不是业务项目目录，也不等于 `DSH_HOME`。原管理器若使用 `home`（对应 `DSH_HOME`）等额外字段，应按其约定保留。设置界面只改 `repository`，不会替换 Node 或迁移已有会话数据。
+
+本仓库不分发旧 Python 管理器；上述 JSON 只是配置示例，不能代替管理器程序。没有旧环境时，需要先自行取得或准备兼容管理器（支持 `probe` / `run` / `stop` / `logs` 协议），否则即使 Harness 已构建也无法通过本启动器启动。
 
 更新 nvm/Node 后，若原绝对路径失效，需要更新 WSL 管理配置；应用不依赖交互 shell 初始化。
 
@@ -124,7 +224,7 @@ git push origin v0.1.3
 
 ## 本机 Windows 构建（可选）
 
-Windows 端需要 Node.js 24/npm、Rust stable MSVC 工具链、Visual Studio C++ Build Tools 和 Windows SDK。当前机器已检测到 WebView2 Runtime。
+本节仅供需要自行构建 Windows 启动器的开发者使用；普通用户下载发布包即可，与上面的 Harness 源码构建是两件事。Windows 端需要 Node.js 24/npm、Rust stable MSVC 工具链、Visual Studio C++ Build Tools、Windows SDK 和 WebView2 Runtime。
 
 [构建脚本](<scripts/Build-Windows.ps1>)只检查工具，不自动安装或更改系统配置。它把源码暂存到 Windows 本地目录，避免 npm/cmd 的 WSL UNC 工作目录问题；不会复制 Linux 依赖和隔离工具。
 
@@ -147,6 +247,8 @@ npm run desktop:build -- --config src-tauri/tauri.local-build.conf.json
 不要在 WSL 中执行普通 tauri build 并期待 Windows 应用。本项目不提供 Linux GUI；Linux 仅用于编辑、纯逻辑测试和交叉编译检查。
 
 ## 自动验证
+
+以下命令用于本 Windows 启动器的开发验证，不是上面的 Harness 源码准备步骤。
 
 ~~~bash
 npm ci
