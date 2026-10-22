@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DSH 标题栏</title>
+    <script type="module" src="/src/titlebar.ts"></script>
+  </head>
+  <body>
+    <header id="titlebar" class="titlebar" aria-label="窗口标题栏" data-focused="true">
+      <span class="app-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none"><path d="m5 7 5 5-5 5M12 17h7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      </span>
+      <nav class="menus" aria-label="应用菜单">
+        <button id="menu-file" type="button" aria-haspopup="menu" aria-keyshortcuts="Alt+F" title="文件 (Alt+F)">文件</button>
+        <button id="menu-settings" type="button" aria-haspopup="menu" aria-keyshortcuts="Alt+S" title="设置 (Alt+S)">设置</button>
+        <button id="menu-help" type="button" aria-haspopup="menu" aria-keyshortcuts="Alt+H" title="帮助 (Alt+H)">帮助</button>
+      </nav>
+      <div id="drag-area" class="drag-area" title="拖动窗口；双击最大化或还原">
+        <span id="window-title" class="window-title">DeepSeek Harness</span>
+      </div>
+      <div class="window-controls" aria-label="窗口控制">
+        <button id="window-minimize" class="window-control" type="button" aria-label="最小化" title="最小化"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5h10" /></svg></button>
+        <button id="window-maximize" class="window-control" type="button" aria-label="最大化" title="最大化" data-maximized="false"><svg class="maximize-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5h9v9h-9z" /></svg><svg class="restore-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 5.5h7v7h-7zM3.5 10.5h-1v-8h8v1" /></svg></button>
+        <button id="window-close" class="window-control close-control" type="button" aria-label="关闭窗口（隐藏到托盘）" title="关闭窗口（隐藏到托盘）"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 3.5 9 9m0-9-9 9" /></svg></button>
+      </div>
+      <span id="titlebar-status" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></span>
+    </header>
+  </body>
+</html>

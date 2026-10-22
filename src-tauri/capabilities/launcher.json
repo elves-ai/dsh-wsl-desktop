@@ -3,7 +3,7 @@
   "identifier": "launcher",
   "description": "Only the bundled local launcher page receives IPC. The DSH webview has no capabilities.",
   "local": true,
-  "windows": [
+  "webviews": [
     "launcher"
   ],
   "permissions": [

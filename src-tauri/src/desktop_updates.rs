@@ -5,7 +5,7 @@ use std::{
     sync::{atomic::Ordering, Arc, Mutex},
     time::{Duration, Instant},
 };
-use tauri::{Emitter, Manager, WebviewWindow};
+use tauri::{Emitter, Manager, Webview};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
 struct Data {
@@ -57,7 +57,7 @@ impl Updates {
 
 #[tauri::command]
 pub(super) fn get_update_snapshot(
-    window: WebviewWindow,
+    window: Webview,
     state: tauri::State<'_, Arc<Updates>>,
 ) -> Result<UpdateSnapshot, String> {
     assert_local(&window)?;
@@ -65,7 +65,7 @@ pub(super) fn get_update_snapshot(
 }
 #[tauri::command]
 pub(super) async fn check_update(
-    window: WebviewWindow,
+    window: Webview,
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<Updates>>,
 ) -> Result<UpdateSnapshot, String> {
@@ -200,7 +200,7 @@ fn confirm_install(version: &str) -> bool {
 }
 #[tauri::command]
 pub(super) async fn install_update(
-    window: WebviewWindow,
+    window: Webview,
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<Updates>>,
 ) -> Result<UpdateSnapshot, String> {

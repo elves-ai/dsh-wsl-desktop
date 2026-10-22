@@ -12,7 +12,7 @@ use std::{
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tauri::{Emitter, Manager, WebviewWindow};
+use tauri::{Emitter, Manager, Webview};
 use tauri_plugin_notification::NotificationExt;
 use url::Url;
 
@@ -106,7 +106,7 @@ impl Notifications {
 
 #[tauri::command]
 pub(super) fn get_notification_snapshot(
-    window: WebviewWindow,
+    window: Webview,
     state: tauri::State<'_, Arc<Notifications>>,
 ) -> Result<NotificationSnapshot, String> {
     assert_local(&window)?;
@@ -115,7 +115,7 @@ pub(super) fn get_notification_snapshot(
 
 #[tauri::command]
 pub(super) async fn set_notifications_enabled(
-    window: WebviewWindow,
+    window: Webview,
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<Notifications>>,
     enabled: bool,
@@ -150,7 +150,7 @@ pub(super) async fn set_notifications_enabled(
 
 #[tauri::command]
 pub(super) async fn test_notification(
-    window: WebviewWindow,
+    window: Webview,
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<Notifications>>,
 ) -> Result<NotificationSnapshot, String> {
@@ -213,7 +213,7 @@ fn now_ms() -> u64 {
 fn client(app: &tauri::AppHandle, origin: &str) -> Result<RpcClient, String> {
     let url = Url::parse(origin).map_err(|_| "本机服务地址无效。".to_owned())?;
     let window = app
-        .get_webview_window("dsh")
+        .get_webview("dsh")
         .ok_or("等待 DSH 工作窗口完成登录。")?;
     if window
         .url()
@@ -246,7 +246,7 @@ fn client(app: &tauri::AppHandle, origin: &str) -> Result<RpcClient, String> {
 }
 
 fn foreground(app: &tauri::AppHandle) -> bool {
-    app.get_webview_window("dsh").is_some_and(|window| {
+    app.get_window("dsh").is_some_and(|window| {
         window.is_visible().unwrap_or(true)
             && !window.is_minimized().unwrap_or(false)
             && window.is_focused().unwrap_or(true)

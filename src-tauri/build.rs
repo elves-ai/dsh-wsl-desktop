@@ -11,6 +11,8 @@ fn main() {
                 "get_notification_snapshot",
                 "set_notifications_enabled",
                 "test_notification",
+                "titlebar_action",
+                "show_titlebar_menu",
             ]),
         ))
         .expect("Failed to build Tauri resources");

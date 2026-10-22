@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-titlebar-action"
+description = "Enables the titlebar_action command without any pre-configured scope."
+commands.allow = ["titlebar_action"]
+
+[[permission]]
+identifier = "deny-titlebar-action"
+description = "Denies the titlebar_action command without any pre-configured scope."
+commands.deny = ["titlebar_action"]

@@ -2,30 +2,80 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 const read = path => readFileSync(new URL('../' + path, import.meta.url), 'utf8');
-test('only trusted launcher window receives narrowly scoped IPC capabilities', () => {
+test('only trusted local content and titlebar views receive narrowly scoped IPC capabilities', () => {
   const config = JSON.parse(read('src-tauri/tauri.conf.json'));
   const capability = JSON.parse(read('src-tauri/capabilities/launcher.json'));
-  assert.deepEqual(config.app.security.capabilities, ['launcher']);
-  assert.deepEqual(capability.windows, ['launcher']);
+  assert.deepEqual(config.app.security.capabilities, ['launcher', 'titlebar']);
+  assert.deepEqual(capability.webviews, ['launcher']);
+  assert.equal(capability.windows, undefined);
+  const titlebar = JSON.parse(read('src-tauri/capabilities/titlebar.json'));
+  assert.deepEqual(titlebar.webviews, ['launcher-titlebar', 'dsh-titlebar']);
+  assert.equal(titlebar.windows, undefined);
+  assert.equal(titlebar.local, true); assert.equal(titlebar.remote, undefined);
+  assert.deepEqual([...titlebar.permissions].sort(), ['core:event:allow-listen', 'core:event:allow-unlisten', 'allow-titlebar-action', 'allow-show-titlebar-menu'].sort());
   assert.equal(capability.local, true); assert.equal(capability.remote, undefined);
   assert.deepEqual([...capability.permissions].sort(), ['allow-get-snapshot', 'allow-perform-action', 'allow-set-project-directory', 'allow-get-update-snapshot', 'allow-check-update', 'allow-install-update', 'allow-get-notification-snapshot', 'allow-set-notifications-enabled', 'allow-test-notification', 'core:event:allow-listen', 'core:event:allow-unlisten'].sort());
   assert.ok(config.app.security.csp.includes("object-src 'none'"));
 });
-test('native top menus are app-wide and share one guarded handler with the tray', () => {
+test('titlebar popup menus preserve guarded actions without a second native menu row', () => {
   const desktop = read('src-tauri/src/desktop.rs');
-  const menu = desktop.slice(desktop.indexOf('fn application_menu('), desktop.indexOf('fn handle_menu_action('));
-  for (const label of ['文件(&F)', '设置(&S)', '帮助(&H)', '运行环境 / DSH 目录…', '系统通知设置…', '检查启动器更新…']) assert.ok(menu.includes(label));
-  assert.ok(menu.includes('Menu::with_items(app, &[&file, &settings, &help])'));
-  assert.ok(desktop.includes('.menu(application_menu)'));
-  assert.equal((desktop.match(/\.on_menu_event\(/g) || []).length, 1, 'tray and top menu must not dispatch an action twice');
+  const titlebar = read('src-tauri/src/desktop_titlebar.rs');
+  for (const label of ['打开 DSH', '状态与操作日志', '运行环境 / DSH 目录…', '系统通知设置…', '检查启动器更新…']) assert.ok(titlebar.includes(label));
+  for (const menu of ['file', 'settings', 'help']) assert.ok(titlebar.includes('let ' + menu + ' = Menu::with_items'));
+  assert.ok(titlebar.includes('menu.popup_at(window, LogicalPosition::new(x, HEIGHT))'));
+  assert.equal((desktop.match(/\.on_menu_event\(/g) || []).length, 1, 'popup and tray must not dispatch twice');
   assert.ok(desktop.includes('handle_menu_action(app, event.id.as_ref())'));
+  assert.equal((desktop.match(/\.decorations\(false\)/g) || []).length, 2);
+  assert.equal((desktop.match(/titlebar::attach\(&/g) || []).length, 2);
+  assert.doesNotMatch(desktop, /\.menu\(application_menu\)|initialization_script/);
   const handler = desktop.slice(desktop.indexOf('fn handle_menu_action('), desktop.indexOf('pub fn run()'));
   for (const action of ['open', 'logs', 'start', 'stop', 'restart', 'quit', 'exit']) assert.ok(handler.includes('"' + action + '" => dispatch(app, "' + action + '")'));
   assert.ok(handler.includes('updates::show_updates(app)'));
   assert.ok(handler.includes('updates::check(&app, &state).await'));
   assert.ok(handler.includes('app.emit_to("launcher", "launcher-show-settings", id)'));
   assert.doesNotMatch(handler, /install_update|set_notifications_enabled|set_project_directory|backend\./);
-  assert.doesNotMatch(desktop, /initialization_script|\.menu\(Menu::default/);
+});
+
+test('titlebar commands validate the calling view, local document and its own parent window', () => {
+  const titlebar = read('src-tauri/src/desktop_titlebar.rs');
+  for (const pair of ['("launcher-titlebar", "launcher")', '("dsh-titlebar", "dsh")']) assert.ok(titlebar.includes(pair));
+  assert.ok(titlebar.includes('url.path() == "/titlebar.html"'));
+  assert.ok(titlebar.includes('url.query().is_none()'));
+  assert.ok(titlebar.includes('url.fragment().is_none()'));
+  assert.ok(titlebar.includes('url.port() == Some(1420)'));
+  assert.equal((titlebar.match(/let window = assert_titlebar\(&view\)\?;/g) || []).length, 2);
+  assert.ok(titlebar.includes('x.is_finite()'));
+  assert.ok(titlebar.includes('Action::Close => window.close()'));
+  assert.ok(titlebar.includes('Action::Drag => window.start_dragging()'));
+  assert.ok(titlebar.includes('EventTarget::webview('));
+  assert.doesNotMatch(titlebar, /perform_action|install_update|backend\.|eval\(|initialization_script/);
+  for (const command of ['titlebar_action', 'show_titlebar_menu']) {
+    assert.ok(read('src-tauri/build.rs').includes('"' + command + '"'));
+    assert.ok(read('src-tauri/src/desktop.rs').includes('titlebar::' + command));
+  }
+});
+
+test('split-view lifecycle keeps DSH authentication in its original remote content view', () => {
+  const desktop = read('src-tauri/src/desktop.rs');
+  const notifications = read('src-tauri/src/desktop_notifications.rs');
+  const updates = read('src-tauri/src/desktop_updates.rs');
+  for (const source of [desktop, notifications, updates]) assert.doesNotMatch(source, /get_webview_window|WebviewWindow/);
+  assert.ok(desktop.includes('app.get_webview("dsh")'));
+  assert.ok(desktop.includes('app.get_window("launcher")'));
+  assert.ok(notifications.includes('.get_webview("dsh")'));
+  assert.ok(notifications.includes('app.get_window("dsh")'));
+  const titlebar = read('src-tauri/src/desktop_titlebar.rs');
+  assert.ok(titlebar.includes('window.scale_factor()?'));
+  assert.ok(titlebar.includes('size.height.saturating_sub(top)'));
+  assert.ok(titlebar.includes('WindowEvent::ScaleFactorChanged'));
+  assert.ok(titlebar.includes('content.set_bounds('));
+  assert.ok(titlebar.includes('titlebar.set_bounds('));
+});
+
+test('both bundled HTML entries are built and staged for Windows packaging', () => {
+  assert.ok(read('vite.config.ts').includes("titlebar: 'titlebar.html'"));
+  assert.ok(read('scripts/Build-Windows.ps1').includes("'titlebar.html'"));
+  assert.ok(read('titlebar.html').includes('/src/titlebar.ts'));
 });
 
 test('destructive actions require guarded PID adapter and native default-no confirmation', () => {

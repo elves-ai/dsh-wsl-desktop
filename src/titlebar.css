@@ -1,0 +1,62 @@
+:root {
+  color-scheme: dark;
+  font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  font-size: 12px;
+  background: #181b20;
+  color: #d4d7de;
+  font-synthesis: none;
+  --titlebar-height: 38px;
+}
+
+* { box-sizing: border-box; }
+html, body { width: 100%; height: var(--titlebar-height); margin: 0; overflow: hidden; }
+body { user-select: none; }
+.titlebar {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  height: var(--titlebar-height);
+  overflow: hidden;
+  border-bottom: 1px solid #30343c;
+  background: #202329;
+}
+.app-icon { display: grid; place-items: center; width: 36px; flex: 0 0 36px; color: #91aef3; }
+.app-icon svg { width: 21px; height: 21px; }
+.menus, .window-controls { display: flex; flex: 0 0 auto; }
+button {
+  height: 37px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: default;
+}
+.menus button { width: 46px; flex: 0 0 46px; }
+button:hover:not(:disabled) { background: #363a43; }
+button:active:not(:disabled) { background: #424752; }
+button:focus-visible { outline: 1px solid #9cbcff; outline-offset: -3px; }
+button:disabled { color: #858b97; }
+.drag-area {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1 1 0;
+  min-width: 80px;
+  padding: 0 12px;
+  overflow: hidden;
+}
+.window-title { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: #aeb5c2; }
+.window-control { display: grid; place-items: center; width: 46px; flex: 0 0 46px; }
+.window-control svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1; }
+.window-control .restore-icon { display: none; }
+.window-control[data-maximized="true"] .maximize-icon { display: none; }
+.window-control[data-maximized="true"] .restore-icon { display: block; }
+.close-control:hover:not(:disabled) { background: #c42b36; color: #fff; }
+.close-control:active:not(:disabled) { background: #a8242e; }
+.titlebar[data-focused="false"] { background: #1c1f24; color: #858b97; }
+.titlebar[data-focused="false"] .app-icon { color: #78859f; }
+.titlebar[data-focused="false"] .window-title { color: #7f8795; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }

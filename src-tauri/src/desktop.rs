@@ -17,14 +17,17 @@ use std::{
     time::{Duration, Instant},
 };
 use tauri::{
-    menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
+    menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
+    webview::WebviewBuilder,
+    Emitter, Manager, Webview, WebviewUrl, Window, WindowBuilder, WindowEvent,
 };
 use url::Url;
 
 #[path = "desktop_notifications.rs"]
 mod notifications;
+#[path = "desktop_titlebar.rs"]
+mod titlebar;
 #[path = "desktop_updates.rs"]
 mod updates;
 
@@ -162,7 +165,7 @@ impl Controller {
     }
 }
 
-fn assert_local(window: &WebviewWindow) -> Result<(), String> {
+fn assert_local(window: &Webview) -> Result<(), String> {
     let url = window.url().map_err(|_| "无法验证调用窗口。")?;
     let packaged = (url.scheme() == "tauri" && url.host_str() == Some("localhost"))
         || (url.scheme() == "http" && url.host_str() == Some("tauri.localhost"));
@@ -177,7 +180,7 @@ fn assert_local(window: &WebviewWindow) -> Result<(), String> {
 }
 #[tauri::command]
 fn get_snapshot(
-    window: WebviewWindow,
+    window: Webview,
     state: tauri::State<'_, Arc<Controller>>,
 ) -> Result<Snapshot, String> {
     assert_local(&window)?;
@@ -185,7 +188,7 @@ fn get_snapshot(
 }
 #[tauri::command]
 async fn perform_action(
-    window: WebviewWindow,
+    window: Webview,
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<Controller>>,
     action: String,
@@ -199,7 +202,7 @@ async fn perform_action(
 
 #[tauri::command]
 async fn set_project_directory(
-    window: WebviewWindow,
+    window: Webview,
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<Controller>>,
     repository: String,
@@ -240,7 +243,7 @@ async fn set_project_directory(
 }
 
 fn show_launcher(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("launcher") {
+    if let Some(window) = app.get_window("launcher") {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
@@ -249,7 +252,7 @@ fn show_launcher(app: &tauri::AppHandle) {
 fn activate(app: &tauri::AppHandle) {
     if let Some(controller) = app.try_state::<Arc<Controller>>() {
         let snapshot = controller.snapshot();
-        if snapshot.state == "ready" && app.get_webview_window("dsh").is_some() {
+        if snapshot.state == "ready" && app.get_window("dsh").is_some() {
             show_dsh(app);
         } else {
             show_launcher(app);
@@ -263,7 +266,7 @@ fn activate(app: &tauri::AppHandle) {
 }
 
 fn show_dsh(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("dsh") {
+    if let Some(window) = app.get_window("dsh") {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
@@ -479,9 +482,8 @@ fn open_external(url: &Url, trusted: &Url) {
     });
 }
 fn open_dsh(app: &tauri::AppHandle, config: &config::Config, url: Url) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("dsh") {
-        window
-            .navigate(url)
+    if let Some(view) = app.get_webview("dsh") {
+        view.navigate(url)
             .map_err(|_| "无法重新连接 DSH 工作窗口。")?;
         show_dsh(app);
         return Ok(());
@@ -497,57 +499,72 @@ fn open_dsh(app: &tauri::AppHandle, config: &config::Config, url: Url) -> Result
     let popup_origin = trusted.clone();
     let page_origin = trusted.clone();
     let app_on_load = app.clone();
-    let window = WebviewWindowBuilder::new(app, "dsh", WebviewUrl::External(url))
+    let window = WindowBuilder::new(app, "dsh")
         .title("DeepSeek Harness · WSL")
+        .decorations(false)
         .inner_size(config.window_width as f64, config.window_height as f64)
         .min_inner_size(600.0, 400.0)
         .visible(false)
-        .data_directory(data)
-        .on_navigation(move |target| {
-            if target.origin() == nav_origin.origin() {
-                true
-            } else {
-                open_external(target, &nav_origin);
-                false
-            }
-        })
-        .on_new_window(move |target, _| {
-            // Internal previews stay in the existing app window instead of gaining IPC.
-            if target.origin() == popup_origin.origin() {
-                if let Some(window) = app_on_load.get_webview_window("dsh") {
-                    let _ = window.navigate(target);
-                }
-            } else {
-                open_external(&target, &popup_origin);
-            }
-            tauri::webview::NewWindowResponse::Deny
-        })
-        .on_page_load(move |window, payload| {
-            if payload.event() == tauri::webview::PageLoadEvent::Finished
-                && payload.url().origin() == page_origin.origin()
-            {
-                let _ = window.show();
-                let _ = window.set_focus();
-                if let Some(launcher) = window.app_handle().get_webview_window("launcher") {
-                    let available = window
-                        .app_handle()
-                        .state::<Arc<updates::Updates>>()
-                        .available();
-                    if !available {
-                        let _ = launcher.hide();
-                    }
-                }
-            }
-        })
         .build()
-        .map_err(|_| "无法创建 WebView2 工作窗口，请检查 WebView2 Runtime。")?;
+        .map_err(|_| "无法创建 DSH 工作窗口。")?;
     fit_window(&window, config.window_width, config.window_height);
-    // Show a native window immediately; page-load completion dismisses the loading UI.
+    let result = (|| -> tauri::Result<()> {
+        let (position, size) = titlebar::content_geometry(&window)?;
+        window.add_child(
+            WebviewBuilder::new("dsh", WebviewUrl::External(url))
+                .data_directory(data)
+                .on_navigation(move |target| {
+                    if target.origin() == nav_origin.origin() {
+                        true
+                    } else {
+                        open_external(target, &nav_origin);
+                        false
+                    }
+                })
+                .on_new_window(move |target, _| {
+                    // Internal previews stay in the existing remote view and gain no IPC.
+                    if target.origin() == popup_origin.origin() {
+                        if let Some(view) = app_on_load.get_webview("dsh") {
+                            let _ = view.navigate(target);
+                        }
+                    } else {
+                        open_external(&target, &popup_origin);
+                    }
+                    tauri::webview::NewWindowResponse::Deny
+                })
+                .on_page_load(move |view, payload| {
+                    if payload.event() == tauri::webview::PageLoadEvent::Finished
+                        && payload.url().origin() == page_origin.origin()
+                    {
+                        let window = view.window();
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                        if let Some(launcher) = view.app_handle().get_window("launcher") {
+                            let available = view
+                                .app_handle()
+                                .state::<Arc<updates::Updates>>()
+                                .available();
+                            if !available {
+                                let _ = launcher.hide();
+                            }
+                        }
+                    }
+                }),
+            position,
+            size,
+        )?;
+        titlebar::attach(&window)
+    })();
+    if result.is_err() {
+        // Never leave a frameless, uncontrollable window after partial creation.
+        let _ = window.destroy();
+        return Err("无法创建 WebView2 工作窗口，请检查 WebView2 Runtime。".into());
+    }
     let _ = window.show();
     let _ = window.set_focus();
     Ok(())
 }
-fn fit_window(window: &WebviewWindow, width: u32, height: u32) {
+fn fit_window(window: &Window, width: u32, height: u32) {
     // Tauri's monitor conversion handles mixed DPI. Clamp to 90% of the work area.
     let monitor = window
         .app_handle()
@@ -641,37 +658,6 @@ fn dispatch(app: &tauri::AppHandle, action: &'static str) {
     });
 }
 
-/// Native menus belong to the app, so the launcher and future DSH window share them.
-/// No menu permissions or host commands are exposed to the remote DSH page.
-fn application_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
-    let open = MenuItem::with_id(app, "open", "打开 DSH", true, None::<&str>)?;
-    let control = MenuItem::with_id(app, "logs", "状态与操作日志", true, None::<&str>)?;
-    let separator = PredefinedMenuItem::separator(app)?;
-    let quit = MenuItem::with_id(app, "quit", "仅退出启动器（保留服务）", true, None::<&str>)?;
-    let exit = MenuItem::with_id(app, "exit", "停止服务并退出…", true, None::<&str>)?;
-    let file = Submenu::with_items(
-        app,
-        "文件(&F)",
-        true,
-        &[&open, &control, &separator, &quit, &exit],
-    )?;
-
-    let environment = MenuItem::with_id(
-        app,
-        "environment",
-        "运行环境 / DSH 目录…",
-        true,
-        None::<&str>,
-    )?;
-    let notifications =
-        MenuItem::with_id(app, "notifications", "系统通知设置…", true, None::<&str>)?;
-    let settings = Submenu::with_items(app, "设置(&S)", true, &[&environment, &notifications])?;
-
-    let update = MenuItem::with_id(app, "updates", "检查启动器更新…", true, None::<&str>)?;
-    let help = Submenu::with_items(app, "帮助(&H)", true, &[&update])?;
-    Menu::with_items(app, &[&file, &settings, &help])
-}
-
 /// One handler for both the top menu and tray: keep confirmations and update locks intact.
 fn handle_menu_action(app: &tauri::AppHandle, id: &str) {
     match id {
@@ -700,7 +686,6 @@ fn handle_menu_action(app: &tauri::AppHandle, id: &str) {
 
 pub fn run() {
     let app = tauri::Builder::default()
-        .menu(application_menu)
         .on_menu_event(|app, event| handle_menu_action(app, event.id.as_ref()))
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             activate(app);
@@ -716,7 +701,9 @@ pub fn run() {
             updates::install_update,
             notifications::get_notification_snapshot,
             notifications::set_notifications_enabled,
-            notifications::test_notification
+            notifications::test_notification,
+            titlebar::titlebar_action,
+            titlebar::show_titlebar_menu
         ])
         .setup(|app| {
             let directory = app.path().app_config_dir()?;
@@ -772,21 +759,30 @@ pub fn run() {
                     "已导入旧启动器配置；旧脚本、浏览器数据和 DSH 配置未修改。",
                 );
             }
-            WebviewWindowBuilder::new(app, "launcher", WebviewUrl::App("index.html".into()))
+            app.manage(titlebar::Menus::new(app.handle())?);
+            let launcher = WindowBuilder::new(app, "launcher")
                 .title("DSH · WSL Desktop")
+                .decorations(false)
                 .inner_size(760.0, 640.0)
                 .min_inner_size(600.0, 500.0)
                 .center()
-                .on_navigation(|target| {
-                    (target.scheme() == "tauri" && target.host_str() == Some("localhost"))
-                        || (target.scheme() == "http"
-                            && target.host_str() == Some("tauri.localhost"))
-                        || (cfg!(debug_assertions)
-                            && target.scheme() == "http"
-                            && target.host_str() == Some("127.0.0.1")
-                            && target.port() == Some(1420))
-                })
                 .build()?;
+            let (position, size) = titlebar::content_geometry(&launcher)?;
+            launcher.add_child(
+                WebviewBuilder::new("launcher", WebviewUrl::App("index.html".into()))
+                    .on_navigation(|target| {
+                        (target.scheme() == "tauri" && target.host_str() == Some("localhost"))
+                            || (target.scheme() == "http"
+                                && target.host_str() == Some("tauri.localhost"))
+                            || (cfg!(debug_assertions)
+                                && target.scheme() == "http"
+                                && target.host_str() == Some("127.0.0.1")
+                                && target.port() == Some(1420))
+                    }),
+                position,
+                size,
+            )?;
+            titlebar::attach(&launcher)?;
             let open = MenuItem::with_id(app, "open", "打开 DSH", true, None::<&str>)?;
             let control = MenuItem::with_id(app, "logs", "状态与操作日志", true, None::<&str>)?;
             let update = MenuItem::with_id(app, "updates", "检查启动器更新…", true, None::<&str>)?;
@@ -867,6 +863,7 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            titlebar::on_window_event(window, event);
             if let WindowEvent::CloseRequested { api, .. } = event {
                 if let Some(controller) = window.app_handle().try_state::<Arc<Controller>>() {
                     if !controller.exiting.load(Ordering::SeqCst) {
