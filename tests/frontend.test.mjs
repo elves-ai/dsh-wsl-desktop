@@ -426,6 +426,77 @@ test('all checks passing leaves initialization automatically without a frontend 
   assert.equal(app.node('repository-input').disabled, true); // Must stop before switching checkout.
 });
 
+test('native environment settings navigation reveals and focuses without toggling or IPC', async () => {
+  const app = await mount(true, base({ state: 'stopped', managed: false }));
+  const calls = [...app.calls];
+  const showSettings = app.subscriptions.get('launcher-show-settings');
+  assert.equal(typeof showSettings, 'function');
+  assert.equal(app.node('environment-panel').hidden, true);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    app.node('environment-panel').scrolled = false;
+    app.node('repository-input').focused = false;
+    showSettings({ payload: 'environment' }); await flush();
+    assert.equal(app.node('environment-panel').hidden, false);
+    assert.equal(app.node('environment-panel').scrolled, true);
+    assert.equal(app.node('repository-input').focused, true);
+    assert.equal(app.node('repository-input').value, '/home/test/deepseek-harness');
+    assert.deepEqual(app.calls, calls);
+  }
+});
+
+test('native environment settings navigation preserves an unsaved directory across repeated reveals', async () => {
+  const app = await mount(true, base({ state: 'stopped', managed: false }));
+  await app.click('show-environment');
+  const draft = '/home/test/unsaved DSH checkout';
+  app.node('repository-input').value = draft;
+  app.node('repository-input').handlers.input();
+  assert.equal(app.node('save-repository').disabled, false);
+  await app.click('show-environment');
+  assert.equal(app.node('environment-panel').hidden, true);
+  const calls = [...app.calls];
+  const showSettings = app.subscriptions.get('launcher-show-settings');
+  assert.equal(typeof showSettings, 'function');
+  for (let attempt = 0; attempt < 2; attempt++) {
+    showSettings({ payload: 'environment' }); await flush();
+    assert.equal(app.node('environment-panel').hidden, false);
+    assert.equal(app.node('repository-input').value, draft);
+    assert.equal(app.node('save-repository').disabled, false);
+    assert.deepEqual(app.calls, calls);
+  }
+});
+
+test('native notification settings navigation only scrolls and focuses without changing preferences or IPC', async () => {
+  for (const initialNotification of [notification(), listening()]) {
+    const app = await mount(true, base(), { initialNotification });
+    const calls = [...app.calls];
+    const showSettings = app.subscriptions.get('launcher-show-settings');
+    assert.equal(typeof showSettings, 'function');
+    for (let attempt = 0; attempt < 2; attempt++) {
+      app.node('notification-panel').scrolled = false;
+      app.node('notifications-enabled').focused = false;
+      showSettings({ payload: 'notifications' }); await flush();
+      assert.equal(app.node('notification-panel').scrolled, true);
+      assert.equal(app.node('notifications-enabled').focused, true);
+      assert.equal(app.node('notifications-enabled').checked, initialNotification.enabled);
+      assert.equal(app.node('test-notification').disabled, !initialNotification.enabled);
+      assert.equal(app.node('environment-panel').hidden, true);
+      assert.deepEqual(app.calls, calls);
+    }
+  }
+});
+
+test('unload releases the native settings navigation listener', async () => {
+  const app = await mount(true);
+  assert.equal(app.listenCalls.filter(name => name === 'launcher-show-settings').length, 1);
+  assert.equal(typeof app.subscriptions.get('launcher-show-settings'), 'function');
+  const calls = [...app.calls];
+  app.unload(); await flush();
+  assert.equal(app.subscriptions.has('launcher-show-settings'), false);
+  assert.equal(app.unlistened.filter(name => name === 'launcher-show-settings').length, 1);
+  assert.equal(app.subscriptions.size, 0);
+  assert.deepEqual(app.calls, calls);
+});
+
 test('pending environment and duplicate checks cannot start a service', async () => {
   const checks = environment().checks.map(item => ({ ...item, status: 'pending' }));
   const app = await mount(true, base({ state: 'unknown', managed: false, busy: true, environment_checking: true, environment: environment({ checks }) }));

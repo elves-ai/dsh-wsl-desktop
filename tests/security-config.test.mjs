@@ -11,6 +11,23 @@ test('only trusted launcher window receives narrowly scoped IPC capabilities', (
   assert.deepEqual([...capability.permissions].sort(), ['allow-get-snapshot', 'allow-perform-action', 'allow-set-project-directory', 'allow-get-update-snapshot', 'allow-check-update', 'allow-install-update', 'allow-get-notification-snapshot', 'allow-set-notifications-enabled', 'allow-test-notification', 'core:event:allow-listen', 'core:event:allow-unlisten'].sort());
   assert.ok(config.app.security.csp.includes("object-src 'none'"));
 });
+test('native top menus are app-wide and share one guarded handler with the tray', () => {
+  const desktop = read('src-tauri/src/desktop.rs');
+  const menu = desktop.slice(desktop.indexOf('fn application_menu('), desktop.indexOf('fn handle_menu_action('));
+  for (const label of ['文件(&F)', '设置(&S)', '帮助(&H)', '运行环境 / DSH 目录…', '系统通知设置…', '检查启动器更新…']) assert.ok(menu.includes(label));
+  assert.ok(menu.includes('Menu::with_items(app, &[&file, &settings, &help])'));
+  assert.ok(desktop.includes('.menu(application_menu)'));
+  assert.equal((desktop.match(/\.on_menu_event\(/g) || []).length, 1, 'tray and top menu must not dispatch an action twice');
+  assert.ok(desktop.includes('handle_menu_action(app, event.id.as_ref())'));
+  const handler = desktop.slice(desktop.indexOf('fn handle_menu_action('), desktop.indexOf('pub fn run()'));
+  for (const action of ['open', 'logs', 'start', 'stop', 'restart', 'quit', 'exit']) assert.ok(handler.includes('"' + action + '" => dispatch(app, "' + action + '")'));
+  assert.ok(handler.includes('updates::show_updates(app)'));
+  assert.ok(handler.includes('updates::check(&app, &state).await'));
+  assert.ok(handler.includes('app.emit_to("launcher", "launcher-show-settings", id)'));
+  assert.doesNotMatch(handler, /install_update|set_notifications_enabled|set_project_directory|backend\./);
+  assert.doesNotMatch(desktop, /initialization_script|\.menu\(Menu::default/);
+});
+
 test('destructive actions require guarded PID adapter and native default-no confirmation', () => {
   const desktop = read('src-tauri/src/desktop.rs'); const backend = read('src-tauri/src/backend.rs');
   assert.match(desktop, /MB_DEFBUTTON2/); assert.match(desktop, /backend\.stop\(expected_pid\)/);

@@ -142,6 +142,7 @@ let localError = '';
 let eventRevision = 0;
 let unlisten: UnlistenFn | undefined;
 let unlistenShowLogs: UnlistenFn | undefined;
+let unlistenShowSettings: UnlistenFn | undefined;
 let unlistenUpdates: UnlistenFn | undefined;
 let unlistenShowUpdates: UnlistenFn | undefined;
 let updateSnapshot: UpdateSnapshot = { current_version: '', phase: 'idle', version: null, notes: null, downloaded: 0, total: null, message: '正在读取更新状态。', busy: false };
@@ -384,6 +385,18 @@ async function performUpdate(command: 'check_update' | 'install_update'): Promis
   }
 }
 
+function showSettings(section: string): void {
+  if (section === 'environment') {
+    showEnvironment = true;
+    render();
+    element('environment-panel').scrollIntoView({ block: 'start' });
+    repositoryInput.focus({ preventScroll: true });
+  } else if (section === 'notifications') {
+    element('notification-panel').scrollIntoView({ block: 'start' });
+    notificationsEnabled.focus({ preventScroll: true });
+  }
+}
+
 function showLogs(): void {
   element<HTMLDetailsElement>('logs-panel').open = true;
   element('log-output').focus({ preventScroll: true });
@@ -462,6 +475,11 @@ async function initialize(): Promise<void> {
   } catch (error) {
     localError = '无法订阅日志窗口请求：' + String(error);
   }
+  try {
+    unlistenShowSettings = await listen<string>('launcher-show-settings', event => showSettings(event.payload));
+  } catch (error) {
+    localError = '无法订阅设置窗口请求：' + String(error);
+  }
   const revision = eventRevision;
   try {
     const initial = await invoke<Snapshot>('get_snapshot');
@@ -516,7 +534,7 @@ window.addEventListener('beforeunload', () => {
   notificationsDisposed = true;
   unlistenNotifications?.();
   unlistenNotifications = undefined;
-  unlisten?.(); unlistenShowLogs?.(); unlistenUpdates?.(); unlistenShowUpdates?.();
+  unlisten?.(); unlistenShowLogs?.(); unlistenShowSettings?.(); unlistenUpdates?.(); unlistenShowUpdates?.();
 }, { once: true });
 render();
 void initialize();

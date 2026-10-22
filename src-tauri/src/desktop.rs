@@ -17,7 +17,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
@@ -641,8 +641,67 @@ fn dispatch(app: &tauri::AppHandle, action: &'static str) {
     });
 }
 
+/// Native menus belong to the app, so the launcher and future DSH window share them.
+/// No menu permissions or host commands are exposed to the remote DSH page.
+fn application_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    let open = MenuItem::with_id(app, "open", "打开 DSH", true, None::<&str>)?;
+    let control = MenuItem::with_id(app, "logs", "状态与操作日志", true, None::<&str>)?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    let quit = MenuItem::with_id(app, "quit", "仅退出启动器（保留服务）", true, None::<&str>)?;
+    let exit = MenuItem::with_id(app, "exit", "停止服务并退出…", true, None::<&str>)?;
+    let file = Submenu::with_items(
+        app,
+        "文件(&F)",
+        true,
+        &[&open, &control, &separator, &quit, &exit],
+    )?;
+
+    let environment = MenuItem::with_id(
+        app,
+        "environment",
+        "运行环境 / DSH 目录…",
+        true,
+        None::<&str>,
+    )?;
+    let notifications =
+        MenuItem::with_id(app, "notifications", "系统通知设置…", true, None::<&str>)?;
+    let settings = Submenu::with_items(app, "设置(&S)", true, &[&environment, &notifications])?;
+
+    let update = MenuItem::with_id(app, "updates", "检查启动器更新…", true, None::<&str>)?;
+    let help = Submenu::with_items(app, "帮助(&H)", true, &[&update])?;
+    Menu::with_items(app, &[&file, &settings, &help])
+}
+
+/// One handler for both the top menu and tray: keep confirmations and update locks intact.
+fn handle_menu_action(app: &tauri::AppHandle, id: &str) {
+    match id {
+        "open" => dispatch(app, "open"),
+        "logs" => dispatch(app, "logs"),
+        "environment" | "notifications" => {
+            show_launcher(app);
+            let _ = app.emit_to("launcher", "launcher-show-settings", id);
+        }
+        "updates" => {
+            updates::show_updates(app);
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let state = app.state::<Arc<updates::Updates>>().inner().clone();
+                updates::check(&app, &state).await;
+            });
+        }
+        "start" => dispatch(app, "start"),
+        "stop" => dispatch(app, "stop"),
+        "restart" => dispatch(app, "restart"),
+        "quit" => dispatch(app, "quit"),
+        "exit" => dispatch(app, "exit"),
+        _ => (),
+    }
+}
+
 pub fn run() {
     let app = tauri::Builder::default()
+        .menu(application_menu)
+        .on_menu_event(|app, event| handle_menu_action(app, event.id.as_ref()))
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             activate(app);
         }))
@@ -748,24 +807,6 @@ pub fn run() {
                 .tooltip("DSH · 正在启动")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "open" => dispatch(app, "open"),
-                    "logs" => dispatch(app, "logs"),
-                    "updates" => {
-                        updates::show_updates(app);
-                        let app = app.clone();
-                        tauri::async_runtime::spawn(async move {
-                            let state = app.state::<Arc<updates::Updates>>().inner().clone();
-                            updates::check(&app, &state).await;
-                        });
-                    }
-                    "start" => dispatch(app, "start"),
-                    "stop" => dispatch(app, "stop"),
-                    "restart" => dispatch(app, "restart"),
-                    "quit" => dispatch(app, "quit"),
-                    "exit" => dispatch(app, "exit"),
-                    _ => (),
-                })
                 .on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click {
                         button: MouseButton::Left,
