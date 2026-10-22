@@ -6,14 +6,10 @@ const raw = readFileSync(new URL('../.github/workflows/windows-build.yml', impor
 const document = parseDocument(raw, { uniqueKeys: true });
 const workflow = document.toJS();
 
-test('CI is valid YAML, defaults to read-only tokens and has explicit triggers', () => {
+test('CI is valid YAML, defaults to read-only tokens and runs only on version tag pushes', () => {
   assert.equal(document.errors.length, 0);
   assert.deepEqual(workflow.permissions, { contents: 'read' });
-  assert.deepEqual(workflow.on.push.branches, ['main']);
-  assert.deepEqual(workflow.on.pull_request.branches, ['main']);
-  assert.ok('workflow_dispatch' in workflow.on);
-  assert.ok(!('pull_request_target' in workflow.on));
-  assert.deepEqual(workflow.on.push.tags, ['v*']);
+  assert.deepEqual(workflow.on, { push: { tags: ['v*'] } });
   for (const [name, job] of Object.entries(workflow.jobs)) {
     if (name !== 'publish-release') assert.ok(!job.permissions || job.permissions.contents !== 'write');
   }
@@ -32,7 +28,7 @@ test('Windows packaging waits for verification and pins every third-party action
 });
 test('Windows build locks dependencies and fails when installer artifacts are missing', () => {
   const steps = workflow.jobs['build-windows'].steps;
-  const build = steps.find(s => s.name === 'Build Windows application and NSIS installer');
+  const build = steps.find(s => s.name === 'Build signed Windows application and NSIS installer');
   assert.match(build.run, /--target x86_64-pc-windows-msvc/); assert.match(build.run, /--bundles nsis/); assert.match(build.run, /-- --locked/);
   const upload = steps.find(s => s.uses?.startsWith('actions/upload-artifact@'));
   assert.equal(upload.with['if-no-files-found'], 'error'); assert.equal(upload.with['retention-days'], 30);
@@ -88,21 +84,22 @@ test('signing secrets exist only in explicitly trusted tag steps and never in jo
   assert.doesNotMatch(signed.run, /createUpdaterArtifacts.*false|--config/);
 });
 
-test('PRs, branches and manual builds explicitly disable updater artifacts without signing secrets', () => {
-  const step = workflow.jobs['build-windows'].steps.find(s => s.name === 'Build Windows application and NSIS installer');
-  assert.equal(step.if, '${{ !(' + trustedTag + ') }}');
-  assert.deepEqual(step.env ?? {}, {});
-  assert.match(step.run, /"bundle":\{"createUpdaterArtifacts":false\}/);
-  assert.match(step.run, /--config \$override/);
-  assert.match(step.run, /-- --locked/);
-  assert.doesNotMatch(step.run, /secrets\.|TAURI_SIGNING_/);
+test('tag-only builds have no unsigned fallback and save caches for trusted tags', () => {
+  const builds = workflow.jobs['build-windows'].steps.filter(s => s.run?.includes('npm run desktop:build'));
+  assert.equal(builds.length, 1);
+  assert.equal(builds[0].if, trustedTag);
+  assert.doesNotMatch(raw, /tauri-no-updater|createUpdaterArtifacts/);
+  for (const name of ['verify', 'build-windows']) {
+    const cache = workflow.jobs[name].steps.find(s => s.uses?.startsWith('Swatinem/rust-cache@'));
+    assert.equal(cache.with['save-if'], '${{ ' + trustedTag + ' }}');
+  }
 });
 
 test('tag artifacts preserve installer signature and prepare manifest before upload', () => {
   const steps = workflow.jobs['build-windows'].steps;
   const collect = steps.find(s => s.name.startsWith('Collect executable'));
-  assert.equal(collect.env.IS_RELEASE, '${{ ' + trustedTag + ' }}');
-  assert.match(collect.run, /\$env:IS_RELEASE -eq 'true'/);
+  assert.equal(collect.env, undefined);
+  assert.doesNotMatch(collect.run, /IS_RELEASE/);
   assert.match(collect.run, /FullName \+ '\.sig'/);
   assert.match(collect.run, /\$installerName \+ '\.sig'/);
   const prepare = steps.find(s => s.name === 'Prepare and verify signed updater release');

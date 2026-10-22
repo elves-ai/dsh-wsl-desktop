@@ -2,11 +2,7 @@ name: Windows build
 
 on:
   push:
-    branches: [main]
     tags: ['v*']
-  pull_request:
-    branches: [main]
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -54,7 +50,7 @@ jobs:
         with:
           workspaces: src-tauri -> target
           cache-on-failure: true
-          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
       - name: Install frontend dependencies
         run: npm ci --no-audit --no-fund
       - name: Test frontend and security configuration
@@ -104,7 +100,7 @@ jobs:
         with:
           workspaces: src-tauri -> target
           cache-on-failure: true
-          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
       - name: Install frontend dependencies
         run: npm ci --no-audit --no-fund
       - name: Build frontend for native tests
@@ -135,16 +131,7 @@ jobs:
             Write-Output "::error title=Windows installer build::$details"
             throw 'Windows installer build failed.'
           }
-      - name: Build Windows application and NSIS installer
-        if: ${{ !(github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) }}
-        run: |
-          $override = Join-Path $env:RUNNER_TEMP 'tauri-no-updater.json'
-          '{"bundle":{"createUpdaterArtifacts":false}}' | Set-Content -LiteralPath $override -Encoding utf8
-          npm run desktop:build -- --ci --config $override --target x86_64-pc-windows-msvc --bundles nsis -- --locked 2>&1 | Tee-Object -FilePath windows-build.log
-          if ($LASTEXITCODE -ne 0) { throw 'Unsigned Windows installer build failed.' }
       - name: Collect executable, installer and SHA256 checksums
-        env:
-          IS_RELEASE: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
         run: |
           $ErrorActionPreference = 'Stop'
           $release = Join-Path $PWD 'src-tauri/target/x86_64-pc-windows-msvc/release'
@@ -156,9 +143,7 @@ jobs:
           $version = (Get-Content -LiteralPath (Join-Path $PWD 'package.json') -Raw | ConvertFrom-Json).version
           $installerName = 'dsh-wsl-desktop_' + $version + '_x64-setup.exe'
           Copy-Item -LiteralPath $installers[0].FullName -Destination (Join-Path $output $installerName)
-          if ($env:IS_RELEASE -eq 'true') {
-            Copy-Item -LiteralPath ($installers[0].FullName + '.sig') -Destination (Join-Path $output ($installerName + '.sig'))
-          }
+          Copy-Item -LiteralPath ($installers[0].FullName + '.sig') -Destination (Join-Path $output ($installerName + '.sig'))
           $checksums = Get-ChildItem -LiteralPath $output -Filter '*.exe' -File | Sort-Object Name | ForEach-Object {
             $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
             "$hash  $($_.Name)"

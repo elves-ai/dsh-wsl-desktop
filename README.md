@@ -76,15 +76,15 @@ Windows 安装与卸载向导使用简体中文，不再弹出语言选择框；
 
 ## GitHub Actions 构建（推荐）
 
-[Windows build 工作流](<.github/workflows/windows-build.yml>)在推送 main、推送 v 开头标签或创建面向 main 的 PR 时运行，也支持手动触发。
+[Windows build 工作流](<.github/workflows/windows-build.yml>)仅在推送 `v*` 版本标签时运行。普通分支推送、PR 和手动触发均不启动工作流；日常开发请在本地运行测试。
 
 1. Ubuntu runner 验证前端、Rust 和 fake-service Python 测试。
 2. 测试通过后，Windows Server 2022 runner 使用 MSVC 编译，执行 Windows 单元测试并生成 x64 NSIS 安装包。
-3. 普通 main、PR 和手动构建上传 Artifacts；推送版本标签时，在测试和 Windows 打包成功后创建 GitHub Release 并上传长期下载附件。
+3. 测试和 Windows 打包成功后，验证更新签名并自动创建 GitHub Release，上传完整下载附件后公开。
 
-普通构建包含独立可执行文件、NSIS 安装包和 SHA256SUMS.txt；版本标签构建还包含更新签名和版本清单。Actions Artifacts 保留 30 天，下载通常需要登录 GitHub；正式版本请从 [Releases 页面](https://github.com/elves-ai/dsh-wsl-desktop/releases)下载，公开 Release 附件不受这 30 天保留期限制。
+标签构建包含独立可执行文件、NSIS 安装包、更新签名、版本清单和 SHA256SUMS.txt。Actions Artifacts 保留 30 天，下载通常需要登录 GitHub；正式版本请从 [Releases 页面](https://github.com/elves-ai/dsh-wsl-desktop/releases)下载，公开 Release 附件不受这 30 天保留期限制。
 
-默认 GitHub Token 为 contents:read，仅标签发布 job 获得 contents:write；PR、main 和手动构建不会发布 Release。正式标签构建需要更新签名私钥 Secret，普通构建不需要；配置见[更新说明](<UPDATES.md#发布维护者首次配置>)。第三方 Actions 固定到提交 SHA。
+默认 GitHub Token 为 contents:read，仅标签发布 job 获得 contents:write。标签构建需要更新签名私钥 Secret，缺少私钥时直接失败，不回退为无签名发布；配置见[更新说明](<UPDATES.md#发布维护者首次配置>)。第三方 Actions 固定到提交 SHA。
 
 ### 发布新版本
 

@@ -838,7 +838,7 @@ dependencies = [
 
 [[package]]
 name = "dsh-wsl-desktop"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "open",
  "reqwest 0.12.28",
