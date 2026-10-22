@@ -31,7 +31,11 @@ export function toBitmap({ width, height, pixels }) {
 
 export function renderAsset(name) {
   const source = new URL(`../src-tauri/installer/${name}.svg`, import.meta.url);
-  return new Resvg(readFileSync(source), { font: { loadSystemFonts: false } }).render();
+  // Inline the approved PNG explicitly: relative <image> links can otherwise
+  // silently disappear in resvg (including when resourcesDir is provided).
+  const logo = readFileSync(new URL('../app-icon.png', import.meta.url)).toString('base64');
+  const svg = readFileSync(source, 'utf8').replace('href="../../app-icon.png"', `href="data:image/png;base64,${logo}"`);
+  return new Resvg(svg, { font: { loadSystemFonts: false } }).render();
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {

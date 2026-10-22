@@ -1,6 +1,7 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import './style.css';
+import appIconUrl from '../app-icon.png';
 
 interface EnvironmentCheck {
   id: string;
@@ -59,7 +60,7 @@ const settingsView = parameters.get('view') === 'settings';
 const settingsSections = ['environment', 'notifications', 'updates', 'logs'] as const;
 type SettingsSection = typeof settingsSections[number];
 let settingsSection: SettingsSection = settingsSections.find(section => section === parameters.get('section')) || 'environment';
-const mark = '<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M7 7h8a9 9 0 0 1 0 18H7V7Zm6 5v8h2a4 4 0 0 0 0-8h-2Z" fill="currentColor"/><path d="M24 22h3v3h-3z" fill="currentColor"/></svg>';
+const mark = `<img src="${appIconUrl}" width="36" height="36" alt="" />`;
 // Templates contain only developer-owned markup. All native values use textContent/value.
 app.innerHTML = settingsView ? `
 <main class="settings-shell" id="settings-shell">

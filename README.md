@@ -201,6 +201,8 @@ Windows 安装与卸载向导使用简体中文，不再弹出语言选择框；
 
 外观与文案位于 [appearance.nsh](<src-tauri/installer/appearance.nsh>)，位图源稿为 [sidebar.svg](<src-tauri/installer/sidebar.svg>) 和 [header.svg](<src-tauri/installer/header.svg>)。修改源稿后运行 `npm run installer:assets`，提交生成的两张 BMP；正常打包直接使用已提交的位图，不依赖系统字体或额外图片工具。修改只会出现在重新构建的安装包中，不会改变已经下载的旧安装包。
 
+图标源文件为 [app-icon.png](<app-icon.png>)，使用鲸鱼主体与下方居中的 Windows / 双向独立箭头 / Linux 图案。更换图片后运行 `npm run icons:generate`，一并更新桌面 PNG、多分辨率 Windows ICO 和安装器 BMP；启动页、设置页与标题栏共用这张源图。DeepSeek、Windows 和 Linux 标识属于各自权利人，本启动器并非其官方桌面客户端。
+
 ## GitHub Actions 构建（推荐）
 
 [Windows build 工作流](<.github/workflows/windows-build.yml>)仅在推送 `v*` 版本标签时运行。普通分支推送、PR 和手动触发均不启动工作流；日常开发请在本地运行测试。

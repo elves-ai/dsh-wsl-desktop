@@ -1,6 +1,6 @@
 {
   "name": "dsh-wsl-desktop",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "private": true,
   "license": "MIT",
   "author": "Evan Yang",
@@ -12,6 +12,7 @@
     "tauri": "tauri",
     "desktop:dev": "tauri dev",
     "desktop:build": "tauri build",
+    "icons:generate": "node scripts/icon-assets.mjs && npm run installer:assets",
     "installer:assets": "node scripts/installer-assets.mjs",
     "test": "node --test tests/*.test.mjs"
   },

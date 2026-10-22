@@ -21,7 +21,7 @@ body { user-select: none; }
   background: #202329;
 }
 .app-icon { display: grid; place-items: center; width: 36px; flex: 0 0 36px; color: #91aef3; }
-.app-icon svg { width: 21px; height: 21px; }
+.app-icon img { display: block; width: 24px; height: 24px; }
 .menus, .window-controls { display: flex; flex: 0 0 auto; }
 button {
   height: 37px;
@@ -57,6 +57,6 @@ button:disabled { color: #858b97; }
 .close-control:hover:not(:disabled) { background: #c42b36; color: #fff; }
 .close-control:active:not(:disabled) { background: #a8242e; }
 .titlebar[data-focused="false"] { background: #1c1f24; color: #858b97; }
-.titlebar[data-focused="false"] .app-icon { color: #78859f; }
+.titlebar[data-focused="false"] .app-icon { opacity: .7; }
 .titlebar[data-focused="false"] .window-title { color: #7f8795; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }

@@ -34,8 +34,8 @@ button, summary { -webkit-tap-highlight-color: transparent; }
 .startup { width: min(100%, 640px); min-height: 100vh; margin: 0 auto; padding: 34px 48px 23px; display: flex; flex-direction: column; }
 .startup-brand { display: flex; align-items: center; gap: 11px; font-size: 13px; font-weight: 550; color: #cbd3e1; }
 .startup-brand small { display: block; margin-top: 3px; font-size: 10px; font-weight: 400; color: #7e899b; letter-spacing: .3px; }
-.app-mark { width: 36px; height: 36px; border: 1px solid #3b4a66; border-radius: 10px; background: #222c3e; color: #adc6ff; display: grid; place-items: center; }
-.app-mark svg { width: 29px; height: 29px; }
+.app-mark { width: 36px; height: 36px; display: grid; place-items: center; }
+.app-mark img { display: block; width: 36px; height: 36px; }
 .startup-content { padding: 42px 0 32px; width: min(100%, 420px); margin: auto; }
 .startup-heading h1 { margin: 10px 0 9px; font-size: 28px; line-height: 1.4; letter-spacing: -.8px; font-weight: 600; }
 #status-message { color: #a2adbe; font-size: 12px; line-height: 1.9; min-height: 23px; }
@@ -80,7 +80,7 @@ button, summary { -webkit-tap-highlight-color: transparent; }
 .settings-brand { display: flex; gap: 9px; align-items: center; padding: 0 12px 30px; font-size: 15px; font-weight: 600; }
 .settings-brand small { display: block; margin-top: 4px; color: #7f8a9c; font-size: 10px; font-weight: 400; }
 .small-mark { display: grid; place-items: center; color: #aac3ff; width: 28px; height: 28px; }
-.small-mark svg { width: 28px; height: 28px; }
+.small-mark img { display: block; width: 28px; height: 28px; }
 .settings-sidebar nav { display: flex; flex-direction: column; gap: 5px; }
 .settings-nav { display: flex; align-items: center; gap: 11px; width: 100%; padding: 12px 11px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: #97a2b4; text-align: left; font-size: 12px; }
 .settings-nav:hover { background: #20252d; color: #d8dfeb; }

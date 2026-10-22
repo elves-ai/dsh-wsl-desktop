@@ -225,6 +225,8 @@ Windows installation/uninstallation wizards use Simplified Chinese without a lan
 
 Appearance and text are in [appearance.nsh](<src-tauri/installer/appearance.nsh>); bitmap sources are [sidebar.svg](<src-tauri/installer/sidebar.svg>) and [header.svg](<src-tauri/installer/header.svg>). After changing the source artwork, run `npm run installer:assets` and commit the two generated BMP images. Normal packaging uses the committed bitmaps without depending on system fonts or additional image tools. Changes appear only in newly built installers, not previously downloaded packages.
 
+The shared icon source is [app-icon.png](<app-icon.png>): the whale above a centered Windows / opposing arrows / Linux group. After replacing it, run `npm run icons:generate` and commit the generated desktop PNGs, multi-resolution Windows ICO, and installer BMPs. Startup, settings, and the title bar use the same source. DeepSeek, Windows, and Linux marks belong to their respective owners; this launcher is not an official desktop client from those organizations.
+
 ## GitHub Actions builds (recommended)
 
 The [Windows build workflow](<.github/workflows/windows-build.yml>) runs only when a `v*` version tag is pushed. Ordinary branch pushes, pull requests, and manual dispatch do not trigger it; run tests locally for everyday development.
