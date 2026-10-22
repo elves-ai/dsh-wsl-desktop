@@ -77,6 +77,14 @@ test('native update serializes with service/tray operations and preserves retry 
   assert.doesNotMatch(source, /cleanup_before_exit\(/);
 });
 
+test('native notifications explicitly request the Windows default sound', () => {
+  const source = read('src-tauri/src/desktop_notifications.rs');
+  const send = source.slice(source.indexOf('fn send('), source.indexOf('fn now_ms('));
+  assert.ok(send.includes('.sound("Default")'));
+  assert.ok(send.indexOf('.sound("Default")') < send.indexOf('.show()'));
+  assert.doesNotMatch(send, /PlaySound|SoundPlayer|Notification[.]Looping/);
+});
+
 test('notification commands stay local, fixed-purpose and independent of DSH IPC', () => {
   const source = read('src-tauri/src/desktop_notifications.rs');
   const capability = JSON.parse(read('src-tauri/capabilities/launcher.json'));

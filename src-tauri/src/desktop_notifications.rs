@@ -194,6 +194,9 @@ fn send(app: &tauri::AppHandle, title: &str, body: &str) -> Result<(), String> {
         .builder()
         .title(title)
         .body(body)
+        // The Windows backend maps an omitted sound to <audio silent="true" />.
+        // Request the OS default without bypassing system mute/notification settings.
+        .sound("Default")
         .show()
         .map_err(|_| "无法提交系统通知，请在 Windows 安装版中重试，并检查系统通知设置。".into())
 }
