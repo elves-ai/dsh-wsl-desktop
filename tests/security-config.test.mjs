@@ -65,5 +65,7 @@ test('local builds explicitly avoid production updater signing secrets', () => {
   assert.deepEqual(local, { bundle: { createUpdaterArtifacts: false } });
   const script = read('scripts/Build-Windows.ps1');
   assert.match(script, /--config src-tauri\/tauri.local-build.conf.json/);
-  assert.ok(read('.gitignore').split('\n').includes('.tools/'));
+  for (const contents of [read('.gitignore'), '.tools/\r\nnode_modules/\r\n', '.tools/\nnode_modules/\n']) {
+    assert.ok(contents.split(/\r?\n/).includes('.tools/'));
+  }
 });

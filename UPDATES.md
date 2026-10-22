@@ -8,7 +8,7 @@
 - 检查失败可重试；下载或签名验证失败不会执行安装器，需重新检查后再试。不提供静默强制更新、自动降级、预发布通道或镜像。
 - 使用系统网络/代理与 Windows 系统证书，不关闭 TLS 校验。GitHub 不可达时不能更新，但不影响本机服务控制。
 
-**v0.1.0 没有内置更新功能**，需手动安装 v0.1.1 或更新版本。v0.1.1 起支持应用内更新。已经公开的旧 Release 不会被覆盖；更新源暂时不可用时可重试或手动下载。
+**v0.1.0 没有内置更新功能**，需手动安装 v0.1.2 或更新版本。v0.1.2 起正式提供应用内更新；v0.1.1 标签因 Windows 测试失败未发布，保留该标签以便审计。已经公开的旧 Release 不会被覆盖；更新源暂时不可用时可重试或手动下载。
 
 更新使用 NSIS 安装包，不是便携 EXE 的原地替换机制。独立 EXE 用户建议先运行安装包，以后从已安装的应用启动；旧下载目录中的 EXE 不会因此自动变成新版。
 
@@ -35,8 +35,8 @@ https://github.com/elves-ai/dsh-wsl-desktop/releases/latest/download/latest.json
 
 ## 后续版本发布
 
-1. 同步修改 [package.json](<package.json>)、[package-lock.json](<package-lock.json>)、[Cargo.toml](<src-tauri/Cargo.toml>)、[tauri.conf.json](<src-tauri/tauri.conf.json>) 中的版本并提交，例如 0.1.2。
-2. 确认 Secrets 已设置后推送对应标签，例如 v0.1.2。已公开版本不可覆盖。
+1. 同步修改 [package.json](<package.json>)、[package-lock.json](<package-lock.json>)、[Cargo.toml](<src-tauri/Cargo.toml>)、[tauri.conf.json](<src-tauri/tauri.conf.json>) 中的版本并提交，例如 0.1.3。
+2. 确认 Secrets 已设置后推送对应标签，例如 v0.1.3。已公开版本不可覆盖。
 3. [Windows 工作流](<.github/workflows/windows-build.yml>)运行测试、构建 NSIS，并用更新私钥签名；缺少私钥时标签构建明确失败，不退回无签名发布。
 4. 发布前验证所有附件校验和、更新签名、公钥、签名绑定的版本和清单 URL。先上传草稿、核对完整附件，再公开 Release。
 5. 稳定版成为 GitHub latest，客户端下次启动或手动检查时可发现。预发布仅作为 Pre-release 发布，不替换正式更新源。
