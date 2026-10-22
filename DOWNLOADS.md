@@ -16,6 +16,6 @@ Unpack the downloaded artifact. Run the NSIS setup executable to install, or use
 
 **Current downloads are unsigned.** Windows SmartScreen may show an unknown-publisher or reputation warning. Verify the source commit, build status and checksum before deciding whether to run them; do not bypass a malware detection merely because a checksum matches.
 
-The project intends to apply for SignPath Foundation support. Approval has not been granted and no existing download is claimed to carry its signature. If the project is approved and signed builds become available, their attribution will be: “Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).” This conditional attribution is not evidence of present sponsorship or signing.
+An application for SignPath Foundation support was submitted on 2026-10-22 and is pending review. Approval has not been granted and no existing download is claimed to carry its signature. If the project is approved and signed builds become available, their attribution will be: “Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).” This conditional attribution is not evidence of present sponsorship or signing.
 
 Read the complete [code signing policy](<CODE_SIGNING.md>), [privacy policy](<PRIVACY.md>), and [MIT license](<LICENSE>). This project is maintained by Evan Yang as an individual; third-party components retain their own licenses and policies.

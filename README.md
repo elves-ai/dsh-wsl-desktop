@@ -8,7 +8,7 @@ Windows 原生 **Tauri 2 + WebView2** 启动器。DSH、Node、会话与项目�
 
 - [下载与安装说明](<DOWNLOADS.md>)
 - [隐私说明](<PRIVACY.md>)
-- [Code signing policy](<CODE_SIGNING.md>)：当前构建未签名，正在准备申请 SignPath Foundation 支持，尚未获得批准。
+- [Code signing policy](<CODE_SIGNING.md>)：当前构建未签名；已于 2026-10-22 提交 SignPath Foundation 申请，等待审核，尚未获得批准。
 
 ## 第一版
 

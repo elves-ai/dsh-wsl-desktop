@@ -4,7 +4,7 @@ Last updated: 2026-10-22
 
 ## Current status: unsigned
 
-DSH WSL Desktop is preparing an application to [SignPath Foundation](https://signpath.org/). No approval, certificate, signing subscription, or active sponsorship is claimed. Current published Windows builds are **unsigned** and can trigger Windows SmartScreen warnings. The MIT source-code license does not establish trust in an executable or imply approval by a signing service.
+An application for DSH WSL Desktop was submitted to [SignPath Foundation](https://signpath.org/) on 2026-10-22 and is pending review. No approval, certificate, signing subscription, or active sponsorship is claimed. Current published Windows builds are **unsigned** and can trigger Windows SmartScreen warnings. The MIT source-code license does not establish trust in an executable or imply approval by a signing service.
 
 The current GitHub Actions workflow tests and builds Windows binaries, creates an NSIS installer, and uploads artifacts and SHA256 checksums. It does not contain a signing key or perform signing. A checksum detects changes relative to the published checksum; it is not a substitute for a trusted signature.
 
