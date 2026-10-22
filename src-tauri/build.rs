@@ -3,6 +3,7 @@ fn main() {
         tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
             tauri_build::AppManifest::new().commands(&[
                 "get_snapshot",
+                "open_settings",
                 "perform_action",
                 "set_project_directory",
                 "get_update_snapshot",

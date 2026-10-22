@@ -7,5 +7,6 @@ pub mod notification_transport;
 pub mod notifications;
 pub mod protocol;
 pub mod update;
+pub mod user_attention;
 #[cfg(windows)]
 pub use desktop::run;

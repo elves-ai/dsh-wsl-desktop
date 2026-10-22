@@ -5,6 +5,7 @@
   "local": true,
   "webviews": [
     "launcher-titlebar",
+    "settings-titlebar",
     "dsh-titlebar"
   ],
   "permissions": [

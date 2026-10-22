@@ -1,15 +1,17 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "launcher",
-  "description": "Only the bundled local launcher page receives IPC. The DSH webview has no capabilities.",
+  "description": "Only bundled local launcher and settings content receive service, settings and updater IPC. The DSH webview has no capabilities.",
   "local": true,
   "webviews": [
-    "launcher"
+    "launcher",
+    "settings"
   ],
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "allow-get-snapshot",
+    "allow-open-settings",
     "allow-perform-action",
     "allow-set-project-directory",
     "allow-get-update-snapshot",

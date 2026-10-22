@@ -18,23 +18,39 @@ pub(super) struct Menus {
 impl Menus {
     pub(super) fn new(app: &tauri::AppHandle) -> tauri::Result<Self> {
         let open = MenuItem::with_id(app, "open", "打开 DSH", true, None::<&str>)?;
-        let logs = MenuItem::with_id(app, "logs", "状态与操作日志", true, None::<&str>)?;
+        let start = MenuItem::with_id(app, "start", "启动服务", true, None::<&str>)?;
+        let stop = MenuItem::with_id(app, "stop", "停止服务…", true, None::<&str>)?;
+        let restart = MenuItem::with_id(app, "restart", "重启服务…", true, None::<&str>)?;
         let separator = PredefinedMenuItem::separator(app)?;
+        let exit_separator = PredefinedMenuItem::separator(app)?;
         let quit = MenuItem::with_id(app, "quit", "仅退出启动器（保留服务）", true, None::<&str>)?;
         let exit = MenuItem::with_id(app, "exit", "停止服务并退出…", true, None::<&str>)?;
-        let file = Menu::with_items(app, &[&open, &logs, &separator, &quit, &exit])?;
+        let file = Menu::with_items(
+            app,
+            &[
+                &open,
+                &separator,
+                &start,
+                &stop,
+                &restart,
+                &exit_separator,
+                &quit,
+                &exit,
+            ],
+        )?;
         let environment = MenuItem::with_id(
             app,
             "environment",
-            "运行环境 / DSH 目录…",
+            "运行环境与项目目录…",
             true,
             None::<&str>,
         )?;
         let notifications =
             MenuItem::with_id(app, "notifications", "系统通知设置…", true, None::<&str>)?;
-        let settings = Menu::with_items(app, &[&environment, &notifications])?;
         let update = MenuItem::with_id(app, "updates", "检查启动器更新…", true, None::<&str>)?;
-        let help = Menu::with_items(app, &[&update])?;
+        let settings = Menu::with_items(app, &[&environment, &notifications, &update])?;
+        let logs = MenuItem::with_id(app, "logs", "诊断日志…", true, None::<&str>)?;
+        let help = Menu::with_items(app, &[&logs])?;
         Ok(Self {
             file,
             settings,
@@ -76,7 +92,9 @@ fn assert_titlebar(view: &Webview) -> Result<Window, String> {
     let pair = (view.label(), window.label());
     if !matches!(
         pair,
-        ("launcher-titlebar", "launcher") | ("dsh-titlebar", "dsh")
+        ("launcher-titlebar", "launcher")
+            | ("settings-titlebar", "settings")
+            | ("dsh-titlebar", "dsh")
     ) || !view.url().ok().is_some_and(|url| local_titlebar(&url))
     {
         return Err("此页面无权操作窗口标题栏。".into());
@@ -195,7 +213,7 @@ fn layout(window: &Window) -> tauri::Result<()> {
 }
 
 pub(super) fn on_window_event(window: &Window, event: &WindowEvent) {
-    if !matches!(window.label(), "launcher" | "dsh") {
+    if !matches!(window.label(), "launcher" | "settings" | "dsh") {
         return;
     }
     if matches!(

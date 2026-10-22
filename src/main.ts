@@ -54,73 +54,47 @@ const native = isTauri();
 const app = document.querySelector<HTMLDivElement>('#app');
 if (!app) throw new Error('缺少应用挂载节点');
 
-// Only this fixed, developer-owned template uses innerHTML. Native data is text only.
-app.innerHTML = `
-  <main class="launcher">
-    <header class="header">
-      <div class="brand"><span class="brand-mark" aria-hidden="true">D<span></span></span><div><h1>DSH <span>/ WSL Desktop</span></h1><p>本地工作空间，从这里开始。</p></div></div>
-      <span class="environment" id="environment">本地控制</span>
-    </header>
-
-    <section class="preview-note" id="preview-note" hidden role="note">浏览器演示模式 · 仅预览界面，不会连接或操作本地服务。</section>
-
-    <section class="environment-panel" id="environment-panel" aria-labelledby="environment-heading">
-      <div class="section-heading"><h2 id="environment-heading">运行环境检查</h2><span id="environment-summary" role="status" aria-live="polite">正在检测</span></div>
-      <p class="environment-intro">仅检测，不自动安装或克隆。全部通过后自动进入 DSH。</p>
-      <ul class="environment-list" aria-label="环境检查结果">
-        ${environmentItems.map(([id, label]) => `<li class="environment-item" id="check-${id}" data-status="pending"><div class="check-heading"><span>${label}</span><span class="check-state" id="check-${id}-state">等待检测</span></div><p class="check-message" id="check-${id}-message">等待检测</p><p class="check-hint" id="check-${id}-hint" hidden></p></li>`).join('')}
-      </ul>
-      <div class="repository-settings">
-        <label for="repository-input">DSH 项目目录</label>
-        <p id="repository-help">填写 WSL 内的绝对路径，例如 /home/你的用户名/deepseek-harness，不是 Windows 路径。仅修改现有 WSL 服务配置中的项目目录。</p>
-        <input id="repository-input" type="text" placeholder="/home/用户名/deepseek-harness" autocomplete="off" spellcheck="false" maxlength="4096" aria-describedby="repository-help repository-notice" disabled>
-        <p id="repository-notice" role="status" aria-live="polite">等待配置检查。</p>
-        <button class="button secondary" id="save-repository" type="button" disabled>保存目录并重新检测</button>
-      </div>
-      <p class="config-location" id="config-location" hidden></p>
-      <div class="error-notice" id="environment-error" hidden role="alert"></div>
-      <button class="button primary" id="check" type="button" disabled>重新检测</button>
+const parameters = new URL(window.location.href).searchParams;
+const settingsView = parameters.get('view') === 'settings';
+const settingsSections = ['environment', 'notifications', 'updates', 'logs'] as const;
+type SettingsSection = typeof settingsSections[number];
+let settingsSection: SettingsSection = settingsSections.find(section => section === parameters.get('section')) || 'environment';
+const mark = '<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M7 7h8a9 9 0 0 1 0 18H7V7Zm6 5v8h2a4 4 0 0 0 0-8h-2Z" fill="currentColor"/><path d="M24 22h3v3h-3z" fill="currentColor"/></svg>';
+// Templates contain only developer-owned markup. All native values use textContent/value.
+app.innerHTML = settingsView ? `
+<main class="settings-shell" id="settings-shell">
+  <aside class="settings-sidebar"><div class="settings-brand"><span class="small-mark">${mark}</span><span>DSH<small>应用设置</small></span></div><nav aria-label="设置分类">${settingsSections.map((section,index) => `<button class="settings-nav" id="nav-${section}" type="button"><span class="nav-index" aria-hidden="true">0${index+1}</span>${['环境与目录','系统通知','软件更新','诊断日志'][index]}</button>`).join('')}</nav><p class="settings-sidebar-note">设置保存在本机<br>不会上传到维护者</p></aside>
+  <div class="settings-content">
+    <header class="settings-heading"><p class="eyebrow">应用设置</p><h1 id="settings-title" tabindex="-1">环境与目录</h1><p id="settings-description">指定已有的 DSH 项目，查看本地运行配置。</p></header>
+    <div class="error-notice" id="error-notice" role="alert" hidden></div>
+    <section id="settings-environment" aria-label="环境与目录">
+      <div class="setting-group"><h2>DSH 项目目录</h2><p id="repository-help">填写 WSL 内的绝对路径，不是 Windows 路径。</p><label class="visually-hidden" for="repository-input">DSH 项目目录</label><input id="repository-input" type="text" placeholder="/home/用户名/deepseek-harness" autocomplete="off" spellcheck="false" maxlength="4096" aria-describedby="repository-help repository-notice" disabled><p class="setting-help" id="repository-notice" role="status" aria-live="polite">正在读取配置。</p><button class="button primary" id="save-repository" type="button" disabled>保存并重新检测</button></div>
+      <div class="setting-group"><div class="group-heading"><h2>运行环境</h2><span id="status-label" class="muted">读取中</span></div><dl class="connection-info"><div><dt>服务地址</dt><dd><code id="origin">尚未连接</code></dd></div><div><dt>进程归属</dt><dd id="ownership">等待检查</dd></div><div><dt>启动配置</dt><dd id="config-location">尚未读取</dd></div></dl><p class="setting-help" id="ownership-hint">仅管理由启动器托管的服务。</p><button class="button secondary" id="check" type="button" disabled>重新检测并进入 DSH</button></div>
+      <p class="setting-help">不自动安装软件、克隆项目或安装依赖。修改目录前，请通过“文件”菜单停止服务。</p>
     </section>
-
-    <section class="status-card" id="service-card" aria-labelledby="service-heading">
-      <div class="section-heading"><h2 id="service-heading">WSL 服务</h2><span class="status-badge" id="status-badge"><span class="status-dot" aria-hidden="true"></span><span id="status-label">正在连接</span></span></div>
-      <div class="status-body" role="status" aria-live="polite" aria-atomic="true">
-        <div class="service-symbol" aria-hidden="true"><span></span><span></span><span></span></div>
-        <div class="status-copy"><p class="eyebrow">DEEPSEEK HARNESS</p><h3 id="status-title">正在读取服务状态</h3><p id="status-message">正在与本地启动器建立连接，请稍候。</p></div>
-      </div>
-      <div class="phase-row"><span class="phase-indicator" aria-hidden="true"></span><span class="field-label">当前阶段</span><span id="phase">连接启动器</span><span class="busy-label" id="busy-label" hidden>处理中</span></div>
-      <div class="error-notice" id="error-notice" hidden role="alert"></div>
-      <button class="button primary open-button" type="button" id="open" disabled><span>打开 DSH</span><span aria-hidden="true">↗</span></button>
-      <p class="open-hint">在独立的 DSH 窗口中继续工作</p>
-      <div class="service-actions" aria-label="服务操作"><button class="button secondary" id="start" type="button" disabled>启动服务</button><button class="button secondary" id="stop" type="button" disabled>停止</button><button class="button secondary" id="restart" type="button" disabled>重启</button></div>
-    </section>
-
-    <section class="connection-card" id="connection-card" aria-label="连接信息">
-      <div><span class="field-label">服务地址</span><code id="origin">尚未连接</code></div>
-      <div><span class="field-label">进程归属</span><span class="ownership" id="ownership">等待检查</span></div>
-      <p id="ownership-hint">只有由本启动器管理的服务才能停止或重启。</p>
-    </section>
-
-    <section class="notification-panel" id="notification-panel" aria-labelledby="notification-heading">
-      <div class="notification-controls"><h2 id="notification-heading">系统通知</h2><label class="notification-toggle"><input id="notifications-enabled" type="checkbox" aria-describedby="notification-hint" disabled>启用系统通知</label><button class="button secondary" id="test-notification" type="button" disabled>测试通知</button></div>
-      <p id="notification-message" role="status" aria-live="polite" aria-atomic="true">未启用系统通知。</p>
-      <p class="notification-hint" id="notification-hint">默认关闭，需主动开启。仅在 DSH 处于后台时提醒；本轮结束不等于整个长任务目标完成。通知不显示正文；退出启动器后不再提醒。</p>
-      <p class="notification-hint">测试通知提交成功不保证显示横幅，Windows 勿扰模式可能屏蔽通知。</p>
-    </section>
-
-    <details class="update-panel" id="updates-panel"><summary><span>启动器更新</span><span class="update-version" id="update-current-version">正在读取版本</span></summary><div class="update-content">
-      <p class="update-new-version" id="update-new-version" hidden></p>
-      <p id="update-message" role="status" aria-live="polite" tabindex="-1">正在读取更新状态。</p>
-      <pre id="update-notes" aria-label="更新说明" hidden></pre>
-      <div id="update-progress-row" hidden><progress id="update-progress" aria-label="更新下载进度"></progress><span id="update-progress-label"></span></div>
-      <div class="update-actions"><button class="button secondary" type="button" id="check-update" disabled>检查更新</button><button class="button primary" type="button" id="install-update" hidden disabled>下载并安装</button></div>
-      <p class="update-hint">仅更新 Windows 启动器，不会更新或停止 WSL 服务；安装前会请求系统确认。</p>
-    </div></details>
-
-    <details class="logs-panel" id="logs-panel"><summary><span><span class="log-symbol" aria-hidden="true">≡</span>操作日志 <span class="log-count" id="log-count">0</span></span><span class="log-summary-hint">脱敏显示 <span class="chevron" aria-hidden="true">⌄</span></span></summary><div class="logs-content"><div class="logs-toolbar"><span>仅显示本地启动与控制记录</span><button class="text-button" id="logs" type="button" disabled>刷新日志</button></div><pre id="log-output" tabindex="0" aria-label="脱敏操作日志">暂无操作日志</pre></div></details>
-
-    <footer class="footer"><div class="background-note"><span aria-hidden="true">◌</span><p>关闭窗口后，服务仍可在后台运行。<br><span>需要停止服务时，请选择“停止”或“停止并退出”。</span></p></div><div class="exit-actions"><button class="text-button" id="show-environment" type="button">运行环境 / DSH 目录</button><button class="text-button" type="button" id="quit" disabled>退出启动器</button><span aria-hidden="true">/</span><button class="text-button danger" type="button" id="exit" disabled>停止并退出</button></div></footer>
-  </main>
+    <section id="settings-notifications" aria-label="系统通知" hidden><div class="setting-group"><div class="toggle-row"><div><h2>后台任务通知</h2><p>DSH 不在前台时，提醒任务结束、失败，以及需要你选择、回答或确认计划。</p></div><label class="switch"><input id="notifications-enabled" type="checkbox" aria-label="启用系统通知" disabled><span></span></label></div><p id="notification-message" class="setting-help" role="status" aria-live="polite">正在读取通知设置。</p><button class="button secondary" id="test-notification" type="button" disabled>发送测试通知</button></div><p class="setting-help">默认关闭。通知不显示任务正文；本轮结束不代表整个长任务完成。退出启动器后不再提醒。</p><p class="setting-help">若未看到横幅，请检查 Windows 通知权限及勿扰模式。</p></section>
+    <section id="settings-updates" aria-label="软件更新" hidden><div class="setting-group"><div class="group-heading"><h2>DSH WSL Desktop</h2><span id="update-current-version" class="muted">正在读取版本</span></div><p id="update-new-version" hidden></p><p id="update-message" role="status" aria-live="polite" tabindex="-1">正在读取更新状态。</p><pre id="update-notes" aria-label="更新说明" hidden></pre><div id="update-progress-row" hidden><progress id="update-progress" aria-label="更新下载进度"></progress><span id="update-progress-label"></span></div><div class="setting-actions"><button class="button secondary" id="check-update" type="button" disabled>检查更新</button><button class="button primary" id="install-update" type="button" hidden disabled>下载并安装</button></div></div><p class="setting-help">仅更新 Windows 启动器，不会更新或停止 WSL 中的 DSH。安装前需要你确认。</p></section>
+    <section id="settings-logs" aria-label="诊断日志" hidden><div class="group-heading"><h2>启动与服务操作</h2><button class="text-button" id="logs" type="button" disabled>刷新</button></div><p class="setting-help">只显示启动器的脱敏记录，不包含 DSH 对话内容。</p><pre id="log-output" tabindex="0" aria-label="脱敏操作日志">暂无操作日志</pre></section>
+    <p class="settings-preview" id="settings-preview" hidden>浏览器预览 · 不会连接或操作本地服务</p>
+  </div>
+</main>
+` : `
+<main class="startup" id="startup-shell">
+  <header class="startup-brand"><div class="app-mark">${mark}</div><span>DeepSeek Harness<small>WSL Desktop</small></span></header>
+  <section class="startup-content" aria-labelledby="status-title">
+    <div class="startup-heading"><span class="eyebrow">启动工作空间</span><h1 id="status-title">正在启动 DSH</h1><p id="status-message" role="status" aria-live="polite">正在检查本地运行环境，请稍候。</p></div>
+    <ol class="startup-steps" aria-label="启动进度">
+      <li id="stage-environment" data-state="active"><span class="step-marker" id="stage-environment-mark" aria-hidden="true"></span><span>检查运行环境</span><span class="step-status" id="stage-environment-state">正在检测</span></li>
+      <li id="stage-service" data-state="pending"><span class="step-marker" id="stage-service-mark" aria-hidden="true"></span><span>准备本地服务</span><span class="step-status" id="stage-service-state">等待中</span></li>
+      <li id="stage-window" data-state="pending"><span class="step-marker" id="stage-window-mark" aria-hidden="true"></span><span>打开 DSH</span><span class="step-status" id="stage-window-state">等待中</span></li>
+    </ol>
+    <div class="startup-progress" id="startup-progress" role="progressbar" aria-label="正在启动，无需手动操作"><span></span></div>
+    <div class="error-notice" id="error-notice" role="alert" hidden></div>
+    <details class="check-details" id="environment-panel"><summary><span>环境检查</span><span id="environment-summary">11 项</span></summary><ul class="environment-list" aria-label="环境检查结果">${environmentItems.map(([id,label]) => `<li class="environment-item" id="check-${id}" data-status="pending"><div class="check-heading"><span>${label}</span><span class="check-state" id="check-${id}-state">待检测</span></div><p class="check-message" id="check-${id}-message" hidden></p><p class="check-hint" id="check-${id}-hint" hidden></p></li>`).join('')}</ul></details>
+    <div class="startup-actions" id="startup-actions" hidden><button class="button primary" id="check" type="button" disabled>重新检测</button><button class="button secondary" id="open-settings" type="button">打开设置</button><button class="button primary" id="open" type="button" hidden disabled>打开 DSH</button></div>
+  </section>
+  <footer class="startup-footer"><span id="preview-note">本地运行 · 不自动安装</span><span id="phase">准备启动</span></footer>
+</main>
 `;
 
 function element<T extends HTMLElement = HTMLElement>(id: string): T {
@@ -128,15 +102,15 @@ function element<T extends HTMLElement = HTMLElement>(id: string): T {
   if (!node) throw new Error('缺少界面节点：' + id);
   return node as T;
 }
-const actions: Action[] = ['check', 'open', 'start', 'stop', 'restart', 'logs', 'quit', 'exit'];
-const buttons = Object.fromEntries(actions.map(action => [action, element<HTMLButtonElement>(action)])) as Record<Action, HTMLButtonElement>;
+const actions: Action[] = settingsView ? ['check', 'logs'] : ['check', 'open'];
+const buttons = Object.fromEntries(actions.map(action => [action, element<HTMLButtonElement>(action)])) as Partial<Record<Action, HTMLButtonElement>>;
 let snapshot: Snapshot = { state: 'unknown', phase: '连接启动器', message: '正在与本地启动器建立连接，请稍候。', busy: true, managed: false, origin: '', last_error: null, logs: [], environment: pendingEnvironment(), environment_checking: true, config_path: '' };
 let pending = false;
 let repositoryPending = false;
 let repositoryDirty = false;
-let showEnvironment = false;
-const repositoryInput = element<HTMLInputElement>('repository-input');
-const saveRepositoryButton = element<HTMLButtonElement>('save-repository');
+let settingsRequestPending = false;
+const repositoryInput = document.getElementById('repository-input') as HTMLInputElement;
+const saveRepositoryButton = document.getElementById('save-repository') as HTMLButtonElement;
 let connected = false;
 let localError = '';
 let eventRevision = 0;
@@ -150,10 +124,10 @@ let updateConnected = false;
 let updatePending: 'check_update' | 'install_update' | null = null;
 let updateError = '';
 let updateRevision = 0;
-const checkUpdateButton = element<HTMLButtonElement>('check-update');
-const installUpdateButton = element<HTMLButtonElement>('install-update');
-const notificationsEnabled = element<HTMLInputElement>('notifications-enabled');
-const testNotificationButton = element<HTMLButtonElement>('test-notification');
+const checkUpdateButton = document.getElementById('check-update') as HTMLButtonElement;
+const installUpdateButton = document.getElementById('install-update') as HTMLButtonElement;
+const notificationsEnabled = document.getElementById('notifications-enabled') as HTMLInputElement;
+const testNotificationButton = document.getElementById('test-notification') as HTMLButtonElement;
 let notificationSnapshot: NotificationSnapshot = { enabled: false, phase: 'disabled', message: '未启用系统通知。' };
 let notificationPending = false;
 let notificationRevision = 0;
@@ -165,14 +139,6 @@ let notificationsDisposed = false;
 function updateLocksService(): boolean {
   return updatePending === 'install_update' || ['downloading', 'installing'].includes(updateSnapshot.phase);
 }
-
-const states: Record<string, { label: string; title: string }> = {
-  stopped: { label: '未运行', title: '工作空间尚未启动' },
-  starting: { label: '启动中', title: '正在准备你的工作空间' },
-  ready: { label: '运行中', title: '工作空间已就绪' },
-  error: { label: '启动异常', title: '服务需要处理' },
-  unknown: { label: '待检查', title: '暂时无法确认服务状态' },
-};
 
 // Defense in depth: Rust owns redaction; do not expose common credential forms in UI.
 function redact(value: string): string {
@@ -191,83 +157,85 @@ function safeOrigin(origin: string): string {
   } catch { return '地址不可用'; }
 }
 
+function environmentPassed(): boolean {
+  return environmentItems.every(([id]) => snapshot.environment.checks.some(item => item.id === id && item.status === 'passed'));
+}
 function render(): void {
-  const knownState = Object.prototype.hasOwnProperty.call(states, snapshot.state) ? snapshot.state : 'unknown';
-  const status = states[knownState] ?? { label: '待检查', title: '暂时无法确认服务状态' };
   const busy = snapshot.busy || pending || repositoryPending;
   const disabled = !native || !connected || busy || updateLocksService();
-  const ready = snapshot.state === 'ready';
-  const running = ready || snapshot.state === 'starting';
-  element('status-badge').dataset.state = knownState;
-  element('status-label').textContent = connected ? status.label : '正在连接';
-  element('status-title').textContent = connected ? status.title : '正在读取服务状态';
-  element('status-message').textContent = redact(snapshot.message || '等待本地服务报告状态。');
-  element('phase').textContent = redact(snapshot.phase || '等待状态更新');
-  element('busy-label').hidden = !busy;
-  element('origin').textContent = safeOrigin(snapshot.origin);
-  element('ownership').textContent = snapshot.managed ? '由启动器管理' : ready ? '外部服务 · 只读管理' : '未托管';
-  element('ownership-hint').textContent = ready && !snapshot.managed ? '已发现现有服务，可以打开 DSH；本启动器不会停止或重启外部服务。' : '仅控制由当前或旧启动器托管的服务；外部实例不会被停止。';
+  const passed = environmentPassed();
   const error = redact(localError || snapshot.last_error || '');
-  element('error-notice').hidden = !error;
-  element('error-notice').textContent = error;
-  const environmentPassed = snapshot.environment.checks.length === environmentItems.length && snapshot.environment.checks.every(item => item.status === 'passed');
-  renderEnvironment(disabled, environmentPassed, running);
-  buttons.check.disabled = disabled;
-  buttons.check.textContent = snapshot.environment_checking ? '正在检测…' : '重新检测';
-  buttons.open.disabled = disabled || !environmentPassed;
-  buttons.start.disabled = disabled || !environmentPassed || running;
-  buttons.start.textContent = ['error', 'unknown'].includes(snapshot.state) ? '重试启动' : '启动服务';
-  buttons.stop.disabled = disabled || !snapshot.managed || snapshot.state === 'stopped';
-  buttons.restart.disabled = disabled || !snapshot.managed;
-  buttons.logs.disabled = disabled;
-  buttons.quit.disabled = disabled;
-  buttons.exit.disabled = disabled || (snapshot.state !== 'stopped' && !snapshot.managed);
-  buttons.stop.title = buttons.restart.title = snapshot.managed ? '操作前将显示系统确认对话框' : '不能控制非本启动器管理的服务';
-  buttons.quit.title = '仅退出启动器，不停止 WSL 服务';
-  buttons.exit.title = '由系统确认后停止服务并退出';
-  const output = element<HTMLPreElement>('log-output');
-  const atBottom = output.scrollHeight - output.scrollTop - output.clientHeight < 30;
-  const lines = snapshot.logs.map(line => redact(line));
-  output.textContent = lines.length ? lines.join('\n') : '暂无操作日志';
-  element('log-count').textContent = String(lines.length);
-  if (atBottom) output.scrollTop = output.scrollHeight;
+  if (settingsView) renderSettings(disabled, passed, error);
+  else renderStartup(disabled, passed, busy, error);
+  if (buttons.check) buttons.check.disabled = disabled;
+  if (buttons.open) buttons.open.disabled = disabled || !passed;
+  if (buttons.logs) buttons.logs.disabled = disabled;
   renderUpdate();
   renderNotifications();
 }
-
-function renderEnvironment(disabled: boolean, passed: boolean, running: boolean): void {
-  const report = snapshot.environment;
-  element('environment-panel').hidden = passed && !showEnvironment;
-  element('service-card').hidden = !passed;
-  element('connection-card').hidden = !passed;
-  element('notification-panel').hidden = !passed;
-  const errors = report.checks.filter(item => item.status === 'error').length;
-  element('environment-summary').textContent = snapshot.environment_checking ? '正在检测…' : passed ? '全部通过' : errors ? errors + ' 项需要处理' : '等待检测';
-  const statuses = { pending: '◌ 等待检测', passed: '✓ 已通过', error: '✕ 需要处理', skipped: '— 暂未检测' };
+function renderStartup(disabled: boolean, passed: boolean, busy: boolean, error: string): void {
+  const failed = !busy && !snapshot.environment_checking && (snapshot.state === 'error' || Boolean(error));
+  const idle = !busy && !snapshot.environment_checking;
+  const ready = snapshot.state === 'ready' && idle;
+  element('startup-shell').dataset.state = failed ? 'error' : ready ? 'ready' : 'starting';
+  element('status-title').textContent = failed ? '暂时无法启动' : ready ? 'DSH 已就绪' : snapshot.state === 'stopped' && idle ? '工作空间已停止' : passed ? '正在打开工作空间' : '正在启动 DSH';
+  const failures = snapshot.environment.checks.filter(item => item.status === 'error');
+  element('status-message').textContent = failed && failures.length ? '发现 ' + failures.length + ' 项环境问题，请处理后重新检测。' : failed ? '启动未能完成，请检查下方提示后重试。' : ready ? '环境检查通过，正在为你打开 DSH。' : snapshot.state === 'stopped' && idle ? '重新打开即可继续，原有配置和会话不会丢失。' : passed ? '运行环境已准备好，正在连接本地服务。' : '正在检查本地运行环境，就绪后自动进入。';
+  element('phase').textContent = redact(snapshot.phase || '准备启动');
+  const stageStates = [passed ? 'passed' : failed ? 'error' : 'active', !passed ? 'pending' : ready || snapshot.phase === '检查本机连接' || snapshot.phase === '打开工作窗口' ? 'passed' : failed ? 'error' : 'active', ready ? 'passed' : passed && !failed && (snapshot.phase === '检查本机连接' || snapshot.phase === '打开工作窗口') ? 'active' : 'pending'];
+  const stageLabels: Record<string, string> = { pending: '等待中', active: '进行中', passed: '已完成', error: '未通过' };
+  ['environment', 'service', 'window'].forEach((id,index) => {
+    const state = stageStates[index] || 'pending';
+    element('stage-' + id).dataset.state = state;
+    element('stage-' + id + '-state').textContent = stageLabels[state] || '等待中';
+    element('stage-' + id + '-mark').textContent = state === 'passed' ? '✓' : state === 'error' ? '!' : '';
+  });
+  const detail = localError ? error : failures.length ? failures.map(item => item.label + '：' + item.message + (item.hint ? '\n' + item.hint : '')).join('\n\n') : error;
+  element('error-notice').hidden = !failed;
+  element('error-notice').textContent = redact(detail);
+  element('startup-progress').hidden = idle || failed;
+  element('startup-actions').hidden = !idle && !failed;
+  element('open-settings').hidden = !failed;
+  element<HTMLButtonElement>('open-settings').disabled = settingsRequestPending;
+  element('open').hidden = !passed || failed;
+  element('check').hidden = !failed && passed;
+  if (buttons.check) buttons.check.textContent = '重新检测';
+  element('environment-summary').textContent = snapshot.environment_checking ? '检测中' : failures.length ? failures.length + ' 项需处理' : passed ? '全部通过' : '等待检测';
+  const statuses = { pending: '待检测', passed: '已通过', error: '需处理', skipped: '等待前置项' };
   for (const [id] of environmentItems) {
-    const item = report.checks.find(check => check.id === id);
+    const item = snapshot.environment.checks.find(check => check.id === id);
     const status = item && Object.prototype.hasOwnProperty.call(statuses, item.status) ? item.status : 'pending';
     element('check-' + id).dataset.status = status;
     element('check-' + id + '-state').textContent = statuses[status];
-    element('check-' + id + '-message').textContent = redact(item?.message || '等待检测');
+    element('check-' + id + '-message').textContent = redact(item?.message || '');
+    element('check-' + id + '-message').hidden = status !== 'error';
     element('check-' + id + '-hint').textContent = redact(item?.hint || '');
-    element('check-' + id + '-hint').hidden = !item?.hint || status === 'passed';
+    element('check-' + id + '-hint').hidden = true; // Actionable hints are already in the error summary.
   }
-  if (!repositoryDirty) repositoryInput.value = report.repository || '';
-  const canConfigure = ['config', 'distribution', 'user', 'python'].every(id => report.checks.some(item => item.id === id && item.status === 'passed'));
+}
+function renderSettings(disabled: boolean, passed: boolean, error: string): void {
+  element('error-notice').hidden = !error;
+  element('error-notice').textContent = error;
+  const running = snapshot.state === 'ready' || snapshot.state === 'starting';
+  if (!repositoryDirty) repositoryInput.value = snapshot.environment.repository || '';
+  const canConfigure = ['config', 'distribution', 'user', 'python'].every(id => snapshot.environment.checks.some(item => item.id === id && item.status === 'passed'));
   repositoryInput.disabled = disabled || !canConfigure || running;
   const path = repositoryInput.value.trim();
-  const valid = path.startsWith('/') && path.length <= 4096 && !/[\u0000-\u001f\u007f]/.test(path);
+  const valid = path.startsWith('/') && !path.startsWith('//') && path.length <= 4096 && !/[\u0000-\u001f\u007f]/.test(path);
   saveRepositoryButton.disabled = repositoryInput.disabled || !valid || !repositoryDirty;
-  element('repository-notice').textContent = repositoryPending ? '正在保存并重新检测…' : running ? '如需修改目录，请先停止服务；不会自动停止或重启现有服务。' : !canConfigure ? '请先处理启动器配置、WSL 和 Python 的检查项，再配置项目目录。' : repositoryDirty && !valid ? '请输入 WSL 内的绝对路径，不能使用 Windows 路径或控制字符。' : '保存时会验证项目目录；不会克隆项目或安装依赖。';
-  element('config-location').hidden = !snapshot.config_path;
-  element('config-location').textContent = '启动器配置：' + redact(snapshot.config_path);
-  const error = redact(localError || snapshot.last_error || '');
-  element('environment-error').hidden = !error || (passed && !showEnvironment);
-  element('environment-error').textContent = error;
+  element('repository-notice').textContent = repositoryPending ? '正在保存并重新检测…' : running ? '修改目录前，请先通过“文件”菜单停止服务。' : !canConfigure ? '请先准备好 WSL、启动器配置和 Python，再设置项目目录。' : repositoryDirty && !valid ? '请输入有效的 WSL 绝对路径，不能包含控制字符。' : '仅保存到现有服务配置；不会克隆项目或安装依赖。';
+  element('status-label').textContent = snapshot.environment_checking ? '检测中' : passed ? '检查通过' : '需要检查';
+  element('origin').textContent = safeOrigin(snapshot.origin);
+  element('ownership').textContent = snapshot.managed ? '由启动器管理' : snapshot.state === 'ready' ? '外部服务' : '未托管';
+  element('ownership-hint').textContent = snapshot.state === 'ready' && !snapshot.managed ? '外部服务不会被自动停止或重启。' : '服务操作位于“文件”菜单；停止或重启前会再次确认。';
+  element('config-location').textContent = redact(snapshot.config_path || '尚未读取');
+  const output = element('log-output');
+  const atBottom = output.scrollHeight - output.scrollTop - output.clientHeight < 30;
+  output.textContent = snapshot.logs.length ? snapshot.logs.map(redact).join('\n') : '暂无操作日志';
+  if (atBottom) output.scrollTop = output.scrollHeight;
 }
-
 function renderUpdate(): void {
+  if (!settingsView) return;
   const update = updateSnapshot;
   const busy = update.busy || updatePending !== null || ['checking', 'downloading', 'installing'].includes(update.phase);
   const available = Boolean(update.version) && update.phase === 'available';
@@ -297,6 +265,7 @@ function renderUpdate(): void {
 }
 
 function renderNotifications(): void {
+  if (!settingsView) return;
   const state = notificationSnapshot;
   const labels = { disabled: '未启用', connecting: '连接中', listening: '正在检查', error: '通知异常' };
   notificationsEnabled.checked = state.enabled;
@@ -352,18 +321,9 @@ async function performNotification(command: 'get_notification_snapshot' | 'set_n
   }
 }
 
-notificationsEnabled.addEventListener('change', () => { void performNotification('set_notifications_enabled', notificationsEnabled.checked); });
-testNotificationButton.addEventListener('click', () => { void performNotification('test_notification'); });
-
 function formatBytes(bytes: number): string {
   const safe = Math.max(0, bytes);
   return safe < 1024 * 1024 ? (safe / 1024).toFixed(1) + ' KB' : (safe / (1024 * 1024)).toFixed(1) + ' MB';
-}
-
-function showUpdates(): void {
-  element<HTMLDetailsElement>('updates-panel').open = true;
-  element('update-message').focus({ preventScroll: true });
-  element('updates-panel').scrollIntoView({ block: 'nearest' });
 }
 
 async function performUpdate(command: 'check_update' | 'install_update'): Promise<void> {
@@ -385,50 +345,43 @@ async function performUpdate(command: 'check_update' | 'install_update'): Promis
   }
 }
 
-function showSettings(section: string): void {
-  if (section === 'environment') {
-    showEnvironment = true;
-    render();
-    element('environment-panel').scrollIntoView({ block: 'start' });
-    repositoryInput.focus({ preventScroll: true });
-  } else if (section === 'notifications') {
-    element('notification-panel').scrollIntoView({ block: 'start' });
-    notificationsEnabled.focus({ preventScroll: true });
+function selectSettings(section: string, focus = false): void {
+  if (!settingsView) return;
+  const selected = settingsSections.find(item => item === section);
+  if (!selected) return;
+  settingsSection = selected;
+  const index = settingsSections.indexOf(selected);
+  element('settings-title').textContent = ['环境与目录', '系统通知', '软件更新', '诊断日志'][index] || '';
+  element('settings-description').textContent = ['指定已有的 DSH 项目，查看本地运行配置。', '管理后台任务的系统提醒。', '检查并安装 Windows 启动器的新版本。', '查看本次启动和服务操作的脱敏记录。'][index] || '';
+  for (const item of settingsSections) {
+    element('settings-' + item).hidden = item !== selected;
+    element('nav-' + item).dataset.active = String(item === selected);
+    element('nav-' + item).setAttribute('aria-current', item === selected ? 'page' : 'false');
   }
+  if (focus) element('settings-title').focus({ preventScroll: true });
 }
-
-function showLogs(): void {
-  element<HTMLDetailsElement>('logs-panel').open = true;
-  element('log-output').focus({ preventScroll: true });
-}
-
-async function perform(action: Action): Promise<void> {
-  if (!native || buttons[action].disabled || pending || repositoryPending) return;
-  if (action === 'logs') showLogs();
-  pending = true;
-  localError = '';
+function showUpdates(): void { selectSettings('updates'); }
+function showLogs(): void { selectSettings('logs'); }
+async function openSettings(): Promise<void> {
+  if (settingsRequestPending) return;
+  if (!native) { window.location.search = '?view=settings&section=environment'; return; }
+  settingsRequestPending = true;
   render();
+  try { await invoke('open_settings', { section: 'environment' }); }
+  catch (error) { localError = '无法打开设置：' + String(error); }
+  finally { settingsRequestPending = false; render(); }
+}
+async function perform(action: Action): Promise<void> {
+  const button = buttons[action];
+  if (!native || !button || button.disabled || pending || repositoryPending) return;
+  pending = true; localError = ''; render();
   const revision = eventRevision;
   try {
-    // Confirmation for stop/restart/exit is exclusively handled by Rust.
     const result = await invoke<Snapshot>('perform_action', { action });
     if (eventRevision === revision) snapshot = result;
-  } catch (error) {
-    localError = '操作未完成：' + String(error);
-  } finally {
-    pending = false;
-    render();
-  }
+  } catch (error) { localError = '操作未完成：' + String(error); }
+  finally { pending = false; render(); }
 }
-
-repositoryInput.addEventListener('input', () => { repositoryDirty = true; render(); });
-element('show-environment').addEventListener('click', () => {
-  showEnvironment = !showEnvironment;
-  render();
-  if (showEnvironment) element('environment-panel').scrollIntoView({ block: 'start' });
-});
-saveRepositoryButton.addEventListener('click', () => { void saveRepository(); });
-
 async function saveRepository(): Promise<void> {
   if (!native || saveRepositoryButton.disabled || pending || repositoryPending) return;
   repositoryPending = true;
@@ -447,16 +400,25 @@ async function saveRepository(): Promise<void> {
   }
 }
 
-for (const action of actions) buttons[action].addEventListener('click', () => { void perform(action); });
-
+function previewSnapshot(): Snapshot {
+  const preview = parameters.get('preview');
+  const checks = pendingEnvironment().checks.map(item => ({ ...item, status: 'passed' as EnvironmentCheck['status'], message: '检查通过' }));
+  const ready = preview === 'ready';
+  const failed = preview === 'error';
+  if (failed) for (const item of checks) {
+    if (item.id === 'repository') Object.assign(item, { status: 'error', message: '未找到配置的 DSH 项目。', hint: '请在设置中填写已有项目的 WSL 绝对路径。' });
+    if (['node','dependencies','web_assets'].includes(item.id)) Object.assign(item, { status: 'skipped', message: '等待项目目录检查通过。' });
+  }
+  if (!settingsView && !failed && !ready) for (const item of checks) item.status = 'pending';
+  return { state: failed ? 'error' : ready ? 'ready' : settingsView ? 'stopped' : 'unknown', phase: failed ? '等待处理环境问题' : ready ? '已就绪' : '检测运行环境', message: '', busy: !settingsView && !failed && !ready, managed: ready, origin:'http://127.0.0.1:3080', last_error:failed ? '运行环境尚未准备好。' : null, logs:['[预览] 此处仅展示脱敏启动记录，未操作实际服务。'], environment:{checks,repository:'/home/user/deepseek-harness'}, environment_checking:!settingsView && !failed && !ready, config_path:'%APPDATA%/io.local.dsh-wsl-desktop/config.json' };
+}
 async function initialize(): Promise<void> {
   if (!native) {
-    element('environment').textContent = '浏览器预览';
-    element('preview-note').hidden = false;
     connected = true;
-    snapshot = { state: 'ready', phase: '演示 · 服务已就绪', message: '这是本地启动器的界面演示。实际服务状态与操作仅在桌面应用中可用。', busy: false, managed: true, origin: 'http://127.0.0.1:3080', last_error: null, logs: ['[演示] 检查 WSL 环境', '[演示] 本地服务已就绪；未执行任何实际操作'], environment: { checks: pendingEnvironment().checks.map(item => ({ ...item, status: 'passed', message: '演示：检查通过' })), repository: '/home/user/deepseek-harness' }, environment_checking: false, config_path: '' };
-    render();
-    return;
+    snapshot = previewSnapshot();
+    element(settingsView ? 'settings-preview' : 'preview-note').textContent = '浏览器预览 · 不会操作本地服务';
+    element(settingsView ? 'settings-preview' : 'preview-note').hidden = false;
+    render(); return;
   }
   try {
     // Subscribe first so startup transitions cannot be lost during the first query.
@@ -476,7 +438,7 @@ async function initialize(): Promise<void> {
     localError = '无法订阅日志窗口请求：' + String(error);
   }
   try {
-    unlistenShowSettings = await listen<string>('launcher-show-settings', event => showSettings(event.payload));
+    unlistenShowSettings = await listen<string>('launcher-show-settings', event => selectSettings(event.payload, true));
   } catch (error) {
     localError = '无法订阅设置窗口请求：' + String(error);
   }
@@ -488,15 +450,12 @@ async function initialize(): Promise<void> {
   } catch (error) {
     if (!connected) {
       connected = true;
-      snapshot = { ...snapshot, busy: false, state: 'unknown', phase: '读取状态失败', message: '未能获取本地服务状态，可重试启动或退出启动器。' };
+      snapshot = { ...snapshot, busy: false, environment_checking: false, state: 'error', phase: '读取状态失败', message: '未能获取本地服务状态，可重试启动或退出启动器。' };
     }
     localError = '无法获取服务状态：' + String(error);
   }
   render();
 }
-
-checkUpdateButton.addEventListener('click', () => { void performUpdate('check_update'); });
-installUpdateButton.addEventListener('click', () => { void performUpdate('install_update'); });
 
 async function initializeUpdates(): Promise<void> {
   if (!native) return;
@@ -525,18 +484,29 @@ async function initializeUpdates(): Promise<void> {
   updateConnected = true;
   render();
   // A tray reveal can precede subscriptions during startup; recover from the snapshot.
-  if (updateSnapshot.phase === 'available') showUpdates();
+  // Available updates stay in Settings; never interrupt initialization.
   // Checking is safe alongside service startup. Never download without a user action.
-  if (!checkUpdateButton.disabled && ['idle', 'up_to_date', 'error'].includes(updateSnapshot.phase)) await performUpdate('check_update');
+  if (!settingsView && ['idle', 'up_to_date', 'error'].includes(updateSnapshot.phase)) {
+    try { await invoke('check_update'); } catch { /* Updates must never block startup. */ }
+  }
 }
 
+if (settingsView) {
+  selectSettings(settingsSection);
+  repositoryInput.addEventListener('input', () => { repositoryDirty = true; render(); });
+  saveRepositoryButton.addEventListener('click', () => { void saveRepository(); });
+  notificationsEnabled.addEventListener('change', () => { void performNotification('set_notifications_enabled', notificationsEnabled.checked); });
+  testNotificationButton.addEventListener('click', () => { void performNotification('test_notification'); });
+  checkUpdateButton.addEventListener('click', () => { void performUpdate('check_update'); });
+  installUpdateButton.addEventListener('click', () => { void performUpdate('install_update'); });
+  for (const section of settingsSections) element('nav-' + section).addEventListener('click', () => selectSettings(section));
+} else element('open-settings').addEventListener('click', () => { void openSettings(); });
+for (const action of actions) buttons[action]?.addEventListener('click', () => { void perform(action); });
 window.addEventListener('beforeunload', () => {
-  notificationsDisposed = true;
-  unlistenNotifications?.();
-  unlistenNotifications = undefined;
+  notificationsDisposed = true; unlistenNotifications?.(); unlistenNotifications = undefined;
   unlisten?.(); unlistenShowLogs?.(); unlistenShowSettings?.(); unlistenUpdates?.(); unlistenShowUpdates?.();
 }, { once: true });
 render();
 void initialize();
 void initializeUpdates();
-void performNotification('get_notification_snapshot');
+if (settingsView) void performNotification('get_notification_snapshot');

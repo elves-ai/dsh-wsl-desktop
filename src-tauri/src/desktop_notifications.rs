@@ -3,6 +3,7 @@ use super::{assert_local, Controller};
 use crate::{
     notification_transport::RpcClient,
     notifications::{CursorTracker, NoticeKind, NotificationSettings, NotificationSnapshot},
+    user_attention::AttentionTracker,
 };
 use base64::Engine;
 use sha2::{Digest, Sha256};
@@ -12,7 +13,7 @@ use std::{
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tauri::{Emitter, Manager, Webview};
+use tauri::{Emitter, EventTarget, Manager, Webview};
 use tauri_plugin_notification::NotificationExt;
 use url::Url;
 
@@ -68,7 +69,14 @@ impl Notifications {
             .clone()
     }
     fn publish(&self, app: &tauri::AppHandle) {
-        let _ = app.emit_to("launcher", "launcher-notification-state", self.snapshot());
+        let snapshot = self.snapshot();
+        for label in ["launcher", "settings"] {
+            let _ = app.emit_to(
+                EventTarget::webview(label),
+                "launcher-notification-state",
+                &snapshot,
+            );
+        }
     }
     fn status(&self, app: &tauri::AppHandle, epoch: u64, phase: &str, message: &str) {
         let changed = {
@@ -253,9 +261,36 @@ fn foreground(app: &tauri::AppHandle) -> bool {
     })
 }
 
+/// Share the same foreground, disable and exit guards for every notification kind.
+fn deliver(
+    app: &tauri::AppHandle,
+    controller: &Controller,
+    state: &Notifications,
+    epoch: u64,
+    title: &str,
+    body: &str,
+) {
+    // WebView/window queries may marshal to the UI thread. Never hold the state
+    // lock while the UI could be reading a notification snapshot.
+    let is_foreground = foreground(app);
+    let mut data = state.data.lock().unwrap_or_else(|e| e.into_inner());
+    if !data.snapshot.enabled
+        || data.epoch != epoch
+        || is_foreground
+        || controller.exiting.load(Ordering::SeqCst)
+        || controller.snapshot().state != "ready"
+    {
+        return;
+    }
+    if let Err(message) = send(app, title, body) {
+        data.delivery_error = Some(message);
+    }
+}
+
 pub(super) fn start(app: tauri::AppHandle, controller: Arc<Controller>, state: Arc<Notifications>) {
     thread::spawn(move || {
         let mut tracker = CursorTracker::new(now_ms());
+        let mut attention = AttentionTracker::new();
         let mut generation = None;
         loop {
             if controller.exiting.load(Ordering::SeqCst) {
@@ -267,6 +302,7 @@ pub(super) fn start(app: tauri::AppHandle, controller: Arc<Controller>, state: A
             };
             if generation != Some(epoch) {
                 tracker.reset(now_ms());
+                attention.reset();
                 generation = Some(epoch);
             }
             if !enabled {
@@ -275,6 +311,7 @@ pub(super) fn start(app: tauri::AppHandle, controller: Arc<Controller>, state: A
             }
             if controller.snapshot().state != "ready" {
                 tracker.reset(now_ms());
+                attention.disconnected();
                 state.status(
                     &app,
                     epoch,
@@ -291,6 +328,24 @@ pub(super) fn start(app: tauri::AppHandle, controller: Arc<Controller>, state: A
                 if !state.current(epoch) {
                     return Ok(());
                 }
+                // Questions keep the Agent running, and can be nested inside run_code.
+                // Observe their durable starts/results without joining the answerer stream.
+                let waiting = attention.poll(&list, |session_id, cursor| {
+                    if !state.current(epoch) || controller.exiting.load(Ordering::SeqCst) {
+                        return Err("通知检测已取消。".into());
+                    }
+                    rpc.page(session_id, cursor)
+                })?;
+                for _notice in waiting {
+                    deliver(
+                        &app,
+                        &controller,
+                        &state,
+                        epoch,
+                        "DSH · 需要你回答",
+                        "任务正在等待你选择、回答问题或确认计划，请打开 DSH 继续。",
+                    );
+                }
                 let requests = tracker.scan(&list)?;
                 for request in requests {
                     if !state.current(epoch) || controller.exiting.load(Ordering::SeqCst) {
@@ -301,18 +356,6 @@ pub(super) fn start(app: tauri::AppHandle, controller: Arc<Controller>, state: A
                     // foreground: hiding it later must not replay this result.
                     let notice = tracker.consume(&request, &page)?;
                     if let Some(notice) = notice {
-                        // Window queries may marshal to the UI thread. Never hold
-                        // the state lock while the UI could be reading a snapshot.
-                        let is_foreground = foreground(&app);
-                        let mut data = state.data.lock().unwrap_or_else(|e| e.into_inner());
-                        if !data.snapshot.enabled
-                            || data.epoch != epoch
-                            || is_foreground
-                            || controller.exiting.load(Ordering::SeqCst)
-                            || controller.snapshot().state != "ready"
-                        {
-                            continue;
-                        }
                         let (title, body) = match notice.kind {
                             NoticeKind::Completed => (
                                 "DSH · 本轮执行已结束",
@@ -320,9 +363,7 @@ pub(super) fn start(app: tauri::AppHandle, controller: Arc<Controller>, state: A
                             ),
                             NoticeKind::Failed => ("DSH · 本轮执行失败", "打开 DSH 查看错误详情。"),
                         };
-                        if let Err(message) = send(&app, title, body) {
-                            data.delivery_error = Some(message);
-                        }
+                        deliver(&app, &controller, &state, epoch, title, body);
                     }
                 }
                 Ok(())
@@ -332,16 +373,17 @@ pub(super) fn start(app: tauri::AppHandle, controller: Arc<Controller>, state: A
                     &app,
                     epoch,
                     "listening",
-                    "正在检查后台执行结果（约每 3 秒）；前台静默，不显示回答正文。",
+                    "正在检查执行结果与待答问题（约每 3 秒）；前台静默，不显示正文。",
                 ),
                 Err(message) => {
                     // Reconnect establishes a fresh baseline, never replays old turns.
                     tracker.reset(now_ms());
+                    attention.disconnected();
                     state.status(
                         &app,
                         epoch,
                         "error",
-                        &format!("{message} 将自动重试；重新连接后不补发历史通知。"),
+                        &format!("{message} 将自动重试；重新连接后不补发历史执行结果。"),
                     );
                 }
             }

@@ -20,7 +20,7 @@ use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     webview::WebviewBuilder,
-    Emitter, Manager, Webview, WebviewUrl, Window, WindowBuilder, WindowEvent,
+    Emitter, EventTarget, Manager, Webview, WebviewUrl, Window, WindowBuilder, WindowEvent,
 };
 use url::Url;
 
@@ -66,7 +66,9 @@ impl Controller {
     }
     fn publish(&self, app: &tauri::AppHandle) {
         let snapshot = self.snapshot();
-        let _ = app.emit_to("launcher", "launcher-state", snapshot.clone());
+        for label in ["launcher", "settings"] {
+            let _ = app.emit_to(EventTarget::webview(label), "launcher-state", &snapshot);
+        }
         if let Some(tray) = app.tray_by_id("dsh-tray") {
             let status = match snapshot.state.as_str() {
                 "ready" => "运行中",
@@ -141,7 +143,7 @@ impl Controller {
         drop(s);
         self.publish(app);
     }
-    fn failure(&self, app: &tauri::AppHandle, error: &str) {
+    fn failure(&self, app: &tauri::AppHandle, error: &str, reveal_startup: bool) {
         let error = redact(error);
         {
             let mut s = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
@@ -151,7 +153,9 @@ impl Controller {
             s.last_error = Some(error.clone());
         }
         self.record(app, &error);
-        show_launcher(app);
+        if reveal_startup {
+            show_launcher(app);
+        }
     }
     fn backend(&self) -> Result<Backend, String> {
         let config = self
@@ -165,18 +169,69 @@ impl Controller {
     }
 }
 
-fn assert_local(window: &Webview) -> Result<(), String> {
-    let url = window.url().map_err(|_| "无法验证调用窗口。")?;
-    let packaged = (url.scheme() == "tauri" && url.host_str() == Some("localhost"))
-        || (url.scheme() == "http" && url.host_str() == Some("tauri.localhost"));
+fn settings_section(section: &str) -> bool {
+    matches!(
+        section,
+        "environment" | "notifications" | "updates" | "logs"
+    )
+}
+
+/// Only the bundled content views, never a titlebar or the remote DSH page.
+fn local_content(url: &Url, label: &str) -> bool {
+    let packaged = ((url.scheme() == "tauri" && url.host_str() == Some("localhost"))
+        || (url.scheme() == "http" && url.host_str() == Some("tauri.localhost")))
+        && url.port().is_none();
     let dev = cfg!(debug_assertions)
         && url.scheme() == "http"
         && url.host_str() == Some("127.0.0.1")
         && url.port() == Some(1420);
-    if window.label() != "launcher" || !(packaged || dev) {
+    if !(packaged || dev)
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || !matches!(url.path(), "/" | "/index.html")
+        || url.fragment().is_some()
+    {
+        return false;
+    }
+    match label {
+        "launcher" => url.query().is_none(),
+        "settings" => {
+            let pairs: Vec<_> = url.query_pairs().collect();
+            pairs.len() == 2
+                && pairs
+                    .iter()
+                    .any(|(key, value)| key.as_ref() == "view" && value.as_ref() == "settings")
+                && pairs.iter().any(|(key, value)| {
+                    key.as_ref() == "section" && settings_section(value.as_ref())
+                })
+        }
+        _ => false,
+    }
+}
+
+fn assert_local(window: &Webview) -> Result<(), String> {
+    let url = window.url().map_err(|_| "无法验证调用窗口。")?;
+    if !matches!(
+        (window.label(), window.window().label()),
+        ("launcher", "launcher") | ("settings", "settings")
+    ) || !local_content(&url, window.label())
+    {
         return Err("此页面无权控制本机服务。".into());
     }
     Ok(())
+}
+
+#[tauri::command]
+async fn open_settings(
+    window: Webview,
+    app: tauri::AppHandle,
+    section: String,
+) -> Result<(), String> {
+    assert_local(&window)?;
+    // WebView2 child creation must not synchronously block the Windows UI thread.
+    tauri::async_runtime::spawn_blocking(move || show_settings(&app, &section))
+        .await
+        .map_err(|_| "设置窗口线程异常结束。".to_owned())?
 }
 #[tauri::command]
 fn get_snapshot(
@@ -232,7 +287,8 @@ async fn set_project_directory(
         })();
         controller.busy.store(false, Ordering::SeqCst);
         if let Err(error) = result {
-            controller.failure(&app, &error);
+            // Keep invalid directory/save errors in Settings; do not steal focus.
+            controller.failure(&app, &error, false);
             return Err(error);
         }
         controller.publish(&app);
@@ -249,6 +305,60 @@ fn show_launcher(app: &tauri::AppHandle) {
         let _ = window.set_focus();
     }
 }
+// Serialize concurrent menu/IPC requests without ever taking this lock on the UI thread.
+static SETTINGS_WINDOW: Mutex<()> = Mutex::new(());
+
+/// Create or reactivate the single settings window. Call from a worker thread.
+pub fn show_settings(app: &tauri::AppHandle, section: &str) -> Result<(), String> {
+    if !settings_section(section) {
+        return Err("不支持的设置页面。".into());
+    }
+    let _guard = SETTINGS_WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+    let window = if let Some(window) = app.get_window("settings") {
+        // Preserve the loaded page and unsaved edits when switching sections.
+        app.emit_to(
+            EventTarget::webview("settings"),
+            "launcher-show-settings",
+            section,
+        )
+        .map_err(|_| "无法切换设置页面。")?;
+        window
+    } else {
+        let window = WindowBuilder::new(app, "settings")
+            .title("DSH · 设置")
+            .decorations(false)
+            .inner_size(860.0, 680.0)
+            .min_inner_size(700.0, 560.0)
+            .visible(false)
+            .build()
+            .map_err(|_| "无法创建设置窗口。")?;
+        fit_window(&window, 860, 680);
+        let result = (|| -> tauri::Result<()> {
+            let (position, size) = titlebar::content_geometry(&window)?;
+            window.add_child(
+                WebviewBuilder::new(
+                    "settings",
+                    WebviewUrl::App(format!("index.html?view=settings&section={section}").into()),
+                )
+                .on_navigation(|target| local_content(target, "settings"))
+                .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny),
+                position,
+                size,
+            )?;
+            titlebar::attach(&window)
+        })();
+        if result.is_err() {
+            let _ = window.destroy();
+            return Err("无法创建设置 WebView2 窗口，请检查 WebView2 Runtime。".into());
+        }
+        window
+    };
+    window.show().map_err(|_| "无法显示设置窗口。")?;
+    window.unminimize().map_err(|_| "无法还原设置窗口。")?;
+    window.set_focus().map_err(|_| "无法激活设置窗口。")?;
+    Ok(())
+}
+
 fn activate(app: &tauri::AppHandle) {
     if let Some(controller) = app.try_state::<Arc<Controller>>() {
         let snapshot = controller.snapshot();
@@ -540,13 +650,7 @@ fn open_dsh(app: &tauri::AppHandle, config: &config::Config, url: Url) -> Result
                         let _ = window.show();
                         let _ = window.set_focus();
                         if let Some(launcher) = view.app_handle().get_window("launcher") {
-                            let available = view
-                                .app_handle()
-                                .state::<Arc<updates::Updates>>()
-                                .available();
-                            if !available {
-                                let _ = launcher.hide();
-                            }
+                            let _ = launcher.hide();
                         }
                     }
                 }),
@@ -602,8 +706,7 @@ fn perform(
         return Err("不支持的操作。".into());
     }
     if action == "logs" {
-        show_launcher(app);
-        let _ = app.emit_to("launcher", "launcher-show-logs", ());
+        show_settings(app, "logs")?;
         return Ok(controller.snapshot());
     }
     if controller
@@ -644,7 +747,7 @@ fn perform(
     })();
     controller.busy.store(false, Ordering::SeqCst);
     if let Err(error) = result {
-        controller.failure(app, &error);
+        controller.failure(app, &error, true);
         return Err(error);
     }
     controller.publish(app);
@@ -664,15 +767,25 @@ fn handle_menu_action(app: &tauri::AppHandle, id: &str) {
         "open" => dispatch(app, "open"),
         "logs" => dispatch(app, "logs"),
         "environment" | "notifications" => {
-            show_launcher(app);
-            let _ = app.emit_to("launcher", "launcher-show-settings", id);
+            let app = app.clone();
+            let section = id.to_owned();
+            thread::spawn(move || {
+                if let Err(error) = show_settings(&app, &section) {
+                    app.state::<Arc<Controller>>().record(&app, &error);
+                }
+            });
         }
         "updates" => {
-            updates::show_updates(app);
             let app = app.clone();
-            tauri::async_runtime::spawn(async move {
-                let state = app.state::<Arc<updates::Updates>>().inner().clone();
-                updates::check(&app, &state).await;
+            thread::spawn(move || {
+                if let Err(error) = updates::show_updates(&app) {
+                    app.state::<Arc<Controller>>().record(&app, &error);
+                    return;
+                }
+                tauri::async_runtime::spawn(async move {
+                    let state = app.state::<Arc<updates::Updates>>().inner().clone();
+                    updates::check(&app, &state).await;
+                });
             });
         }
         "start" => dispatch(app, "start"),
@@ -694,6 +807,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             get_snapshot,
+            open_settings,
             perform_action,
             set_project_directory,
             updates::get_update_snapshot,
@@ -763,28 +877,21 @@ pub fn run() {
             let launcher = WindowBuilder::new(app, "launcher")
                 .title("DSH · WSL Desktop")
                 .decorations(false)
-                .inner_size(760.0, 640.0)
-                .min_inner_size(600.0, 500.0)
+                .inner_size(640.0, 640.0)
+                .min_inner_size(540.0, 520.0)
                 .center()
                 .build()?;
             let (position, size) = titlebar::content_geometry(&launcher)?;
             launcher.add_child(
                 WebviewBuilder::new("launcher", WebviewUrl::App("index.html".into()))
-                    .on_navigation(|target| {
-                        (target.scheme() == "tauri" && target.host_str() == Some("localhost"))
-                            || (target.scheme() == "http"
-                                && target.host_str() == Some("tauri.localhost"))
-                            || (cfg!(debug_assertions)
-                                && target.scheme() == "http"
-                                && target.host_str() == Some("127.0.0.1")
-                                && target.port() == Some(1420))
-                    }),
+                    .on_navigation(|target| local_content(target, "launcher"))
+                    .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny),
                 position,
                 size,
             )?;
             titlebar::attach(&launcher)?;
             let open = MenuItem::with_id(app, "open", "打开 DSH", true, None::<&str>)?;
-            let control = MenuItem::with_id(app, "logs", "状态与操作日志", true, None::<&str>)?;
+            let control = MenuItem::with_id(app, "logs", "诊断日志…", true, None::<&str>)?;
             let update = MenuItem::with_id(app, "updates", "检查启动器更新…", true, None::<&str>)?;
             let start = MenuItem::with_id(app, "start", "启动服务", true, None::<&str>)?;
             let stop = MenuItem::with_id(app, "stop", "停止服务…", true, None::<&str>)?;
@@ -884,4 +991,51 @@ pub fn run() {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod content_security_tests {
+    use super::local_content;
+    use url::Url;
+
+    #[test]
+    fn only_exact_bundled_documents_and_settings_sections_are_trusted() {
+        for origin in ["tauri://localhost", "http://tauri.localhost"] {
+            assert!(local_content(
+                &Url::parse(&format!("{origin}/index.html")).unwrap(),
+                "launcher"
+            ));
+            for section in ["environment", "notifications", "updates", "logs"] {
+                let url = Url::parse(&format!(
+                    "{origin}/index.html?view=settings&section={section}"
+                ))
+                .unwrap();
+                assert!(local_content(&url, "settings"));
+                assert!(!local_content(&url, "launcher"));
+                assert!(!local_content(&url, "dsh"));
+            }
+        }
+        let dev = Url::parse("http://127.0.0.1:1420/?view=settings&section=environment").unwrap();
+        assert_eq!(local_content(&dev, "settings"), cfg!(debug_assertions));
+    }
+
+    #[test]
+    fn remote_unexpected_and_ambiguous_settings_urls_are_rejected() {
+        for raw in [
+            "http://127.0.0.1:3080/?view=settings&section=environment",
+            "https://example.com/index.html?view=settings&section=environment",
+            "http://tauri.localhost/titlebar.html?view=settings&section=environment",
+            "http://tauri.localhost/index.html?view=settings",
+            "http://tauri.localhost/index.html?view=settings&section=unknown",
+            "http://tauri.localhost/index.html?view=settings&section=logs&section=updates",
+            "http://tauri.localhost/index.html?view=settings&section=logs&extra=1",
+            "http://tauri.localhost/index.html?view=settings&section=logs#other",
+            "http://user:password@tauri.localhost/index.html?view=settings&section=logs",
+        ] {
+            assert!(
+                !local_content(&Url::parse(raw).unwrap(), "settings"),
+                "unexpected trusted URL: {raw}"
+            );
+        }
+    }
 }

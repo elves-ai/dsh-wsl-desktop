@@ -1,11 +1,11 @@
 //! Privileged updater adapter. The DSH webview never receives these commands.
-use super::{assert_local, show_launcher, Controller};
+use super::{assert_local, show_settings, Controller};
 use crate::update::{validate_download, UpdateGate, UpdateSnapshot};
 use std::{
     sync::{atomic::Ordering, Arc, Mutex},
     time::{Duration, Instant},
 };
-use tauri::{Emitter, Manager, Webview};
+use tauri::{Emitter, EventTarget, Manager, Webview};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
 struct Data {
@@ -39,7 +39,13 @@ impl Updates {
             change(&mut data);
             data.snapshot.clone()
         };
-        let _ = app.emit_to("launcher", "launcher-update-state", &snapshot);
+        for label in ["launcher", "settings"] {
+            let _ = app.emit_to(
+                EventTarget::webview(label),
+                "launcher-update-state",
+                &snapshot,
+            );
+        }
         snapshot
     }
     fn fail(&self, app: &tauri::AppHandle, message: &str) -> UpdateSnapshot {
@@ -49,9 +55,6 @@ impl Updates {
             data.snapshot.busy = false;
             data.snapshot.message = message.into();
         })
-    }
-    pub(super) fn available(&self) -> bool {
-        self.snapshot().phase == "available"
     }
 }
 
@@ -125,8 +128,7 @@ pub(super) async fn check(app: &tauri::AppHandle, updates: &Updates) -> UpdateSn
                 data.snapshot.message = "有新的正式版本；仅在你确认后下载并安装。".into();
                 data.package = Some(package);
             });
-            // The working DSH window may already have hidden the control page.
-            show_updates(app);
+            // Availability is a silent snapshot change, never a window/focus action.
             snapshot
         }
         Ok(None) => updates.change(app, |data| {
@@ -144,9 +146,9 @@ pub(super) async fn check(app: &tauri::AppHandle, updates: &Updates) -> UpdateSn
         ),
     }
 }
-pub(super) fn show_updates(app: &tauri::AppHandle) {
-    show_launcher(app);
-    let _ = app.emit_to("launcher", "launcher-show-updates", ());
+/// Explicit menu action only; automatic update checks must never open a window.
+pub(super) fn show_updates(app: &tauri::AppHandle) -> Result<(), String> {
+    show_settings(app, "updates")
 }
 
 /// Blocks tray/service operations too, not merely the frontend buttons.
