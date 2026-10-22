@@ -68,6 +68,12 @@ WebView 数据：%LOCALAPPDATA%\io.local.dsh-wsl-desktop\webview
 
 更新 nvm/Node 后，若原绝对路径失效，需要更新 WSL 管理配置；应用不依赖交互 shell 初始化。
 
+## 安装向导外观
+
+Windows 安装与卸载向导使用简体中文，不再弹出语言选择框；欢迎页和完成页使用深蓝品牌侧栏，其他页面使用白色顶部横幅，字体为微软雅黑 UI。MIT 许可证保留英文原文。更新仍使用原有被动安装流程。
+
+外观与文案位于 [appearance.nsh](<src-tauri/installer/appearance.nsh>)，位图源稿为 [sidebar.svg](<src-tauri/installer/sidebar.svg>) 和 [header.svg](<src-tauri/installer/header.svg>)。修改源稿后运行 `npm run installer:assets`，提交生成的两张 BMP；正常打包直接使用已提交的位图，不依赖系统字体或额外图片工具。修改只会出现在重新构建的安装包中，不会改变已经下载的旧安装包。
+
 ## GitHub Actions 构建（推荐）
 
 [Windows build 工作流](<.github/workflows/windows-build.yml>)在推送 main、推送 v 开头标签或创建面向 main 的 PR 时运行，也支持手动触发。

@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="164" height="314" viewBox="0 0 164 314">
+  <defs>
+    <linearGradient id="bg" x2="0.8" y2="1"><stop stop-color="#0f1b32"/><stop offset="1" stop-color="#18365d"/></linearGradient>
+    <radialGradient id="glow"><stop stop-color="#538dff" stop-opacity=".23"/><stop offset="1" stop-color="#538dff" stop-opacity="0"/></radialGradient>
+  </defs>
+  <path fill="url(#bg)" d="M0 0h164v314H0z"/>
+  <circle cx="157" cy="250" r="130" fill="url(#glow)"/>
+  <!-- The same terminal / D mark as the application icon. -->
+  <g transform="translate(22 32) scale(.34)">
+    <path fill="#558fff" d="M68 64h53c49 0 79 24 79 64s-30 64-79 64H68v-32h53c28 0 43-11 43-32s-15-32-43-32H68z"/>
+    <path d="m54 111 22 17-22 17m46-17h37" fill="none" stroke="#dbeafe" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <!-- Path lettering keeps the artwork independent of installed fonts. -->
+  <g transform="translate(26 131)" fill="none" stroke="#f1f6ff" stroke-width="4" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M0 0h8c16 0 16 26 0 26H0zM48 1H35c-12 0-12 12 0 12h5c12 0 12 13 0 13H27M60 0v26m21-26v26M60 13h21"/>
+  </g>
+  <path d="M25 178h28" stroke="#6c9fff" stroke-width="3" stroke-linecap="round"/>
+  <path d="M61 178h76" stroke="#7ea3d5" stroke-opacity=".2"/>
+  <!-- Connected window cards hint at Windows + WSL without adding copy. -->
+  <g fill="none" stroke="#8bb5ed" stroke-opacity=".34">
+    <rect x="25" y="219" width="91" height="57" rx="7"/>
+    <path d="M25 232h91m-80-6h2m5 0h2m5 0h2"/>
+    <rect x="66" y="246" width="81" height="49" rx="7" fill="#172f50"/>
+    <path d="M66 259h81"/>
+  </g>
+  <path d="m80 270 5 4-5 4m13 0h10" fill="none" stroke="#91bbff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="134" cy="286" r="2" fill="#68b8be"/>
+</svg>

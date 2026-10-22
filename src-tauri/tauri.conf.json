@@ -43,6 +43,15 @@
       "icons/128x128@2x.png"
     ],
     "windows": {
+      "nsis": {
+        "languages": ["SimpChinese"],
+        "displayLanguageSelector": false,
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "headerImage": "installer/header.bmp",
+        "sidebarImage": "installer/sidebar.bmp",
+        "installerHooks": "installer/appearance.nsh"
+      },
       "webviewInstallMode": {
         "type": "downloadBootstrapper"
       }
