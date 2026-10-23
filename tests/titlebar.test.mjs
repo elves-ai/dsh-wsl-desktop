@@ -236,8 +236,21 @@ test('subscription and initial state failures do not produce unhandled errors or
   broken.unload(); assert.deepEqual(broken.unlistened, ['titlebar-state']);
 });
 
-test('entry remains local, single-line 38px, with fixed 46px controls and ample 600px drag space', () => {
-  assert.match(css, /--titlebar-height: 38px/);
+test('titlebar uses a compact icon and keeps native geometry aligned with CSS height', () => {
+  const nativeSource = readFileSync(new URL('../src-tauri/src/desktop_titlebar.rs', import.meta.url), 'utf8');
+  const height = Number(css.match(/--titlebar-height: (\d+)px/)[1]);
+  assert.equal(height, 32);
+  assert.equal(Number(nativeSource.match(/const HEIGHT: f64 = ([\d.]+);/)[1]), height);
+  assert.match(css, /\.app-icon img\s*\{[^}]*width: 16px;[^}]*height: 16px/);
+  assert.match(html, /<img src="\/app-icon\.png" width="16" height="16" alt="" \/>/);
+  assert.match(css, /button\s*\{[^}]*height: calc\(var\(--titlebar-height\) - 1px\)/);
+  assert.match(nativeSource, /LogicalPosition::new\(x, HEIGHT\)/);
+  assert.match(nativeSource, /LogicalSize::new\(width, HEIGHT\)/);
+  assert.match(nativeSource, /let top = \(HEIGHT \* window\.scale_factor\(\)\?\)\.round\(\) as u32/);
+});
+
+test('entry remains local, single-line 32px, with fixed 46px controls and ample 600px drag space', () => {
+  assert.match(css, /--titlebar-height: 32px/);
   assert.match(css, /html, body[^}]*height: var\(--titlebar-height\)[^}]*overflow: hidden/);
   assert.match(css, /\.window-control\s*\{[^}]*width: 46px;[^}]*flex: 0 0 46px/);
   assert.match(css, /\.drag-area\s*\{[^}]*flex: 1 1 0;[^}]*min-width: 80px/);

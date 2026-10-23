@@ -5,7 +5,7 @@
   background: #181b20;
   color: #d4d7de;
   font-synthesis: none;
-  --titlebar-height: 38px;
+  --titlebar-height: 32px;
 }
 
 * { box-sizing: border-box; }
@@ -21,10 +21,10 @@ body { user-select: none; }
   background: #202329;
 }
 .app-icon { display: grid; place-items: center; width: 36px; flex: 0 0 36px; color: #91aef3; }
-.app-icon img { display: block; width: 24px; height: 24px; }
+.app-icon img { display: block; width: 16px; height: 16px; }
 .menus, .window-controls { display: flex; flex: 0 0 auto; }
 button {
-  height: 37px;
+  height: calc(var(--titlebar-height) - 1px);
   margin: 0;
   padding: 0;
   border: 0;

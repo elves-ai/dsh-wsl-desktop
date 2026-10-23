@@ -8,7 +8,7 @@ use tauri::{
 };
 use url::Url;
 
-const HEIGHT: f64 = 38.0;
+const HEIGHT: f64 = 32.0;
 
 pub(super) struct Menus {
     file: Menu<tauri::Wry>,
@@ -159,7 +159,7 @@ pub(super) async fn show_titlebar_menu(
         MenuName::Settings => &menus.settings,
         MenuName::Help => &menus.help,
     };
-    // Native popup is not clipped by the 38px webview and keeps native keyboard navigation.
+    // Native popup is not clipped by the titlebar webview and keeps native keyboard navigation.
     menu.popup_at(window, LogicalPosition::new(x, HEIGHT))
         .map_err(|_| "无法打开菜单，请重试。".into())
 }
