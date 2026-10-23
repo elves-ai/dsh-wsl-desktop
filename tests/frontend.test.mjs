@@ -68,6 +68,26 @@ test('stopped startup offers an explicit open retry without launching automatica
   await app.click('open'); assert.equal(app.calls.at(-1)[0], 'perform_action'); assert.equal(app.calls.at(-1)[1].action, 'open');
 });
 
+test('waiting for browser authentication stays active then advances without a manual retry', async () => {
+  const app = await mount(true, base({ busy: true, phase: '等待网页登录认证',
+    message: '服务已启动，正在等待网页登录认证链接；就绪后将自动打开 DSH。' }), { mode: 'startup' });
+  assert.equal(app.node('startup-shell').dataset.state, 'starting');
+  assert.equal(app.node('stage-environment').dataset.state, 'passed');
+  assert.equal(app.node('stage-service').dataset.state, 'active');
+  assert.equal(app.node('stage-window').dataset.state, 'pending');
+  assert.equal(app.node('error-notice').hidden, true);
+  assert.equal(app.node('startup-progress').hidden, false);
+  assert.equal(app.node('startup-actions').hidden, true);
+  assert.match(app.node('status-message').textContent, /等待网页登录认证/);
+  app.event(base({ busy: true, phase: '打开工作窗口' }));
+  assert.equal(app.node('stage-service').dataset.state, 'passed');
+  assert.equal(app.node('stage-window').dataset.state, 'active');
+  app.event(base());
+  assert.equal(app.node('startup-shell').dataset.state, 'ready');
+  assert.equal(app.node('stage-window').dataset.state, 'passed');
+  assert.equal(app.calls.filter(([name]) => name === 'perform_action').length, 0);
+});
+
 test('startup has no settings dashboard or standalone service controls', async () => {
   const app = await mount(true, base({ managed: false }), { mode: 'startup' });
   assert.equal(app.has('startup-shell'), true);

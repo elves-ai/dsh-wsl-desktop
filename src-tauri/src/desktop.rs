@@ -2,7 +2,10 @@ use crate::{
     backend::Backend,
     config,
     environment::{self, EnvironmentReport},
-    protocol::{backend_error, redact, validated_launch_url, validated_stop_pid, BackendReply},
+    protocol::{
+        backend_error, redact, validated_launch_url, validated_stop_pid,
+        wait_for_launch_authentication, BackendReply,
+    },
 };
 use serde::Serialize;
 use std::{
@@ -487,7 +490,6 @@ fn ensure_ready(
     let mut started = false;
     let mut bootstrap_deadline = deadline;
     let mut supervisor = None;
-    let mut authentication_deadline = None;
     controller.phase(app, "检查 WSL", "正在检查已有 DSH 服务，不会重复启动。 ");
     loop {
         if controller.exiting.load(Ordering::SeqCst) {
@@ -517,33 +519,30 @@ fn ensure_ready(
         match reply.state.as_str() {
             "ready" => {
                 let url = validated_launch_url(&reply, backend.config.port)?;
-                controller.phase(
-                    app,
-                    "检查本机连接",
-                    "服务已就绪，正在确认 Windows 可以访问。 ",
-                );
+                if controller.snapshot().phase != "等待网页登录认证" {
+                    controller.phase(
+                        app,
+                        "检查本机连接",
+                        "服务已就绪，正在确认 Windows 可以访问。 ",
+                    );
+                }
                 if let Some(status @ (200 | 401)) = windows_status(&backend.config.origin()) {
                     if controller.exiting.load(Ordering::SeqCst) {
                         return Ok(());
                     }
                     if open_window {
-                        if status == 401 && !reply.authenticated {
-                            // The listener can become ready just before its auth link is flushed.
-                            // Retry briefly, never relabel a verified owner as external or restart it.
-                            if reply.managed {
-                                let grace = authentication_deadline.get_or_insert_with(|| {
-                                    (Instant::now() + Duration::from_secs(3)).min(deadline)
-                                });
-                                if Instant::now() < *grace {
-                                    thread::sleep(Duration::from_millis(500));
-                                    continue;
-                                }
+                        if wait_for_launch_authentication(&reply, status, Instant::now(), deadline)?
+                        {
+                            if controller.snapshot().phase != "等待网页登录认证" {
+                                controller.phase(
+                                    app,
+                                    "等待网页登录认证",
+                                    "服务已启动，正在等待网页登录认证链接；就绪后将自动打开 DSH。",
+                                );
                             }
-                            return Err(if reply.managed {
-                                backend_error(Some("managed_auth_unavailable"))
-                            } else {
-                                "服务正在运行，但未验证托管归属，无法为新窗口自动认证。请使用原启动终端的认证链接；也可选择“仅退出启动器”。".into()
-                            });
+                            // Re-probe without spawning or restarting the managed service.
+                            thread::sleep(Duration::from_millis(500));
+                            continue;
                         }
                         controller.phase(app, "打开工作窗口", "正在加载 DSH 工作窗口。 ");
                         open_dsh(app, &backend.config, url)?;

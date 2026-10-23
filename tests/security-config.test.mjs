@@ -110,7 +110,7 @@ test('verified ownership is independent of browser authentication for probing an
   assert.doesNotMatch(stop, /reply[.]authenticated|validated_launch_url/);
   assert.match(backend, /self[.]adapter_command\(&\[\s*"--probe"/);
   assert.ok(desktop.includes('&& reply.managed'));
-  assert.ok(desktop.includes('backend_error(Some("managed_auth_unavailable"))'));
+  assert.ok(read('src-tauri/src/protocol.rs').includes('backend_error(Some("managed_auth_unavailable"))'));
   // A failed startup must remain actionable, not turn into a false ready splash on the next timer.
   assert.ok(desktop.includes('snapshot.state != "ready" || !snapshot.environment.passed()'));
   const monitor = desktop.slice(desktop.indexOf('let monitor_app ='), desktop.indexOf('.on_window_event('));
@@ -119,8 +119,15 @@ test('verified ownership is independent of browser authentication for probing an
   const perform = desktop.slice(desktop.indexOf('fn perform('), desktop.indexOf('fn dispatch('));
   const failurePath = perform.slice(perform.indexOf('if let Err(error) = result'));
   assert.ok(failurePath.indexOf('controller.failure(app, &error, true)') < failurePath.indexOf('controller.busy.store(false'));
-  assert.ok(desktop.includes('authentication_deadline.get_or_insert_with'));
-  assert.ok(desktop.includes('Duration::from_secs(3)).min(deadline)'));
+  // Authentication shares the original startup budget; never a separate 3s grace.
+  const startup = desktop.slice(desktop.indexOf('fn ensure_ready('), desktop.indexOf('fn stop_service('));
+  assert.ok(startup.includes('Duration::from_secs(backend.config.startup_timeout_seconds)'));
+  assert.ok(startup.includes('wait_for_launch_authentication(&reply, status, Instant::now(), deadline)?'));
+  assert.doesNotMatch(startup, /authentication_deadline|get_or_insert_with/);
+  const waiting = startup.slice(startup.indexOf('if wait_for_launch_authentication'), startup.indexOf('controller.phase(app, "打开工作窗口"'));
+  assert.ok(waiting.includes('等待网页登录认证'));
+  assert.ok(waiting.includes('continue;'));
+  assert.doesNotMatch(waiting, /backend[.](start|stop)\(/);
   const failure = desktop.slice(desktop.indexOf('fn failure('), desktop.indexOf('fn backend('));
   assert.ok(failure.includes('s.environment_checking = false'));
   assert.ok(!failure.includes('s.phase = "操作未完成"'));
