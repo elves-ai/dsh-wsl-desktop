@@ -1,7 +1,7 @@
 //! Untrusted WSL helper replies and credential-safe diagnostics. No Tauri dependency.
 
 use serde::Deserialize;
-use std::fmt;
+use std::{fmt, time::Instant};
 use url::Url;
 
 const MAX_REPLY_BYTES: usize = 64 * 1024;
@@ -112,6 +112,28 @@ pub fn validated_launch_url(reply: &BackendReply, expected_port: u16) -> Result<
     Ok(parsed)
 }
 
+/// A listening service may still be publishing its browser credential. Keep the
+/// original startup deadline: a short grace period fails cold starts, while a
+/// fresh deadline on each probe can wait forever. This never grants ownership.
+/// Call only after validating a ready launch URL and Windows reachability.
+pub fn wait_for_launch_authentication(
+    reply: &BackendReply,
+    status: u16,
+    now: Instant,
+    deadline: Instant,
+) -> Result<bool, String> {
+    if status != 401 || reply.authenticated {
+        return Ok(false);
+    }
+    if !reply.managed {
+        return Err("服务正在运行，但未验证托管归属，无法为新窗口自动认证。请使用原启动终端的认证链接；也可选择“仅退出启动器”。".into());
+    }
+    if now >= deadline {
+        return Err(backend_error(Some("managed_auth_unavailable")));
+    }
+    Ok(true)
+}
+
 /// Map only known machine codes; unknown codes and raw messages are never shown.
 pub fn backend_error(code: Option<&str>) -> String {
     match code {
@@ -119,7 +141,7 @@ pub fn backend_error(code: Option<&str>) -> String {
         Some("stop_timeout") => "等待服务停止超时，未强制结束进程。",
         Some("stop_incomplete") => "服务尚未完全停止，请稍后重试。",
         Some("process_changed") => "服务进程身份校验未通过，未发送停止信号。请重试或选择“仅退出启动器”。",
-        Some("managed_auth_unavailable") => "已确认服务由启动器托管，但未取得可用的网页登录认证链接。可先停止该服务再重新打开 DSH；不会自动强停或重启。",
+        Some("managed_auth_unavailable") => "等待网页登录认证链接超时，服务仍由启动器托管，可能还在初始化。请先点击“重新检测”；若持续失败，请查看诊断日志。不会自动停止或重启服务。",
         Some("unverified_startup") => "无法确认启动中的服务身份，未停止进程。",
         Some("launcher_failure") => "WSL 启动器执行失败，请检查配置和日志。",
         Some("confirmation_required") => "停止服务前需要确认。",
@@ -226,6 +248,76 @@ mod tests {
             code: None,
             service_log: None,
         }
+    }
+
+    #[test]
+    fn cold_start_waits_past_three_seconds_then_accepts_the_auth_link() {
+        use std::time::Duration;
+        let start = Instant::now();
+        let deadline = start + Duration::from_secs(120);
+        let mut reply = ready("http://127.0.0.1:3080/", false);
+        reply.managed = true;
+        // Includes both a newly spawned service and an already-starting one:
+        // readiness must not depend on whether this invocation spawned it.
+        for seconds in [0, 3, 4, 15, 60, 119] {
+            assert_eq!(
+                wait_for_launch_authentication(
+                    &reply,
+                    401,
+                    start + Duration::from_secs(seconds),
+                    deadline
+                ),
+                Ok(true)
+            );
+            assert_eq!(validated_stop_pid(&reply), Ok(42));
+        }
+        reply.authenticated = true;
+        reply.url = Some(format!("http://127.0.0.1:3080/?token={TOKEN}"));
+        assert!(validated_launch_url(&reply, 3080).is_ok());
+        assert_eq!(
+            wait_for_launch_authentication(&reply, 401, start + Duration::from_secs(15), deadline),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn missing_authentication_expires_at_the_original_startup_deadline() {
+        use std::time::Duration;
+        let start = Instant::now();
+        for seconds in [1, 2, 120] {
+            let deadline = start + Duration::from_secs(seconds);
+            let mut reply = ready("http://127.0.0.1:3080/", false);
+            reply.managed = true;
+            for now in [deadline, deadline + Duration::from_secs(1)] {
+                let error = wait_for_launch_authentication(&reply, 401, now, deadline).unwrap_err();
+                assert_eq!(error, backend_error(Some("managed_auth_unavailable")));
+                assert!(error.contains("重新检测"));
+                assert_eq!(validated_stop_pid(&reply), Ok(42));
+            }
+        }
+    }
+
+    #[test]
+    fn authentication_wait_does_not_adopt_external_services_or_block_public_ones() {
+        use std::time::Duration;
+        let now = Instant::now();
+        let deadline = now + Duration::from_secs(120);
+        let mut reply = ready("http://127.0.0.1:3080/", false);
+        assert!(wait_for_launch_authentication(&reply, 401, now, deadline).is_err());
+        for managed in [false, true] {
+            reply.managed = managed;
+            assert_eq!(
+                wait_for_launch_authentication(&reply, 200, now, deadline),
+                Ok(false)
+            );
+        }
+        reply.managed = false;
+        reply.authenticated = true;
+        assert_eq!(
+            wait_for_launch_authentication(&reply, 401, now, deadline),
+            Ok(false)
+        );
+        assert!(validated_stop_pid(&reply).is_err());
     }
 
     #[test]
