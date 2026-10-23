@@ -1,0 +1,14 @@
+# Keep first-party text portable, including Windows checkouts.
+* text=auto eol=lf
+
+# Vendored files are byte-verified against the upstream manifest. Never rewrite
+# their original bytes during add/checkout, even when core.autocrlf is enabled.
+/src/vendor/dsh-pet/** -text
+/public/pet/dsh-pet/** -text
+/third-party/dsh-pet/** -text
+/src/pet/config.ts -text
+
+*.webm binary
+*.png binary
+*.ico binary
+*.bmp binary

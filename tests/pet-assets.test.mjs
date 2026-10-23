@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir, mkdir, mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 import ts from 'typescript';
 
@@ -159,4 +162,27 @@ test('distribution includes original MIT and verbatim upstream asset/derivative 
     assert.match(notice, /commercial use is prohibited/);
     assert.match(notice, /everywhere the work is introduced, displayed, or distributed/);
   }
+});
+
+test('Git checkout keeps vendored bytes even with Windows CRLF defaults', {timeout:60_000}, async t => {
+  const temp=await mkdtemp(join(tmpdir(),'dsh-pet-checkout-'));
+  t.after(()=>rm(temp,{recursive:true,force:true}));
+  const repository=join(temp,'repository');const output=join(temp,'checkout');
+  await mkdir(repository);await mkdir(output);
+  const original=new Map();
+  const paths=manifest.files.filter(file=>!file.path.endsWith('.webm')).map(file=>file.path);
+  paths.push('.gitattributes',manifest.files.find(file=>file.path.endsWith('.webm')).path);
+  for(const path of paths) original.set(path,await readFile(new URL(path,root)));
+  // Future upstream CRLF content must also remain verbatim, rather than being normalized.
+  original.set('src/vendor/dsh-pet/original-crlf.txt',Buffer.from('upstream\r\nbyte-exact\r\n'));
+  for(const [path,bytes] of original) {
+    const destination=join(repository,path);await mkdir(dirname(destination),{recursive:true});await writeFile(destination,bytes);
+  }
+  const git=(...args)=>{
+    const result=spawnSync('git',['-c','core.autocrlf=true','-c','core.eol=crlf',...args],{cwd:repository,encoding:'utf8',timeout:30_000});
+    assert.equal(result.status,0,result.stderr||result.stdout||String(result.error));
+  };
+  git('init','--quiet');git('add','--all');
+  git('checkout-index','--all','--prefix='+output.replaceAll('\\','/')+'/');
+  for(const [path,bytes] of original) assert.equal(sha256(await readFile(join(output,path))),sha256(bytes),path);
 });
