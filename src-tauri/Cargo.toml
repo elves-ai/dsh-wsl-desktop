@@ -22,10 +22,15 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking"] 
 
 [target.'cfg(windows)'.dependencies]
 tauri = { version = "2", features = ["tray-icon", "image-png", "unstable"] }
+# Match the COM ABI used by Tauri/Wry; WinRT toasts keep their separate 0.61 dependency.
+webview2-com = "=0.39.1"
+windows-webview = { package = "windows", version = "=0.62.2", features = ["Win32_System_Com"] }
 tauri-plugin-single-instance = "2"
 # Pin the verified desktop API; Cargo.lock also holds notify-rust at 4.11.7
 # (later backend releases raise the minimum Rust version).
 tauri-plugin-notification = "=2.3.3"
+# Retain WinRT toast handles and activation callbacks while the launcher is running.
+windows = { version = "=0.61.3", features = ["Data_Xml_Dom", "Foundation", "UI_Notifications", "Win32_System_WinRT"] }
 sha2 = "0.10"
 base64 = "0.22"
 # Windows system TLS/certificate store; updater packages are direct NSIS EXEs, not legacy ZIPs.

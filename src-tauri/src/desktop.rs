@@ -27,6 +27,8 @@ use tauri::{
 };
 use url::Url;
 
+#[path = "desktop_context_menu.rs"]
+mod context_menu;
 #[path = "desktop_notifications.rs"]
 mod notifications;
 #[path = "desktop_power.rs"]
@@ -35,6 +37,8 @@ mod power;
 mod settings_page;
 #[path = "desktop_titlebar.rs"]
 mod titlebar;
+#[path = "desktop_toasts.rs"]
+mod toasts;
 #[path = "desktop_updates.rs"]
 mod updates;
 
@@ -629,7 +633,7 @@ fn open_dsh(app: &tauri::AppHandle, config: &config::Config, url: Url) -> Result
     fit_window(&window, config.window_width, config.window_height);
     let result = (|| -> tauri::Result<()> {
         let (position, size) = titlebar::content_geometry(&window)?;
-        window.add_child(
+        let view = window.add_child(
             WebviewBuilder::new("dsh", WebviewUrl::External(url))
                 .data_directory(data)
                 .on_navigation(move |target| {
@@ -669,6 +673,7 @@ fn open_dsh(app: &tauri::AppHandle, config: &config::Config, url: Url) -> Result
             position,
             size,
         )?;
+        context_menu::attach(&view)?;
         titlebar::attach(&window)
     })();
     if result.is_err() {
@@ -916,13 +921,14 @@ pub fn run() {
                 .center()
                 .build()?;
             let (position, size) = titlebar::content_geometry(&launcher)?;
-            launcher.add_child(
+            let view = launcher.add_child(
                 WebviewBuilder::new("launcher", WebviewUrl::App("index.html".into()))
                     .on_navigation(|target| local_content(target, "launcher"))
                     .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny),
                 position,
                 size,
             )?;
+            context_menu::attach(&view)?;
             titlebar::attach(&launcher)?;
             let open = MenuItem::with_id(app, "open", "打开 DSH", true, None::<&str>)?;
             let control = MenuItem::with_id(app, "logs", "诊断日志…", true, None::<&str>)?;
@@ -1027,6 +1033,9 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("Failed to initialize DSH WSL Desktop");
     app.run(|app, event| {
+        if matches!(&event, tauri::RunEvent::Exit) {
+            notifications::stop(app);
+        }
         if let tauri::RunEvent::ExitRequested { api, .. } = event {
             if let Some(controller) = app.try_state::<Arc<Controller>>() {
                 if !controller.exiting.load(Ordering::SeqCst) {

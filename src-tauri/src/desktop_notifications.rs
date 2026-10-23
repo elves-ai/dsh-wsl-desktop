@@ -2,20 +2,28 @@
 use super::{assert_local, Controller};
 use crate::{
     notification_transport::RpcClient,
-    notifications::{CursorTracker, NoticeKind, NotificationSettings, NotificationSnapshot},
+    notifications::{
+        notification_session_url, task_notice_body, CursorTracker, NoticeKind,
+        NotificationSettings, NotificationSnapshot,
+    },
     user_attention::AttentionTracker,
 };
 use base64::Engine;
 use sha2::{Digest, Sha256};
 use std::{
     path::PathBuf,
-    sync::{atomic::Ordering, Arc, Condvar, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Condvar, Mutex,
+    },
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{Emitter, EventTarget, Manager, Webview};
 use tauri_plugin_notification::NotificationExt;
 use url::Url;
+
+static CLICK_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 struct Data {
     snapshot: NotificationSnapshot,
@@ -26,6 +34,7 @@ pub(super) struct Notifications {
     directory: PathBuf,
     data: Mutex<Data>,
     wake: Condvar,
+    toasts: super::toasts::Toasts,
 }
 impl Notifications {
     pub(super) fn new(directory: PathBuf) -> Self {
@@ -61,6 +70,7 @@ impl Notifications {
                 delivery_error: None,
             }),
             wake: Condvar::new(),
+            toasts: super::toasts::Toasts::new(),
         }
     }
     fn snapshot(&self) -> NotificationSnapshot {
@@ -190,7 +200,7 @@ pub(super) async fn test_notification(
             match send(
                 &app,
                 "DSH · 测试通知",
-                "通知测试已提交。Windows 通知设置或勿扰模式可能屏蔽横幅。",
+                "任务：示例任务（测试通知）\n通知测试已提交。Windows 通知设置或勿扰模式可能屏蔽横幅。",
             ) {
                 Ok(()) => {
                     data.delivery_error = None;
@@ -282,9 +292,9 @@ fn foreground(app: &tauri::AppHandle) -> bool {
 
 fn listening_message(notify_when_focused: bool) -> &'static str {
     if notify_when_focused {
-        "正在检查执行结果与待答问题（约每 3 秒）；窗口聚焦时也提醒，不显示正文。"
+        "正在检查执行结果与待答问题（约每 3 秒）；窗口聚焦时也提醒，显示会话名称，不显示正文。"
     } else {
-        "正在检查执行结果与待答问题（约每 3 秒）；前台静默，不显示正文。"
+        "正在检查执行结果与待答问题（约每 3 秒）；前台静默，显示会话名称，不显示正文。"
     }
 }
 
@@ -294,6 +304,7 @@ fn deliver(
     controller: &Controller,
     state: &Notifications,
     epoch: u64,
+    target: Url,
     title: &str,
     body: &str,
 ) {
@@ -312,8 +323,88 @@ fn deliver(
     {
         return;
     }
-    if let Err(message) = send(app, title, body) {
+    let click_app = app.clone();
+    let app_id = toast_app_id(app);
+    if let Err(message) = state.toasts.show(&app_id, title, body, move || {
+        if let Err(message) = open_notified_session(&click_app, &target) {
+            if let Some(controller) = click_app.try_state::<Arc<Controller>>() {
+                // Fixed diagnostics only: no session name, ID, URL or credentials in logs.
+                controller.record(&click_app, &message);
+            }
+        }
+    }) {
         data.delivery_error = Some(message);
+    }
+}
+
+// Match the existing plugin's installed-app identity and development fallback.
+fn toast_app_id(app: &tauri::AppHandle) -> String {
+    let development = tauri::utils::platform::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|parent| parent.display().to_string()))
+        .is_some_and(|directory| {
+            let sep = std::path::MAIN_SEPARATOR;
+            directory.ends_with(&format!("{sep}target{sep}debug"))
+                || directory.ends_with(&format!("{sep}target{sep}release"))
+        });
+    if development {
+        r"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe".into()
+    } else {
+        app.config().identifier.clone()
+    }
+}
+
+/// Native activation worker only. No new window/service, injected script or remote IPC.
+fn open_notified_session(app: &tauri::AppHandle, target: &Url) -> Result<(), String> {
+    let controller = app
+        .try_state::<Arc<Controller>>()
+        .ok_or("启动器尚未就绪。")?;
+    if controller.exiting.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+    if controller.snapshot().state != "ready" {
+        super::show_launcher(app);
+        return Err("通知对应的服务当前不可用，请在启动器中检查连接。".into());
+    }
+    let backend = controller.backend()?;
+    let origin = Url::parse(&backend.config.origin()).map_err(|_| "本机服务地址无效。")?;
+    if target.origin() != origin.origin() {
+        return Err("本机服务配置已变化，未打开旧通知对应的会话。".into());
+    }
+    let view = app.get_webview("dsh").ok_or("DSH 工作窗口尚未就绪。")?;
+    let current = view.url().map_err(|_| "无法验证 DSH 工作窗口。")?;
+    if current.origin() != origin.origin() {
+        return Err("DSH 工作窗口来源不匹配，未打开通知会话。".into());
+    }
+    // For the root GUI keep path/query unchanged: only its fragment changes, so the
+    // existing document, draft state and running interactions survive the navigation.
+    let mut destination = if current.path() == "/" {
+        current
+    } else {
+        origin
+    };
+    destination.set_fragment(target.fragment());
+    for label in ["launcher", "dsh"] {
+        if let Some(window) = app.get_window(label) {
+            super::settings_page::restore_in(&window)?;
+        }
+    }
+    if controller.exiting.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+    view.navigate(destination)
+        .map_err(|_| "无法打开通知对应的会话。")?;
+    super::show_dsh(app);
+    let _ = view.set_focus();
+    if let Some(launcher) = app.get_window("launcher") {
+        let _ = launcher.hide();
+    }
+    Ok(())
+}
+
+pub(super) fn stop(app: &tauri::AppHandle) {
+    if let Some(state) = app.try_state::<Arc<Notifications>>() {
+        state.toasts.shutdown();
     }
 }
 
@@ -366,14 +457,25 @@ pub(super) fn start(app: tauri::AppHandle, controller: Arc<Controller>, state: A
                     }
                     rpc.page(session_id, cursor)
                 })?;
-                for _notice in waiting {
+                for notice in waiting {
+                    let body = task_notice_body(
+                        &list,
+                        &notice.session_id,
+                        "任务正在等待你选择、回答问题或确认计划，请打开 DSH 继续。",
+                    );
+                    let target = notification_session_url(
+                        backend.config.port,
+                        &notice.session_id,
+                        CLICK_SEQUENCE.fetch_add(1, Ordering::Relaxed),
+                    )?;
                     deliver(
                         &app,
                         &controller,
                         &state,
                         epoch,
+                        target,
                         "DSH · 需要你回答",
-                        "任务正在等待你选择、回答问题或确认计划，请打开 DSH 继续。",
+                        &body,
                     );
                 }
                 let requests = tracker.scan(&list)?;
@@ -393,7 +495,13 @@ pub(super) fn start(app: tauri::AppHandle, controller: Arc<Controller>, state: A
                             ),
                             NoticeKind::Failed => ("DSH · 本轮执行失败", "打开 DSH 查看错误详情。"),
                         };
-                        deliver(&app, &controller, &state, epoch, title, body);
+                        let body = task_notice_body(&list, &notice.session_id, body);
+                        let target = notification_session_url(
+                            backend.config.port,
+                            &notice.session_id,
+                            CLICK_SEQUENCE.fetch_add(1, Ordering::Relaxed),
+                        )?;
+                        deliver(&app, &controller, &state, epoch, target, title, &body);
                     }
                 }
                 Ok(())
@@ -403,7 +511,7 @@ pub(super) fn start(app: tauri::AppHandle, controller: Arc<Controller>, state: A
                     &app,
                     epoch,
                     "listening",
-                    "正在检查执行结果与待答问题（约每 3 秒）；前台静默，不显示正文。",
+                    "正在检查执行结果与待答问题（约每 3 秒）；前台静默，显示会话名称，不显示正文。",
                 ),
                 Err(message) => {
                     // Reconnect establishes a fresh baseline, never replays old turns.

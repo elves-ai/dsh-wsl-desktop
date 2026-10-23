@@ -288,6 +288,14 @@ test('settings update snapshot and manual check failures leave explicit retry av
   await app.click('check-update'); assert.equal(checks, 2); assert.equal(app.node('update-message').dataset.error, 'false');
 });
 
+test('notification settings explain visible task names and notification-center retention', async () => {
+  const app = await mount(true);
+  assert.match(app.template, /通知显示会话名称/);
+  assert.match(app.template, /Windows 通知中心可能保留名称/);
+  assert.match(app.template, /不显示对话正文和错误详情/);
+  app.unload();
+});
+
 test('notifications default off, subscribe before reading, and change only by explicit setting', async () => {
   const app = await mount(true, base(), { invoke(name, _args, { subscriptions, fallback }) {
     if (name === 'get_notification_snapshot') assert.ok(subscriptions.has('launcher-notification-state'));

@@ -24,7 +24,7 @@ test('only trusted local content and titlebar views receive narrowly scoped IPC 
 test('titlebar settings opens its own verified parent directly and removes all popup machinery while tray stays unchanged', () => {
   const desktop = read('src-tauri/src/desktop.rs');
   const titlebar = read('src-tauri/src/desktop_titlebar.rs');
-  assert.doesNotMatch(titlebar, /menu::|MenuItem|\bMenus\b|application_menu|show_titlebar_menu|popup_at/);
+  assert.doesNotMatch(titlebar, /\bmenu::|MenuItem|\bMenus\b|application_menu|show_titlebar_menu|popup_at/);
   assert.doesNotMatch(desktop, /titlebar::Menus|application_menu|show_titlebar_menu|"(?:launcher|dsh)\.(?:settings|logs)"/);
   const declaration = titlebar.slice(titlebar.indexOf('fn open_titlebar_settings('), titlebar.indexOf('pub(super) fn content_geometry('));
   assert.ok(declaration.startsWith('fn open_titlebar_settings('));
@@ -264,6 +264,60 @@ test('pending-question reminders share safe delivery and only read existing sess
   assert.ok(!transport.includes('session/follow'));
 });
 
+test('all task notification kinds add matching session identity without new RPC or snapshot exposure', () => {
+  const native = read('src-tauri/src/desktop_notifications.rs');
+  const worker = native.slice(native.indexOf('pub(super) fn start('));
+  const waiting = worker.slice(worker.indexOf('for notice in waiting'), worker.indexOf('let requests = tracker.scan'));
+  const results = worker.slice(worker.indexOf('if let Some(notice) = notice'));
+  assert.match(waiting, /task_notice_body\(\s*&list,\s*&notice.session_id,/);
+  assert.match(waiting, /"DSH · 需要你回答",\s*&body/);
+  assert.match(results, /task_notice_body\(&list, &notice.session_id, body\)/);
+  assert.match(results, /deliver\(\s*&app,\s*&controller,\s*&state,\s*epoch,\s*target,\s*title,\s*&body,?\s*\)/);
+  assert.equal((native.match(/task_notice_body\(/g) || []).length, 2);
+  assert.doesNotMatch(native, /snapshot[.](?:title|body|task)|emit_to[\s\S]{0,120}&body/);
+});
+
+test('notification clicks capture a same-origin session target without scripts or native page permissions', () => {
+  const native = read('src-tauri/src/desktop_notifications.rs');
+  const open = native.slice(native.indexOf('fn open_notified_session('), native.indexOf('pub(super) fn stop('));
+  for (const guard of ['controller.exiting.load', 'controller.snapshot().state != "ready"',
+    'target.origin() != origin.origin()', 'current.origin() != origin.origin()']) assert.ok(open.includes(guard), guard);
+  assert.ok(open.includes('destination.set_fragment(target.fragment())'));
+  assert.ok(open.includes('current.path() == "/"'));
+  assert.ok(open.includes('settings_page::restore_in(&window)?'));
+  assert.ok(open.includes('view.navigate(destination)'));
+  assert.ok(open.includes('super::show_dsh(app)'));
+  assert.doesNotMatch(open, /eval\(|initialization_script|ensure_ready\(|dispatch\(|open_dsh\(|open::|WindowBuilder|WebviewBuilder/);
+  assert.ok(native.includes('state.toasts.show(&app_id, title, body, move ||'));
+  assert.ok(native.includes('open_notified_session(&click_app, &target)'));
+  const worker = native.slice(native.indexOf('pub(super) fn start('));
+  assert.equal((worker.match(/notification_session_url\(/g) || []).length, 2);
+  assert.equal((worker.match(/CLICK_SEQUENCE.fetch_add/g) || []).length, 2);
+});
+
+test('clickable Windows toasts retain native handles, escape text and clean up without callback locks', () => {
+  const source = read('src-tauri/src/desktop_toasts.rs');
+  assert.match(source, /const LIMIT: usize = 128/);
+  assert.match(source, /native: ToastNotification/);
+  assert.match(source, /activated: Option<i64>/);
+  assert.ok(source.includes('CreateTextNode(&HSTRING::from(value))'));
+  assert.ok(source.includes('ms-winsoundevent:Notification.Default'));
+  assert.ok(source.includes('ToastDismissalReason::TimedOut'));
+  assert.ok(source.includes('sender.send(Event::Clicked(id))'));
+  assert.ok(source.includes('sender.send(Event::Closed(id))'));
+  assert.ok(source.includes('entries.len() >= LIMIT'));
+  assert.ok(source.indexOf('entries.push_back(entry)') < source.indexOf('entry.notifier.Show(&entry.native)'));
+  for (const cleanup of ['RemoveActivated', 'RemoveDismissed', 'RemoveFailed', 'self.notifier.Hide', 'RemoveGroupedTagWithId']) assert.ok(source.includes(cleanup));
+  assert.ok(source.includes('for click in click_queue'));
+  assert.ok(source.includes('clicks.send(click)'));
+  assert.ok(source.includes('canceled.store(true, Ordering::SeqCst)'));
+  assert.ok(source.includes('Instant::now() >= deadline'));
+  assert.ok(source.includes('abandoned || replied.is_err()'));
+  assert.doesNotMatch(source, /thread::spawn\(click\)/);
+  assert.doesNotMatch(source, /History\(\).*Clear|launch=|activationType="protocol"|args\.Arguments|\.eval\(|Mutex/);
+  assert.ok(read('src-tauri/src/desktop.rs').includes('notifications::stop(app)'));
+});
+
 test('focus policy saves before updating memory and does not reset notification generations', () => {
   const source = read('src-tauri/src/desktop_notifications.rs');
   const setter = source.slice(source.indexOf('pub(super) async fn set_notifications_enabled('), source.indexOf('pub(super) async fn test_notification('));
@@ -421,10 +475,15 @@ test('settings navigation reuses local children in the existing parent without r
     assert.ok(desktop.includes('settings_page::' + command));
   }
   const back = settings.slice(settings.indexOf('fn return_from_settings('));
-  assert.ok(back.includes('content.show()')); assert.ok(back.includes('view.hide()'));
-  assert.ok(back.indexOf('content.show()') < back.indexOf('view.hide()'), 'restore source before hiding settings');
-  assert.ok(back.includes('content.set_focus()'));
-  assert.ok(back.includes('REQUESTED.fetch_and(!bit(window.label())'));
+  assert.ok(back.includes('restore_in(&window)?'));
+  const restore = settings.slice(settings.indexOf('fn restore_in('), settings.indexOf('fn return_from_settings('));
+  assert.ok(restore.includes('NAVIGATION.lock()'));
+  assert.ok(restore.includes('content.show()')); assert.ok(restore.includes('page.hide()'));
+  assert.ok(restore.indexOf('content.show()') < restore.indexOf('page.hide()'), 'restore source before hiding settings');
+  assert.ok(restore.includes('content.set_focus()'));
+  assert.ok(restore.includes('ACTIVE.fetch_and(!bit(window.label())'));
+  assert.ok(restore.includes('REQUESTED.fetch_and(!bit(window.label())'));
+  assert.doesNotMatch(restore, /[.]navigate\(|open_dsh\(|ensure_ready\(|perform\(/);
   assert.doesNotMatch(back, /[.]navigate\(|open_dsh\(|ensure_ready\(|perform\(/);
   const ready = settings.slice(settings.indexOf('fn settings_page_ready('), settings.indexOf('fn return_from_settings('));
   assert.ok(ready.includes('state.ready = true'));

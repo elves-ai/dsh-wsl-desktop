@@ -129,6 +129,11 @@ pub(super) fn show_in(window: &Window, section: &str) -> Result<(), String> {
                     return Err("无法创建设置页面，请检查 WebView2 Runtime。".into());
                 }
             };
+            if super::context_menu::attach(&page).is_err() {
+                let _ = page.close();
+                REQUESTED.fetch_and(!bit(window.label()), Ordering::SeqCst);
+                return Err("无法配置设置页面右键菜单。".into());
+            }
             // Keep the original visible until the local document subscribes and reports ready.
             if page.hide().is_err() {
                 let _ = page.close();
@@ -193,19 +198,30 @@ pub(super) async fn settings_page_ready(view: Webview) -> Result<String, String>
     .map_err(|_| "设置页面线程异常结束。".to_owned())?
 }
 
+/// Restore a primary window's existing content for Back or a native notification click.
+/// Worker-only: serialize with show/ready so a late settings load cannot cover the task.
+pub(super) fn restore_in(window: &Window) -> Result<(), String> {
+    let page_label = label(window.label()).ok_or("不支持的设置页面窗口。")?;
+    let _guard = NAVIGATION.lock().unwrap_or_else(|e| e.into_inner());
+    let app = window.app_handle();
+    let content = app.get_webview(window.label()).ok_or("原页面不可用。")?;
+    content.show().map_err(|_| "无法恢复原页面。")?;
+    if let Some(page) = app.get_webview(page_label) {
+        page.hide().map_err(|_| "无法关闭设置页面。")?;
+    }
+    ACTIVE.fetch_and(!bit(window.label()), Ordering::SeqCst);
+    REQUESTED.fetch_and(!bit(window.label()), Ordering::SeqCst);
+    let _ = content.set_focus();
+    Ok(())
+}
+
 #[tauri::command]
 pub(super) async fn return_from_settings(view: Webview) -> Result<(), String> {
     let window = assert_page(&view)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let _guard = NAVIGATION.lock().unwrap_or_else(|e| e.into_inner());
-        let app = window.app_handle();
-        let content = app.get_webview(window.label()).ok_or("原页面不可用。")?;
         // Restore existing content: no navigation, browser history, or service operation.
-        content.show().map_err(|_| "无法恢复原页面。")?;
-        view.hide().map_err(|_| "无法关闭设置页面。")?;
-        ACTIVE.fetch_and(!bit(window.label()), Ordering::SeqCst);
-        REQUESTED.fetch_and(!bit(window.label()), Ordering::SeqCst);
-        let _ = content.set_focus();
+        restore_in(&window)?;
+        let app = window.app_handle();
         // Startup can complete while its settings page is open; reveal the prepared workspace.
         if window.label() == "launcher"
             && app.get_window("dsh").is_some()

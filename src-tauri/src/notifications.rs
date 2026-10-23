@@ -129,6 +129,86 @@ pub struct Notice {
     pub seq: i64,
 }
 
+/// Add task identity using only session-list metadata, never history/question text.
+/// Titles are ephemeral; do not put this body in snapshots or launcher logs.
+pub fn task_notice_body(list: &Value, session_id: &str, description: &str) -> String {
+    let title = list
+        .get("items")
+        .and_then(Value::as_array)
+        .and_then(|items| {
+            items
+                .iter()
+                .find(|item| item.get("sessionId").and_then(Value::as_str) == Some(session_id))
+        })
+        .and_then(|item| item.pointer("/projections/values/title"))
+        .and_then(Value::as_str)
+        .map(|title| compact_task_text(title, 72))
+        .filter(|title| !title.is_empty())
+        .unwrap_or_else(|| {
+            let id = compact_task_text(session_id, 8);
+            if id.is_empty() {
+                "未命名会话".into()
+            } else {
+                format!("未命名会话 · {id}")
+            }
+        });
+    format!("任务：{title}\n{description}")
+}
+
+/// Construct only the configured loopback root + an encoded fragment. Session IDs
+/// are data, never paths/URLs/JavaScript. A nonce makes repeated notices hash-change.
+pub fn notification_session_url(
+    port: u16,
+    session_id: &str,
+    nonce: u64,
+) -> Result<url::Url, String> {
+    if port == 0
+        || session_id.trim().is_empty()
+        || session_id.len() > 256
+        || session_id.chars().any(char::is_control)
+    {
+        return Err("通知会话目标无效。".into());
+    }
+    let mut target = url::Url::parse(&format!("http://127.0.0.1:{port}/"))
+        .map_err(|_| "通知会话目标无效。".to_owned())?;
+    let fragment = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("session", session_id)
+        .append_pair("notification", &nonce.to_string())
+        .finish();
+    target.set_fragment(Some(&fragment));
+    Ok(target)
+}
+
+/// Bound by Unicode characters (not bytes); keep task names on one plain-text line.
+fn compact_task_text(text: &str, limit: usize) -> String {
+    let mut output = String::new();
+    let mut length = 0;
+    let mut pending_space = false;
+    for ch in text.chars() {
+        if ch.is_whitespace() {
+            pending_space = !output.is_empty();
+            continue;
+        }
+        if ch.is_control()
+            || matches!(ch, '\u{200b}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}')
+        {
+            continue;
+        }
+        let needed = 1 + usize::from(pending_space);
+        if length + needed > limit {
+            output.push('…');
+            break;
+        }
+        if pending_space {
+            output.push(' ');
+        }
+        output.push(ch);
+        length += needed;
+        pending_space = false;
+    }
+    output
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadRequest {
     pub session_id: String,
@@ -409,6 +489,172 @@ mod tests {
             .unwrap()
             .is_empty());
         tracker
+    }
+
+    #[test]
+    fn notification_links_encode_session_as_fragment_data_on_configured_loopback() {
+        for port in [1, 80, 3080, u16::MAX] {
+            for id in [
+                "normal-session",
+                "会话 🚀",
+                "//evil.invalid/path?token=x#fragment&session=other+%2F",
+            ] {
+                let url = notification_session_url(port, id, 42).unwrap();
+                assert_eq!(url.scheme(), "http");
+                assert_eq!(url.host_str(), Some("127.0.0.1"));
+                assert_eq!(url.port_or_known_default(), Some(port));
+                assert_eq!(url.path(), "/");
+                assert_eq!(url.query(), None);
+                assert!(url.username().is_empty());
+                assert_eq!(url.password(), None);
+                let pairs: Vec<_> = url::form_urlencoded::parse(url.fragment().unwrap().as_bytes())
+                    .map(|(key, value)| (key.into_owned(), value.into_owned()))
+                    .collect();
+                assert_eq!(
+                    pairs,
+                    vec![
+                        ("session".into(), id.into()),
+                        ("notification".into(), "42".into())
+                    ]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn notification_links_reject_invalid_ids_and_force_repeated_click_hash_changes() {
+        for id in [
+            "",
+            "  ",
+            "bad\nvalue",
+            "bad\u{0}value",
+            &"x".repeat(257),
+            &"测".repeat(86),
+        ] {
+            assert!(notification_session_url(3080, id, 0).is_err());
+        }
+        assert!(notification_session_url(0, "valid", 0).is_err());
+        assert_ne!(
+            notification_session_url(3080, "same-session", 1)
+                .unwrap()
+                .fragment(),
+            notification_session_url(3080, "same-session", 2)
+                .unwrap()
+                .fragment()
+        );
+    }
+
+    #[test]
+    fn task_notice_uses_matching_session_title_projection() {
+        let rows = list(vec![
+            json!({"sessionId":"other", "projections":{"values":{"title":"其他任务"}}}),
+            json!({"sessionId":"root", "title":"错误的顶层标题", "name":"错误的名称",
+                "cwd":"/private/workspace", "projections":{"kind":"sequenced",
+                    "asOfSeq":12, "values":{"title":"修复登录页面"}}}),
+        ]);
+        for description in ["本轮执行已结束。", "本轮执行失败。", "需要你回答。"]
+        {
+            assert_eq!(
+                task_notice_body(&rows, "root", description),
+                format!("任务：修复登录页面\n{description}")
+            );
+        }
+        assert_eq!(
+            task_notice_body(&rows, "other", "需要你回答。"),
+            "任务：其他任务\n需要你回答。"
+        );
+    }
+
+    #[test]
+    fn task_notice_missing_or_invalid_title_uses_short_session_id() {
+        for title in [
+            Value::Null,
+            json!(""),
+            json!(" \r\n\t"),
+            json!(23),
+            json!({"title":"不是标题字符串"}),
+            json!(["不是标题字符串"]),
+        ] {
+            let rows = list(vec![json!({"sessionId":"a1b2c3d4-5678",
+                "projections":{"values":{"title":title}}})]);
+            assert_eq!(
+                task_notice_body(&rows, "a1b2c3d4-5678", "查看结果。"),
+                "任务：未命名会话 · a1b2c3d4…\n查看结果。"
+            );
+        }
+        for rows in [
+            json!({}),
+            json!({"items":null}),
+            list(vec![]),
+            list(vec![json!({"sessionId":"abcd"})]),
+        ] {
+            assert_eq!(
+                task_notice_body(&rows, "abcd", "查看结果。"),
+                "任务：未命名会话 · abcd\n查看结果。"
+            );
+        }
+        assert_ne!(
+            task_notice_body(&list(vec![]), "sessionA", "查看结果。"),
+            task_notice_body(&list(vec![]), "sessionB", "查看结果。")
+        );
+    }
+
+    #[test]
+    fn task_notice_never_falls_back_to_history_questions_paths_or_credentials() {
+        let rows = list(vec![json!({"sessionId":"root", "cwd":"/private/project",
+            "title":"顶层非协议标题", "token":"secret-token", "cookie":"secret-cookie",
+            "messages":[{"text":"secret-conversation"}],
+            "projections":{"values":{"userQuestions":{"active":[{"question":"secret-question"}]}}}})]);
+        assert_eq!(
+            task_notice_body(&rows, "root", "查看结果。"),
+            "任务：未命名会话 · root\n查看结果。"
+        );
+    }
+
+    #[test]
+    fn task_notice_normalizes_whitespace_controls_and_direction_markers() {
+        let rows = list(vec![json!({"sessionId":"root", "projections":{"values":{
+            "title":" \r\n 修复\t登录\u{0000}页面\u{202e}  🚀\u{2066}  "}}})]);
+        assert_eq!(
+            task_notice_body(&rows, "root", "查看结果。"),
+            "任务：修复 登录页面 🚀\n查看结果。"
+        );
+    }
+
+    #[test]
+    fn task_notice_truncates_unicode_titles_without_splitting_utf8() {
+        for ch in ['测', '🚀'] {
+            let title = ch.to_string().repeat(72);
+            let rows = |title: String| {
+                list(vec![json!({"sessionId":"root",
+                "projections":{"values":{"title":title}}})])
+            };
+            assert_eq!(
+                task_notice_body(&rows(format!("{title}  ")), "root", "查看结果。"),
+                format!("任务：{title}\n查看结果。")
+            );
+            assert_eq!(
+                task_notice_body(&rows(format!("{title}{ch}")), "root", "查看结果。"),
+                format!("任务：{title}…\n查看结果。")
+            );
+        }
+    }
+
+    #[test]
+    fn task_notice_uses_latest_title_and_handles_empty_or_unicode_fallback_ids() {
+        let mut rows = list(vec![json!({"sessionId":"root",
+            "projections":{"values":{"title":"旧任务名"}}})]);
+        assert!(task_notice_body(&rows, "root", "查看结果。").contains("旧任务名"));
+        rows["items"][0]["projections"]["values"]["title"] = json!("新任务名");
+        assert!(task_notice_body(&rows, "root", "查看结果。").contains("新任务名"));
+        assert_eq!(
+            task_notice_body(&rows, "", "查看结果。"),
+            "任务：未命名会话\n查看结果。"
+        );
+        assert_eq!(
+            task_notice_body(&rows, "会话🧪", "查看结果。"),
+            "任务：未命名会话 · 会话🧪\n查看结果。"
+        );
     }
 
     #[test]

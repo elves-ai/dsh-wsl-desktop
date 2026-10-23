@@ -122,7 +122,7 @@ pub(super) fn content_geometry(
 pub(super) fn attach(window: &Window) -> tauri::Result<()> {
     let width = window.inner_size()?.width as f64 / window.scale_factor()?;
     let label = format!("{}-titlebar", window.label());
-    window.add_child(
+    let view = window.add_child(
         WebviewBuilder::new(&label, WebviewUrl::App("titlebar.html".into()))
             .focused(false)
             .on_navigation(local_titlebar)
@@ -130,6 +130,7 @@ pub(super) fn attach(window: &Window) -> tauri::Result<()> {
         LogicalPosition::new(0.0, 0.0),
         LogicalSize::new(width, HEIGHT),
     )?;
+    super::context_menu::attach(&view)?;
     layout(window)
 }
 
