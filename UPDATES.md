@@ -1,5 +1,7 @@
 # 启动器更新
 
+桌宠代码与动画来自 PC2005-cloud 的 [dsh-pet](<https://github.com/PC2005-cloud/dsh-pet>)：代码 MIT，动画素材允许开源使用、禁止商用。后续发布说明及应用内更新说明会保留上游地址和限制；衍生作品的任何介绍、展示和分发处也须保留原作者 GitHub 地址。详见[来源声明](<third-party/dsh-pet/UPSTREAM.md>)。
+
 ## 使用方式
 
 - 桌面启动器每次启动静默检查一次正式版本，不会自动下载，不打断初始化或自动弹出窗口。可点击桌面窗口左上角 Logo 旁独立的“设置”齿轮图标，直接打开当前主窗口内的设置页，再从侧栏进入“软件更新 → 检查更新”；Logo 仅作展示，点击齿轮不会弹出下拉菜单。也可使用保持不变的托盘“检查启动器更新…”入口。
@@ -44,7 +46,7 @@ https://github.com/elves-ai/dsh-wsl-desktop/releases/latest/download/latest.json
 
 更新版正式 Release 包含独立 EXE、NSIS 安装包、安装包签名、latest.json 和 SHA256SUMS.txt。版本清单和安装包来自同一构建，签名要求包含该版本，拒绝将旧签名包伪装成高版本。签名校验发生在客户端安装前；SHA256 不是更新签名的替代品。
 
-更新说明采用发布脚本生成的简短说明，显示为纯文本，不执行 Markdown/HTML。新增签名只证明更新包来自配套私钥持有者，**不代表获得 SignPath 批准或 Windows 代码签名证书**；见 [代码签名政策](<CODE_SIGNING.md>)。
+更新说明读取与版本匹配的[发布说明](<RELEASE_NOTES.md>)，并保留上游来源/素材限制；应用内显示为纯文本，不执行 Markdown/HTML。新增签名只证明更新包来自配套私钥持有者，**不代表获得 SignPath 批准或 Windows 代码签名证书**；见 [代码签名政策](<CODE_SIGNING.md>)。
 
 ## 本机开发构建
 

@@ -108,6 +108,28 @@ pub(super) fn get_titlebar_update_state(
     Ok(state.titlebar_notice())
 }
 
+#[tauri::command]
+pub(super) fn get_titlebar_pet_state(
+    view: Webview,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, std::sync::Arc<super::pet_settings::PetControls>>,
+) -> Result<crate::pet_settings::TitlebarPetState, String> {
+    let _window = assert_titlebar(&view)?;
+    state.read_notice(&app)
+}
+#[tauri::command]
+pub(super) async fn toggle_titlebar_pet(
+    view: Webview,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, std::sync::Arc<super::pet_settings::PetControls>>,
+) -> Result<crate::pet_settings::TitlebarPetState, String> {
+    let _window = assert_titlebar(&view)?;
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || state.toggle(&app))
+        .await
+        .map_err(|_| "切换桌面宠物的线程异常结束。".to_owned())?
+}
+
 pub(super) fn content_geometry(
     window: &Window,
 ) -> tauri::Result<(PhysicalPosition<i32>, PhysicalSize<u32>)> {

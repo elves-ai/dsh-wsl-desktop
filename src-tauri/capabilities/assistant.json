@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "assistant",
+  "description": "Bundled desktop pet and conversation panel only; no service, installer, shell or arbitrary RPC access.",
+  "local": true,
+  "webviews": [
+    "assistant-pet",
+    "assistant-chat"
+  ],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-get-assistant-snapshot",
+    "allow-assistant-action"
+  ]
+}

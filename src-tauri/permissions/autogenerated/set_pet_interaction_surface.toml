@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-pet-interaction-surface"
+description = "Enables the set_pet_interaction_surface command without any pre-configured scope."
+commands.allow = ["set_pet_interaction_surface"]
+
+[[permission]]
+identifier = "deny-set-pet-interaction-surface"
+description = "Denies the set_pet_interaction_surface command without any pre-configured scope."
+commands.deny = ["set_pet_interaction_surface"]

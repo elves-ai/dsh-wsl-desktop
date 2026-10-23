@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>鲸鱼娘气泡 · 仅布局预览</title><link rel="stylesheet" href="/src/assistant.css"><link rel="stylesheet" href="/src/pet/notifications.css"><style>body{display:flex;align-items:center;flex-direction:column;background:#18212b;padding-top:12px;overflow:auto}#assistant-root{width:360px;height:320px;flex-shrink:0}.preview-controls{display:flex;gap:8px;padding:12px;color:#ccd9e5}.preview-controls button{font-size:12px}#preview-result{color:#b6c8d8;font-size:12px}</style></head><body><div id="assistant-root"><section class="pet-shell"><div class="pet-stage"><video class="pet-media" autoplay muted loop playsinline src="/pet/dsh-pet/webm/%E5%BE%85%E6%9C%BA%E5%91%BC%E5%90%B8%E4%BC%91%E9%97%B2.webm"></video></div><nav class="pet-tools"><button disabled>聊聊</button><button disabled>动作</button><button disabled>打开 DSH</button><button disabled>隐藏</button></nav><div id="pet-bubble"></div><div class="pet-attribution"><a class="pet-credit" href="https://github.com/PC2005-cloud/dsh-pet">dsh-pet · PC2005-cloud</a><span class="asset-license">动画素材禁止商用</span></div></section></div><div class="preview-controls"><button id="preview-completed">预览完成气泡</button><button id="preview-waiting">预览待回答气泡</button></div><p id="preview-result">仅布局预览，不连接 DSH 或发送系统通知。</p><script type="module">
+import { PetNotifications } from '/src/pet/notifications.ts';
+let sequence=0;
+const result=document.getElementById('preview-result');
+const notifications=new PetNotifications(document.getElementById('pet-bubble'),{onOpen:async()=>{result.textContent='预览：已点击查看会话，不进行实际跳转。';},onDismiss:()=>{}});
+document.getElementById('preview-completed').addEventListener('click',()=>notifications.enqueue({id:'preview-'+(++sequence),kind:'completed',title:'本轮执行已结束',body:'任务：气泡通知布局验收。点击这里查看对应会话。'}));
+document.getElementById('preview-waiting').addEventListener('click',()=>notifications.enqueue({id:'preview-'+(++sequence),kind:'waiting',title:'鲸鱼娘需要你回答',body:'任务正在等待你选择、回答问题或确认计划。'}));
+window.addEventListener('pagehide',()=>notifications.dispose(),{once:true});
+</script></body></html>

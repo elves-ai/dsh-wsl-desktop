@@ -22,8 +22,8 @@ body { user-select: none; }
 }
 .app-icon { display: grid; place-items: center; width: 36px; flex: 0 0 36px; color: #91aef3; }
 .app-icon img { display: block; width: 16px; height: 16px; pointer-events: none; }
-.settings-control, .update-control { display: grid; place-items: center; width: 32px; flex: 0 0 32px; color: #aeb5c2; cursor: pointer; }
-.settings-control svg, .update-control svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.settings-control, .update-control, .pet-control { display: grid; place-items: center; width: 32px; flex: 0 0 32px; color: #aeb5c2; cursor: pointer; }
+.settings-control svg, .update-control svg, .pet-control svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 .update-control { position: relative; }
 .update-dot { position: absolute; top: 5px; right: 5px; width: 5px; height: 5px; border-radius: 50%; background: #f35b66; pointer-events: none; }
 .update-dot[hidden] { display: none; }

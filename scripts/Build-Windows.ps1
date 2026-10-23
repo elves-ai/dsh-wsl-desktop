@@ -14,9 +14,9 @@ if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { throw 'LOCALAPPDATA is un
 $buildRoot = Join-Path $env:LOCALAPPDATA 'DSHWslDesktopBuild'
 $stage = Join-Path $buildRoot ('source-' + [Guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory($stage)
-$rootFiles = @('package.json', 'package-lock.json', 'tsconfig.json', 'vite.config.ts', 'index.html', 'titlebar.html', 'app-icon.png', 'LICENSE', 'README.md', 'PRIVACY.md', 'CODE_SIGNING.md', 'DOWNLOADS.md', 'UPDATES.md')
+$rootFiles = @('package.json', 'package-lock.json', 'tsconfig.json', 'vite.config.ts', 'index.html', 'titlebar.html', 'assistant.html', 'app-icon.png', 'LICENSE', 'README.md', 'ASSISTANT.md', 'PRIVACY.md', 'CODE_SIGNING.md', 'DOWNLOADS.md', 'UPDATES.md')
 foreach ($file in $rootFiles) { Copy-Item -LiteralPath (Join-Path $source $file) -Destination (Join-Path $stage $file) }
-$folders = @('src', 'tests', 'scripts', '.github/workflows', 'src-tauri/src', 'src-tauri/helpers', 'src-tauri/icons', 'src-tauri/installer', 'src-tauri/capabilities')
+$folders = @('src', 'public', 'third-party', 'tests', 'scripts', '.github/workflows', 'src-tauri/src', 'src-tauri/helpers', 'src-tauri/icons', 'src-tauri/installer', 'src-tauri/capabilities')
 foreach ($folder in $folders) {
     $destination = Join-Path $stage $folder
     [void][IO.Directory]::CreateDirectory($destination)

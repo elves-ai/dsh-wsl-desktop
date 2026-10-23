@@ -19,3 +19,14 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+Third-party exception — dsh-pet
+
+The MIT grant above covers this project’s first-party code, not third-party
+artwork or animation assets. Pet code and animations originate from:
+https://github.com/PC2005-cloud/dsh-pet
+Copyright (c) 2026 PC2005-cloud. Their code is MIT (retained separately).
+Their README states that animation/prompt/source-video assets allow open-source
+use but prohibit commercial use. Derivative, modified, and reskinned works must
+include the original-author GitHub URL everywhere introduced, displayed, or
+distributed. These assets are NOT relicensed under this project’s MIT license.

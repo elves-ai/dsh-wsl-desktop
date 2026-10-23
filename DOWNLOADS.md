@@ -2,6 +2,10 @@
 
 DSH WSL Desktop is a Windows desktop launcher for an existing DeepSeek Harness installation in WSL. It provides a local startup/status window, an embedded DSH workspace, a tray icon, and explicit start/stop/restart controls. It does not bundle or install DSH itself.
 
+## Desktop pet attribution
+
+Pet code and animations originate from PC2005-cloud’s [dsh-pet](<https://github.com/PC2005-cloud/dsh-pet>). Code is MIT; animation assets allow open-source use but **prohibit commercial use**. Derivative/modified/reskinned works must include this original-author GitHub URL everywhere they are introduced, displayed, or distributed. See [upstream notices](<third-party/dsh-pet/UPSTREAM.md>). The v0.1.12 source introduces the pet, shared DSH conversation panel and interactive question/approval bubbles. Older published versions do not contain it. CI verification does not replace Windows native end-to-end qualification; see the version-specific release notes.
+
 ## Windows x64 releases
 
 Use the [GitHub Releases page](https://github.com/elves-ai/dsh-wsl-desktop/releases) for versioned downloads. Each published release contains the standalone executable, an NSIS installer, and SHA256SUMS.txt. Releases enabling in-app updates also include the installer signature and latest.json update manifest. These public release assets do not use the 30-day Actions artifact retention period and normally do not require GitHub login. A release appears only after its version-tag workflow completes successfully; prereleases are marked separately.

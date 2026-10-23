@@ -5,6 +5,7 @@ import './titlebar.css';
 type TitlebarState = { maximized: boolean; focused: boolean; title: string };
 type WindowAction = 'state' | 'minimize' | 'maximize' | 'close' | 'drag';
 type UpdateNotice = { available: boolean };
+type PetState = { visible: boolean; revision: number };
 
 const native = isTauri();
 const titlebar = document.getElementById('titlebar')!;
@@ -15,6 +16,7 @@ const maximize = document.getElementById('window-maximize')!;
 const settingsButton = document.getElementById('titlebar-settings') as HTMLButtonElement;
 const updateButton = document.getElementById('titlebar-updates') as HTMLButtonElement;
 const updateDot = document.getElementById('titlebar-update-dot')!;
+const petButton = document.getElementById('titlebar-pet') as HTMLButtonElement;
 const actions: WindowAction[] = ['minimize', 'maximize', 'close'];
 const windowButtons = actions.map(action => document.getElementById('window-' + action) as HTMLButtonElement);
 let disposed = false;
@@ -23,6 +25,9 @@ let navigationPending = false;
 let unlistenUpdates: (() => void) | undefined;
 let updateRevision = 0;
 let stateRevision = 0;
+let petRevision = -1;
+let petPending = false;
+let unlistenPet: (() => void) | undefined;
 const pendingActions = new Set<WindowAction>();
 titlebar.setAttribute('data-native', String(native));
 
@@ -88,6 +93,9 @@ settingsButton.addEventListener('click', event => {
 updateButton.addEventListener('click', event => {
   if (event.detail <= 1) void showSettings('updates');
 });
+petButton.addEventListener('click', event => {
+  if (event.detail <= 1) void petAction();
+});
 actions.forEach((action, index) => {
   windowButtons[index].disabled = !native;
   windowButtons[index].addEventListener('click', () => { void windowAction(action); });
@@ -115,6 +123,8 @@ function cleanup() {
   unlisten = undefined;
   unlistenUpdates?.();
   unlistenUpdates = undefined;
+  unlistenPet?.();
+  unlistenPet = undefined;
 }
 window.addEventListener('beforeunload', cleanup);
 window.addEventListener('pagehide', cleanup);
@@ -122,7 +132,10 @@ window.addEventListener('pagehide', cleanup);
 async function initialize() {
   if (!native) {
     title.textContent = '浏览器预览 · 窗口操作不可用';
-    announce('浏览器预览：点击设置可预览页面，窗口操作仅在桌面应用可用。');
+    petButton.disabled = true;
+    petButton.setAttribute('title', '浏览器预览：桌面宠物仅在桌面应用可用。');
+    petButton.setAttribute('aria-label', '显示桌面宠物（仅在桌面应用可用）');
+    announce('浏览器预览：点击设置可预览页面，窗口操作和桌面宠物仅在桌面应用可用。');
     return;
   }
   try {
@@ -168,5 +181,50 @@ async function initializeUpdateNotice() {
   } catch { /* Unknown availability is not an update; never block opening the update page. */ }
 }
 
+// All sources share the backend's visibility revision, not a local request counter.
+function applyPetState(state: PetState): boolean {
+  if (!state || typeof state.visible !== 'boolean' || !Number.isSafeInteger(state.revision) || state.revision < 0) return false;
+  if (disposed || state.revision <= petRevision) return true;
+  petRevision = state.revision;
+  petButton.setAttribute('aria-pressed', String(state.visible));
+  const label = state.visible ? '隐藏桌面宠物' : '显示桌面宠物';
+  petButton.setAttribute('title', label);
+  petButton.setAttribute('aria-label', label);
+  return true;
+}
+
+async function petAction(initial = false) {
+  if (!native || disposed || petPending) return;
+  petPending = true;
+  petButton.disabled = true;
+  petButton.setAttribute('aria-busy', 'true');
+  // An unknown state retries only the subscription/read; it must never guess visibility.
+  const readOnly = initial || petRevision < 0 || !unlistenPet;
+  try {
+    if (!unlistenPet) {
+      const stop = await listen<PetState>('titlebar-pet-state', event => { applyPetState(event.payload); });
+      if (disposed) { stop(); return; }
+      unlistenPet = stop;
+    }
+    if (disposed) return;
+    const state = await invoke<PetState>(readOnly ? 'get_titlebar_pet_state' : 'toggle_titlebar_pet');
+    if (disposed) return;
+    if (!applyPetState(state)) throw new Error('Invalid pet visibility projection');
+    if (!initial) announce('');
+  } catch {
+    // Keep unrelated window errors intact when independent initializations fail together.
+    if (!initial || !status.textContent) announce(readOnly
+      ? '桌面宠物状态读取失败，请点击宠物按钮重试。'
+      : '桌面宠物操作失败，请重试。');
+  } finally {
+    petPending = false;
+    if (!disposed) {
+      petButton.disabled = false;
+      petButton.removeAttribute('aria-busy');
+    }
+  }
+}
+
 void initialize();
 void initializeUpdateNotice();
+void petAction(true);

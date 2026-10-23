@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-pet-notifications"
+description = "Enables the get_pet_notifications command without any pre-configured scope."
+commands.allow = ["get_pet_notifications"]
+
+[[permission]]
+identifier = "deny-get-pet-notifications"
+description = "Denies the get_pet_notifications command without any pre-configured scope."
+commands.deny = ["get_pet_notifications"]

@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "pet-settings",
+  "description": "Only trusted settings children may read or change the pet visibility and preferences.",
+  "local": true,
+  "webviews": [
+    "launcher-settings",
+    "dsh-settings"
+  ],
+  "permissions": [
+    "allow-get-pet-settings",
+    "allow-set-pet-settings",
+    "allow-set-pet-visibility"
+  ]
+}

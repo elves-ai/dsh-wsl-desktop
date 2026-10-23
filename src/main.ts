@@ -59,6 +59,16 @@ interface PowerSnapshot {
   message: string;
 }
 
+interface PetSettingsSnapshot {
+  visible: boolean;
+  startup_visible: boolean;
+  roaming_enabled: boolean;
+  bubble_notifications: boolean;
+  revision: number;
+  message: string;
+}
+type PetSettingsPatch = Partial<Pick<PetSettingsSnapshot, 'startup_visible' | 'roaming_enabled' | 'bubble_notifications'>>;
+
 type Action = 'check' | 'open' | 'start' | 'stop' | 'restart' | 'logs' | 'quit' | 'exit';
 const native = isTauri();
 const app = document.querySelector<HTMLDivElement>('#app');
@@ -66,14 +76,14 @@ if (!app) throw new Error('缺少应用挂载节点');
 
 const parameters = new URL(window.location.href).searchParams;
 const settingsView = parameters.get('view') === 'settings';
-const settingsSections = ['environment', 'notifications', 'power', 'updates', 'logs'] as const;
+const settingsSections = ['environment', 'notifications', 'power', 'pet', 'updates', 'logs'] as const;
 type SettingsSection = typeof settingsSections[number];
 let settingsSection: SettingsSection = settingsSections.find(section => section === parameters.get('section')) || 'environment';
 const mark = `<img src="${appIconUrl}" width="36" height="36" alt="" />`;
 // Templates contain only developer-owned markup. All native values use textContent/value.
 app.innerHTML = settingsView ? `
 <main class="settings-shell" id="settings-shell">
-  <aside class="settings-sidebar"><button class="settings-back" id="settings-back" type="button" aria-label="返回"><svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="m11.5 4.5-5.5 5.5 5.5 5.5M6 10h10" /></svg><span>返回</span></button><div class="settings-brand"><span class="small-mark">${mark}</span><span>DSH<small>应用设置</small></span></div><nav aria-label="设置分类">${settingsSections.map((section,index) => `<button class="settings-nav" id="nav-${section}" type="button"><span class="nav-index" aria-hidden="true">0${index+1}</span>${['环境与目录','系统通知','电源管理','软件更新','诊断日志'][index]}</button>`).join('')}</nav><p class="settings-sidebar-note">设置保存在本机<br>不会上传到维护者</p></aside>
+  <aside class="settings-sidebar"><button class="settings-back" id="settings-back" type="button" aria-label="返回"><svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="m11.5 4.5-5.5 5.5 5.5 5.5M6 10h10" /></svg><span>返回</span></button><div class="settings-brand"><span class="small-mark">${mark}</span><span>DSH<small>应用设置</small></span></div><nav aria-label="设置分类">${settingsSections.map((section,index) => `<button class="settings-nav" id="nav-${section}" type="button"><span class="nav-index" aria-hidden="true">0${index+1}</span>${['环境与目录','系统通知','电源管理','桌面宠物','软件更新','诊断日志'][index]}</button>`).join('')}</nav><p class="settings-sidebar-note">设置保存在本机<br>不会上传到维护者</p></aside>
   <div class="settings-content">
     <header class="settings-heading"><p class="eyebrow">应用设置</p><h1 id="settings-title" tabindex="-1">环境与目录</h1><p id="settings-description">指定已有的 DSH 项目，查看本地运行配置。</p></header>
     <div class="error-notice" id="error-notice" role="alert" hidden></div>
@@ -82,8 +92,18 @@ app.innerHTML = settingsView ? `
       <div class="setting-group"><div class="group-heading"><h2>运行环境</h2><span id="status-label" class="muted">读取中</span></div><dl class="connection-info"><div><dt>服务地址</dt><dd><code id="origin">尚未连接</code></dd></div><div><dt>进程归属</dt><dd id="ownership">等待检查</dd></div><div><dt>启动配置</dt><dd id="config-location">尚未读取</dd></div></dl><p class="setting-help" id="ownership-hint">仅管理由启动器托管的服务。</p><button class="button secondary" id="check" type="button" disabled>重新检测并进入 DSH</button></div>
       <p class="setting-help">不自动安装软件、克隆项目或安装依赖。修改目录前，请通过托盘右键菜单停止服务。</p>
     </section>
-    <section id="settings-notifications" aria-label="系统通知" hidden><div class="setting-group"><div class="toggle-row"><div><h2>任务通知</h2><p>提醒任务结束、失败，以及需要你选择、回答或确认计划。默认仅在 DSH 不在前台时通知。</p></div><label class="switch"><input id="notifications-enabled" type="checkbox" aria-label="启用系统通知" disabled><span></span></label></div><div class="toggle-row"><div><h2>窗口聚焦时也通知</h2><p id="notifications-focused-help">开启后，即使 DSH 工作窗口已打开且正在使用，也会发送系统通知。</p></div><label class="switch"><input id="notifications-when-focused" type="checkbox" aria-label="窗口聚焦时也通知" aria-describedby="notifications-focused-help" disabled><span></span></label></div><p id="notification-message" class="setting-help" role="status" aria-live="polite">正在读取通知设置。</p><button class="button secondary" id="test-notification" type="button" disabled>发送测试通知</button></div><p class="setting-help">默认关闭。通知显示会话名称（未命名时显示短编号），不显示对话正文和错误详情。Windows 通知中心可能保留名称；请勿在名称中放入敏感信息。点击任务通知可定位会话（需配套 Harness 前端）；仅启动器运行中有效。本轮结束不代表整个长任务完成。退出启动器后不再提醒。</p><p class="setting-help">若未看到横幅，请检查 Windows 通知权限及勿扰模式。</p></section>
+    <section id="settings-notifications" aria-label="系统通知" hidden><div class="setting-group"><div class="toggle-row"><div><h2>任务通知</h2><p>提醒任务结束、失败，以及需要你选择、回答或确认计划。默认仅在 DSH 不在前台时通知。</p></div><label class="switch"><input id="notifications-enabled" type="checkbox" aria-label="启用系统通知" disabled><span></span></label></div><div class="toggle-row"><div><h2>窗口聚焦时也通知</h2><p id="notifications-focused-help">同时用于桌宠气泡和系统通知。开启后，DSH 窗口聚焦时也按当前通知渠道提醒；可在系统通知关闭时配置，不会开启系统通知。</p></div><label class="switch"><input id="notifications-when-focused" type="checkbox" aria-label="窗口聚焦时也通知" aria-describedby="notifications-focused-help" disabled><span></span></label></div><p id="notification-message" class="setting-help" role="status" aria-live="polite">正在读取通知设置。</p><button class="button secondary" id="test-notification" type="button" disabled>发送测试通知</button></div><p class="setting-help">默认关闭。通知显示会话名称（未命名时显示短编号），不显示对话正文和错误详情。Windows 通知中心可能保留名称；请勿在名称中放入敏感信息。点击任务通知可定位会话（需配套 Harness 前端）；仅启动器运行中有效。本轮结束不代表整个长任务完成。退出启动器后不再提醒。</p><p class="setting-help">若未看到横幅，请检查 Windows 通知权限及勿扰模式。</p></section>
     <section id="settings-power" aria-label="电源管理" hidden><div class="setting-group"><div class="toggle-row"><div><h2>任务期间防休眠</h2><p id="power-help">默认启用。任务运行期间，仅防止系统自动休眠，屏幕仍可熄灭。</p></div><label class="switch"><input id="power-enabled" type="checkbox" aria-label="任务期间防休眠" aria-describedby="power-help power-message" checked disabled><span></span></label></div><p id="power-active" class="setting-help" role="status" aria-live="polite">正在读取保护状态。</p><p id="power-message" class="setting-help" role="status" aria-live="polite">正在读取电源设置。</p><button class="button secondary" id="power-refresh" type="button" disabled>重新检测</button></div><p class="setting-help">最小化到托盘后继续保护；退出启动器后不再保护。不阻止手动睡眠或合盖休眠。</p></section>
+    <section id="settings-pet" aria-label="桌面宠物" hidden>
+      <div class="setting-group">
+        <div class="toggle-row"><div><h2>显示桌面宠物</h2><p id="pet-visible-help">立即显示或隐藏桌面宠物，不会停止 DSH 任务。</p></div><label class="switch"><input id="pet-visible" type="checkbox" aria-label="显示桌面宠物" aria-describedby="pet-visible-help pet-message" disabled><span></span></label></div>
+        <div class="toggle-row"><div><h2>启动时显示</h2><p id="pet-startup-help">保存在本机，下次启动生效；不改变当前显示状态。</p></div><label class="switch"><input id="pet-startup-visible" type="checkbox" aria-label="启动时显示" aria-describedby="pet-startup-help pet-message" disabled><span></span></label></div>
+        <div class="toggle-row"><div><h2>允许漫游</h2><p id="pet-roaming-help">保存在本机，即时生效。关闭后停止随机漫游，仍可拖拽、抛掷和点播动作。</p></div><label class="switch"><input id="pet-roaming-enabled" type="checkbox" aria-label="允许漫游" aria-describedby="pet-roaming-help pet-message" disabled><span></span></label></div>
+        <div class="toggle-row"><div><h2>气泡通知</h2><p id="pet-bubble-help">任务完成、失败时显示摘要；需要回答、确认计划或授权时，可直接在气泡中选择、输入、允许一次或拒绝。待处理请求可手动收起，不会自动授权或取消。</p><p id="pet-bubble-policy" class="setting-help">独立于系统通知开关。桌宠显示时仅用气泡提醒，不发送 Windows 通知；关闭气泡则静默，不回退系统通知。桌宠隐藏时按系统通知开关提醒，不补历史气泡。普通任务提醒前台静默，沿用系统通知中的“窗口聚焦时也通知”选项；待答和授权交互会保留，直到处理或手动收起。</p></div><label class="switch"><input id="pet-bubble-notifications" type="checkbox" aria-label="气泡通知" aria-describedby="pet-bubble-help pet-bubble-policy pet-message" disabled><span></span></label></div>
+        <p id="pet-message" class="setting-help" role="status" aria-live="polite">正在读取桌面宠物设置。</p><button class="button secondary" id="pet-refresh" type="button" disabled>重新读取</button>
+      </div>
+      <p class="setting-help pet-source">来源：<a href="https://github.com/PC2005-cloud/dsh-pet" target="_blank" rel="noopener noreferrer">PC2005-cloud/dsh-pet</a>。动画素材仅限非商业使用。</p>
+    </section>
     <section id="settings-updates" aria-label="软件更新" hidden><div class="setting-group"><div class="group-heading"><h2>DSH WSL Desktop</h2><span id="update-current-version" class="muted">正在读取版本</span></div><p id="update-new-version" hidden></p><p id="update-message" role="status" aria-live="polite" tabindex="-1">正在读取更新状态。</p><pre id="update-notes" aria-label="更新说明" hidden></pre><div id="update-progress-row" hidden><progress id="update-progress" aria-label="更新下载进度"></progress><span id="update-progress-label"></span></div><div class="setting-actions"><button class="button secondary" id="check-update" type="button" disabled>检查更新</button><button class="button primary" id="install-update" type="button" hidden disabled>下载并安装</button></div></div><p class="setting-help">仅更新 Windows 启动器，不会更新或停止 WSL 中的 DSH。安装前需要你确认。</p></section>
     <section id="settings-logs" aria-label="诊断日志" hidden><div class="group-heading"><h2>启动与服务操作</h2><button class="text-button" id="logs" type="button" disabled>刷新</button></div><p class="setting-help">只显示启动器的脱敏记录，不包含 DSH 对话内容。</p><pre id="log-output" tabindex="0" aria-label="脱敏操作日志">暂无操作日志</pre></section>
     <p class="settings-preview" id="settings-preview" hidden>浏览器预览 · 不会连接或操作本地服务</p>
@@ -175,6 +195,16 @@ let powerRevision = 0;
 let powerError = '';
 let unlistenPower: UnlistenFn | undefined;
 let powerDisposed = false;
+const petVisible = document.getElementById('pet-visible') as HTMLInputElement;
+const petStartupVisible = document.getElementById('pet-startup-visible') as HTMLInputElement;
+const petRoamingEnabled = document.getElementById('pet-roaming-enabled') as HTMLInputElement;
+const petBubbleNotifications = document.getElementById('pet-bubble-notifications') as HTMLInputElement;
+const petRefreshButton = document.getElementById('pet-refresh') as HTMLButtonElement;
+let petSnapshot: PetSettingsSnapshot | undefined;
+let petPending = false;
+let petDisposed = false;
+let petError = '';
+let unlistenPet: UnlistenFn | undefined;
 
 function updateLocksService(): boolean {
   return updatePending === 'install_update' || ['downloading', 'installing'].includes(updateSnapshot.phase);
@@ -374,6 +404,7 @@ function render(): void {
   renderUpdate();
   renderNotifications();
   renderPower();
+  renderPetSettings();
 }
 function renderStartup(disabled: boolean, passed: boolean, busy: boolean, error: string): void {
   // A completed operation's error must win over a stale environment-checking flag.
@@ -483,8 +514,8 @@ function renderNotifications(): void {
   notificationsEnabled.checked = state.enabled;
   notificationsEnabled.disabled = !native || notificationPending || notificationsDisposed;
   notificationsWhenFocused.checked = state.notify_when_focused;
-  notificationsWhenFocused.disabled = notificationsEnabled.disabled || !state.enabled;
-  testNotificationButton.disabled = notificationsWhenFocused.disabled;
+  notificationsWhenFocused.disabled = notificationsEnabled.disabled;
+  testNotificationButton.disabled = notificationsEnabled.disabled || !state.enabled;
   testNotificationButton.textContent = notificationPending ? '处理中…' : '测试通知';
   const message = element('notification-message');
   message.dataset.error = String(Boolean(notificationError) || state.phase === 'error');
@@ -595,6 +626,81 @@ async function performPower(command: 'get_power_snapshot' | 'set_power_enabled',
   }
 }
 
+function renderPetSettings(): void {
+  if (!settingsView) return;
+  petVisible.checked = petSnapshot?.visible ?? false;
+  petStartupVisible.checked = petSnapshot?.startup_visible ?? false;
+  petRoamingEnabled.checked = petSnapshot?.roaming_enabled ?? false;
+  petBubbleNotifications.checked = petSnapshot?.bubble_notifications ?? false;
+  // Window/config controls are independent of DSH service readiness and task activity.
+  const disabled = !native || !petSnapshot || !unlistenPet || petPending || petDisposed;
+  petVisible.disabled = petStartupVisible.disabled = petRoamingEnabled.disabled = petBubbleNotifications.disabled = disabled;
+  petRefreshButton.disabled = !native || petPending || petDisposed;
+  petRefreshButton.textContent = petPending ? '读取或保存中…' : '重新读取';
+  const message = element('pet-message');
+  message.dataset.error = String(Boolean(petError));
+  message.textContent = !native ? '浏览器预览不读取或更改桌面宠物设置。' : redact(petError || petSnapshot?.message || '正在读取桌面宠物设置。');
+}
+
+function isPetSettingsSnapshot(state: unknown): state is PetSettingsSnapshot {
+  if (!state || typeof state !== 'object') return false;
+  const value = state as Record<string, unknown>;
+  return ['visible', 'startup_visible', 'roaming_enabled', 'bubble_notifications'].every(key => typeof value[key] === 'boolean')
+    && typeof value.revision === 'number' && Number.isSafeInteger(value.revision) && value.revision >= 0
+    && typeof value.message === 'string';
+}
+
+function acceptPetSettings(state: unknown): boolean {
+  // Native revisions order both events and replies, including events during listen registration.
+  if (petDisposed || !isPetSettingsSnapshot(state) || (petSnapshot && state.revision <= petSnapshot.revision)) return false;
+  petSnapshot = state;
+  return true;
+}
+
+async function subscribePetSettings(): Promise<boolean> {
+  if (petDisposed) return false;
+  if (unlistenPet) return true;
+  const stop = await listen<PetSettingsSnapshot>('pet-settings-state', event => {
+    if (!acceptPetSettings(event.payload)) return;
+    petError = '';
+    renderPetSettings();
+  });
+  if (petDisposed) { stop(); return false; }
+  unlistenPet = stop;
+  return true;
+}
+
+async function performPetSettings(command: 'get_pet_settings' | 'set_pet_settings' | 'set_pet_visibility', args?: { patch: PetSettingsPatch } | { visible: boolean }): Promise<void> {
+  if (!settingsView || !native || petDisposed) return;
+  if (petPending || (command !== 'get_pet_settings' && petVisible.disabled)) {
+    renderPetSettings();
+    return;
+  }
+  petPending = true;
+  petError = '';
+  renderPetSettings(); // Restore actual values instead of optimistically committing a checkbox.
+  const revision = petSnapshot?.revision;
+  try {
+    if (!await subscribePetSettings() || petDisposed) return;
+    const result = await invoke<unknown>(command, args);
+    if (!isPetSettingsSnapshot(result)) throw new Error('桌面宠物设置格式无效。');
+    acceptPetSettings(result);
+  } catch (error) {
+    if (petDisposed) return;
+    if (command !== 'get_pet_settings' || petSnapshot?.revision === revision) {
+      petError = (command === 'get_pet_settings' ? '无法读取桌面宠物设置，可重新读取：' : '桌面宠物操作未完成，可重新读取或重试：') + String(error);
+    }
+    // A failed write may have reached native code. Reconcile without guessing its outcome.
+    if (command !== 'get_pet_settings' && unlistenPet) {
+      try { acceptPetSettings(await invoke<PetSettingsSnapshot>('get_pet_settings')); }
+      catch { /* Keep the last confirmed state and the explicit retry affordance. */ }
+    }
+  } finally {
+    petPending = false;
+    if (!petDisposed) renderPetSettings();
+  }
+}
+
 function formatBytes(bytes: number): string {
   const safe = Math.max(0, bytes);
   return safe < 1024 * 1024 ? (safe / 1024).toFixed(1) + ' KB' : (safe / (1024 * 1024)).toFixed(1) + ' MB';
@@ -625,8 +731,8 @@ function selectSettings(section: string, focus = false): void {
   if (!selected) return;
   settingsSection = selected;
   const index = settingsSections.indexOf(selected);
-  element('settings-title').textContent = ['环境与目录', '系统通知', '电源管理', '软件更新', '诊断日志'][index] || '';
-  element('settings-description').textContent = ['指定已有的 DSH 项目，查看本地运行配置。', '管理后台任务的系统提醒。', '管理任务期间的系统自动休眠保护。', '检查并安装 Windows 启动器的新版本。', '查看本次启动和服务操作的脱敏记录。'][index] || '';
+  element('settings-title').textContent = ['环境与目录', '系统通知', '电源管理', '桌面宠物', '软件更新', '诊断日志'][index] || '';
+  element('settings-description').textContent = ['指定已有的 DSH 项目，查看本地运行配置。', '管理后台任务的系统提醒。', '管理任务期间的系统自动休眠保护。', '管理桌面宠物的显示与随机漫游。', '检查并安装 Windows 启动器的新版本。', '查看本次启动和服务操作的脱敏记录。'][index] || '';
   for (const item of settingsSections) {
     element('settings-' + item).hidden = item !== selected;
     element('nav-' + item).dataset.active = String(item === selected);
@@ -824,6 +930,11 @@ if (settingsView) {
   });
   powerEnabled.addEventListener('change', () => { void performPower('set_power_enabled', powerEnabled.checked); });
   powerRefreshButton.addEventListener('click', () => { void performPower('get_power_snapshot'); });
+  petVisible.addEventListener('change', () => { void performPetSettings('set_pet_visibility', { visible: petVisible.checked }); });
+  petStartupVisible.addEventListener('change', () => { void performPetSettings('set_pet_settings', { patch: { startup_visible: petStartupVisible.checked } }); });
+  petRoamingEnabled.addEventListener('change', () => { void performPetSettings('set_pet_settings', { patch: { roaming_enabled: petRoamingEnabled.checked } }); });
+  petBubbleNotifications.addEventListener('change', () => { void performPetSettings('set_pet_settings', { patch: { bubble_notifications: petBubbleNotifications.checked } }); });
+  petRefreshButton.addEventListener('click', () => { void performPetSettings('get_pet_settings'); });
   testNotificationButton.addEventListener('click', () => { void performNotification('test_notification'); });
   checkUpdateButton.addEventListener('click', () => { void performUpdate('check_update'); });
   installUpdateButton.addEventListener('click', () => { void performUpdate('install_update'); });
@@ -863,6 +974,7 @@ window.addEventListener('beforeunload', () => {
   settingsDisposed = true;
   notificationsDisposed = true; unlistenNotifications?.(); unlistenNotifications = undefined;
   powerDisposed = true; unlistenPower?.(); unlistenPower = undefined;
+  petDisposed = true; unlistenPet?.(); unlistenPet = undefined;
   unlisten?.(); unlistenShowLogs?.(); unlistenShowSettings?.(); unlistenUpdates?.(); unlistenShowUpdates?.();
 }, { once: true });
 render();
@@ -871,5 +983,6 @@ const updatesInitialization = initializeUpdates();
 if (settingsView) {
   const notificationsInitialization = performNotification('get_notification_snapshot');
   const powerInitialization = performPower('get_power_snapshot');
-  void readySettingsPage([initialization, updatesInitialization, notificationsInitialization, powerInitialization]);
+  const petInitialization = performPetSettings('get_pet_settings');
+  void readySettingsPage([initialization, updatesInitialization, notificationsInitialization, powerInitialization, petInitialization]);
 }

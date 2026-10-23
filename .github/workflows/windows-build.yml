@@ -226,9 +226,11 @@ jobs:
             "Includes the signed NSIS updater, standalone executable, latest.json and SHA256SUMS.txt." \
             "" \
             "Updater signatures verify authenticity in-app; Authenticode signing is still pending and Windows SmartScreen may warn." \
-            "MIT license. Requires an existing WSL DSH installation and Microsoft WebView2 Runtime." \
+            "First-party code is MIT. Requires an existing WSL DSH installation and Microsoft WebView2 Runtime." \
+            "Pet code/animations: https://github.com/PC2005-cloud/dsh-pet (PC2005-cloud). Code MIT; animation assets prohibit commercial use. Derivative introductions, displays and distributions must retain this original-author URL." \
             "" \
             "[Usage and privacy information](https://github.com/$GITHUB_REPOSITORY/blob/$RELEASE_TAG/DOWNLOADS.md)" > "$notes"
+          node --input-type=module -e 'import { readReleaseNotes, readVersions } from "./scripts/release.mjs"; process.stdout.write("\n" + readReleaseNotes(readVersions().package));' >> "$notes"
           if is_draft=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft); then
             if [[ "$is_draft" != true ]]; then
               echo "::error::This version is already published; refusing to overwrite release assets."

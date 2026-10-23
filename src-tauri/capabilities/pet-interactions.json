@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "pet-interactions",
+  "description": "Only the trusted pet may submit explicit validated answers to pending native interaction IDs or enable its own input surface.",
+  "local": true,
+  "webviews": [
+    "assistant-pet"
+  ],
+  "permissions": [
+    "allow-get-pet-interactions",
+    "allow-submit-pet-interaction",
+    "allow-open-pet-interaction",
+    "allow-set-pet-interaction-surface"
+  ]
+}

@@ -1,0 +1,499 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import vm from 'node:vm';
+import ts from 'typescript';
+const source = await readFile(new URL('../src/assistant.ts', import.meta.url), 'utf8');
+const modelSource = await readFile(new URL('../src/assistant-model.ts', import.meta.url), 'utf8');
+const markdownSource = await readFile(new URL('../src/assistant-markdown.ts', import.meta.url), 'utf8');
+const markdown = await import('data:text/javascript;base64,' + Buffer.from(ts.transpileModule(markdownSource, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText).toString('base64'));
+const model = await import('data:text/javascript;base64,' + Buffer.from(ts.transpileModule(modelSource, {
+  compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+}).outputText).toString('base64'));
+const script = ts.transpileModule(source.replace(/^import .*;$/gm, '').replace('import.meta.hot', 'false').replace('import.meta.hot', 'false'), {
+  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+}).outputText;
+const tick = () => new Promise(resolve => setImmediate(resolve));
+function deferred() { let resolve; let reject; const promise = new Promise((a,b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; }
+class Node {
+  constructor(id = '') { this.id = id; this.value = ''; this.textContent = ''; this.hidden = false; this.disabled = false; this.children = []; this.handlers = new Map(); this.scrollHeight = 0; this.scrollTop = 0; this.clientHeight = 300; this.dataset = {}; this.checked = true; this.style = {}; this.attributes = new Map(); }
+  addEventListener(type, fn, options = {}) {
+    if (!this.handlers.has(type)) this.handlers.set(type, []);
+    this.handlers.get(type).push(fn);
+    options.signal?.addEventListener('abort', () => this.handlers.set(type, this.handlers.get(type).filter(f => f !== fn)));
+  }
+  emit(type, props = {}) { const event = { target: this, preventDefault() {}, ...props }; for (const fn of this.handlers.get(type) ?? []) fn(event); }
+  replaceChildren(...nodes) { this.children = nodes; }
+  append(...nodes) { this.children.push(...nodes); }
+  add(node) { this.children.push(node); }
+  closest() { return this; }
+  querySelectorAll() { return []; }
+  setAttribute(k,v) { this.attributes.set(k,String(v)); }
+  getAttribute(k) { return this.attributes.get(k); }
+  removeAttribute(k) { this.attributes.delete(k); }
+  setPointerCapture() {}
+  getClientRects() { return [{}]; }
+  getBoundingClientRect() { return { x: 10, y: 20, width: 100, height: 100 }; }
+}
+function setup({ native = true, view = 'chat', listenGate, getSnapshot, getPreferences, getInbox, openNotification, getInteractions, submitInteraction, openInteraction, setTopmost, actionResult } = {}) {
+  const nodes = new Map();
+  const ids = ['assistant-root', 'preview', 'pet-status', 'pet', 'pet-media', 'pet-animation', 'pet-menu', 'pet-bubble', 'pet-interaction', 'pet-topmost', 'pet-fixed', 'notice', 'status', 'setup', 'conversation', 'sessions', 'new-session', 'session-bar', 'composer-footnote', 'reconfigure', 'runtime-message', 'draft-hint', 'retry', 'send', 'cancel', 'enable', 'workspace', 'consent', 'enable-form', 'send-form', 'draft'];
+  ids.forEach(id => nodes.set(id, new Node(id)));
+  nodes.get('pet-menu').hidden = true;
+  const root = nodes.get('assistant-root');
+  const calls = []; const events = []; const petEvents = []; const storage = new Map();
+  const listeners = new Map(); let stopped = 0;
+  let topmost = true; let petRevision = 0;
+  const window = new Node(); window.confirm = () => false;
+  const invoke = async (name, args) => {
+    calls.push({ name, args });
+    if (name === 'get_pet_preferences') return getPreferences ? getPreferences() : {visible:true,always_on_top:topmost,roaming_enabled:true,bubble_notifications:true,message:'',revision:petRevision};
+    if (name === 'set_pet_topmost') {
+      if(setTopmost) return setTopmost(args.alwaysOnTop);
+      topmost=args.alwaysOnTop; petRevision++;
+      return {visible:true,always_on_top:topmost,roaming_enabled:true,bubble_notifications:true,message:'',revision:petRevision};
+    }
+    if (name === 'get_pet_notifications') return getInbox ? getInbox() : [];
+    if (name === 'open_pet_notification') return openNotification ? openNotification(args.id) : undefined;
+    if (name === 'dismiss_pet_notification') return undefined;
+    if (name === 'get_pet_interactions') return getInteractions ? getInteractions() : {revision:0,connected:true,items:[]};
+    if (name === 'submit_pet_interaction') return submitInteraction ? submitInteraction(args.id,args.reply) : undefined;
+    if (name === 'open_pet_interaction') return openInteraction ? openInteraction(args.id) : undefined;
+    if (name === 'set_pet_interaction_surface') return undefined;
+    if (name === 'get_assistant_snapshot') return getSnapshot ? getSnapshot() : ready();
+    return actionResult ? actionResult(args.request) : undefined;
+  };
+  const context = {
+    ...model, ...markdown, invoke, isTauri: () => native,
+    HIT_BOX: { x0: 200, y0: 50, x1: 440, y1: 335 }, SLINGSHOT_DOUBLE_MS: 200, physics: {}, PET_UPSTREAM_URL: 'https://github.com/PC2005-cloud/dsh-pet',
+    PetInteractions: class {
+      constructor(root,options) {this.root=root;this.options=options;this.active=true;this.snapshot={connected:true,items:[]};petEvents.push(['interaction-mounted',options]);}
+      update(snapshot) {this.snapshot=snapshot;petEvents.push(['interaction-update',snapshot]);this.show();}
+      setActive(value) {this.active=value;petEvents.push(['interaction-active',value]);this.show();}
+      setObscured(value) {petEvents.push(['interaction-obscured',value]);}
+      show() {const visible=this.active&&this.snapshot.items.length>0;this.root.hidden=!visible;this.options.onChange(visible);}
+      dispose() {petEvents.push(['interaction-dispose']);}
+    },
+    PetNotifications: class {
+      constructor(root,options) { this.root=root; this.options=options; this.active=true; petEvents.push(['bubble-mounted',options]); }
+      setActive(active) {this.active=active;petEvents.push(['bubble-active',active]); if(!active){this.root.hidden=true;this.options.onChange(false);}}
+      setObscured(value) {petEvents.push(['bubble-obscured',value]);}
+      enqueue(value) {if(this.active){this.root.hidden=false;petEvents.push(['bubble-enqueue',value]);this.options.onChange(true);}}
+      withdraw(id) {petEvents.push(['bubble-withdraw',id]);}
+      dispose() {petEvents.push(['bubble-dispose']);}
+    },
+    PetRenderer: class {
+      constructor(root,options) { this.options=options; petEvents.push(['renderer-mounted',options]); }
+      updateState(state) { petEvents.push(['state',state]); }
+      listActions() { return [{name:'待机呼吸休闲',group:'待机'}]; }
+      click() { petEvents.push(['click']); }
+      dragStart() { petEvents.push(['drag-start']); }
+      dragEnd() { petEvents.push(['drag-end']); }
+      startSquash() { petEvents.push(['squash']); }
+      toggleFixed(fixed) { petEvents.push(['fixed',fixed]); return fixed; }
+      trigger(name) { petEvents.push(['trigger',name]); return true; }
+      dispose() { petEvents.push(['renderer-dispose']); }
+    },
+    PetMotion: class {
+      constructor(options) { this.options=options; petEvents.push(['motion-mounted']); }
+      begin(sling) { petEvents.push(['motion-begin',sling]); this.options.onDragStart(); }
+      end() { petEvents.push(['motion-end']); this.options.onDragEnd(); }
+      stop() { petEvents.push(['motion-stop']); }
+      stopRoam() {} startRoam() { petEvents.push(['roam']); return true; }
+      dispose() { petEvents.push(['motion-dispose']); }
+    },
+    listen: async (name, callback) => { events.push(name); listeners.set(name, callback); if (typeof listenGate === 'function') await listenGate(name); else if (listenGate) await listenGate.promise; return () => { stopped++; }; },
+    location: { search: '?view=' + view }, URLSearchParams,
+    document: { body: { dataset: {} }, querySelector: () => root, getElementById: id => nodes.get(id), createDocumentFragment: () => new Node(), createElement: () => new Node() },
+    window, sessionStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
+    AbortController, Option: class extends Node { constructor(text, value) { super(); this.textContent = text; this.value = value; } },
+    crypto: { randomUUID: () => 'request-' + calls.length }, Intl, performance,
+    requestAnimationFrame: () => 1, cancelAnimationFrame() {}, ResizeObserver: class { observe() {} disconnect() {} }, console,
+  };
+  vm.runInNewContext(script, context);
+  return { nodes, calls, events, petEvents, window, storage, emit: state => listeners.get('assistant-state')({ payload: state }), emitEvent: (name,value) => listeners.get(name)?.({ payload:value }), stopped: () => stopped };
+}
+function ready(revision = 1, patch = {}) { return { ...model.initialSnapshot(), enabled: true, connected: true, phase: 'ready', workspace_id: 'w', session_id: 's', sessions: [{ id: 's', title: 'hello' }], revision, ...patch }; }
+
+test('a deleted current session can recover through explicit history selection or new session', async () => {
+  const ui = setup({ getSnapshot: () => ready(1, { connected: false, session_id: null, phase: 'error' }) }); await tick();
+  assert.equal(ui.nodes.get('sessions').disabled, false); assert.equal(ui.nodes.get('new-session').disabled, false);
+  ui.nodes.get('draft').value = '不要丢掉草稿'; ui.nodes.get('draft').emit('input');
+  ui.nodes.get('sessions').value = 's'; ui.nodes.get('sessions').emit('change'); await tick();
+  assert.equal(ui.calls.find(c => c.name === 'assistant_action').args.request.action, 'select_session');
+  const button = ui.nodes.get('new-session'); button.dataset.action = 'new_session';
+  ui.nodes.get('assistant-root').emit('click', { target: button }); await tick();
+  assert.equal(ui.calls.filter(c => c.name === 'assistant_action').at(-1).args.request.action, 'new_session');
+  assert.equal(ui.nodes.get('draft').value, '不要丢掉草稿');
+  ui.emit(ready(2, { connected: false, workspace_id: null }));
+  assert.equal(ui.nodes.get('sessions').disabled, true); assert.equal(ui.nodes.get('new-session').disabled, true);
+});
+test('project reconfiguration only opens native setup and requires a fresh explicit confirmation', async () => {
+  const reply = ready(2, { enabled: false, phase: 'setup', connected: false, workspace_path: '/home/me/Existing-Assistant' });
+  const ui = setup({ actionResult: request => request.action === 'reconfigure' ? reply : undefined }); await tick();
+  const button = ui.nodes.get('reconfigure'); button.dataset.action = 'reconfigure';
+  ui.nodes.get('assistant-root').emit('click', { target: button }); await tick();
+  assert.equal(ui.nodes.get('setup').hidden, false);
+  assert.equal(ui.nodes.get('session-bar').hidden, true);
+  assert.equal(ui.nodes.get('send-form').hidden, true);
+  assert.equal(ui.nodes.get('composer-footnote').hidden, true);
+  assert.equal(ui.nodes.get('workspace').value, '/home/me/Existing-Assistant');
+  assert.equal(ui.nodes.get('consent').checked, false);
+  assert.deepEqual(ui.calls.filter(c => c.name === 'assistant_action').map(c => c.args.request.action), ['reconfigure']);
+  ui.nodes.get('enable-form').emit('submit'); await tick();
+  assert.equal(ui.calls.filter(c => c.name === 'assistant_action').length, 1);
+  ui.nodes.get('consent').checked = true; ui.nodes.get('enable-form').emit('submit'); await tick();
+  assert.equal(ui.calls.filter(c => c.name === 'assistant_action').at(-1).args.request.action, 'enable');
+});
+test('cancelling without a running turn retains an explicit retry recovery path', async () => {
+  const ui = setup({ getSnapshot: () => ready(1, { phase: 'cancelling', running: false }) }); await tick();
+  assert.equal(ui.nodes.get('cancel').disabled, true); assert.equal(ui.nodes.get('retry').hidden, false);
+  assert.equal(ui.nodes.get('retry').disabled, false);
+  const retry = ui.nodes.get('retry'); retry.dataset.action = 'retry';
+  ui.nodes.get('assistant-root').emit('click', { target: retry }); await tick();
+  assert.equal(ui.calls.find(c => c.name === 'assistant_action').args.request.action, 'retry');
+});
+test('browser preview marks itself and never invokes or subscribes native IPC', async () => {
+  const ui = setup({ native: false }); await tick();
+  assert.equal(ui.nodes.get('preview').hidden, false);
+  assert.equal(ui.nodes.get('send').disabled, true);
+  ui.nodes.get('pet').emit('click', { detail: 0 });
+  assert.equal(ui.calls.length, 0); assert.equal(ui.events.length, 0);
+});
+test('subscribes before snapshot read; streamed newer event defeats stale initial reply', async () => {
+  const response = deferred(); const gate = deferred();
+  const ui = setup({ listenGate: gate, getSnapshot: () => response.promise });
+  assert.deepEqual(ui.events, ['assistant-state']); assert.equal(ui.calls.length, 0);
+  gate.resolve(); await tick(); assert.equal(ui.calls[0].name, 'get_assistant_snapshot');
+  ui.emit(ready(10, { running: true })); response.resolve(ready(1)); await tick();
+  assert.equal(ui.nodes.get('status').textContent, '正在思考');
+  ui.window.emit('pagehide'); assert.equal(ui.stopped(), 1);
+});
+test('retry resubscribes after listener failure before issuing actions or reading a snapshot', async () => {
+  let attempts = 0;
+  const ui = setup({ listenGate: async () => { if (++attempts === 1) throw new Error('no listener'); } });
+  await tick(); assert.equal(ui.calls.length, 0);
+  const retry = ui.nodes.get('retry'); retry.dataset.action = 'retry';
+  ui.nodes.get('assistant-root').emit('click', { target: retry }); await tick();
+  assert.equal(attempts, 2);
+  assert.deepEqual(ui.calls.map(call => call.name), ['assistant_action', 'get_assistant_snapshot']);
+  assert.equal(ui.calls[0].args.request.action, 'retry');
+  assert.equal(ui.nodes.get('status').textContent, '随时聊聊');
+});
+test('unloading before async subscription resolves still releases the eventual listener', async () => {
+  const gate = deferred(); const ui = setup({ listenGate: gate });
+  ui.window.emit('pagehide'); gate.resolve(); await tick();
+  assert.equal(ui.stopped(), 1); assert.equal(ui.calls.length, 0);
+  ui.emit(ready(4)); assert.equal(ui.nodes.get('status').textContent, '连接中');
+});
+test('IME and pending send block duplicates; failed send retains draft, no automatic resend', async () => {
+  const sending = deferred(); const ui = setup({ actionResult: () => sending.promise }); await tick();
+  const draft = ui.nodes.get('draft'); draft.value = '保留这段草稿'; draft.emit('input');
+  draft.emit('compositionstart'); ui.nodes.get('send-form').emit('submit');
+  draft.emit('keydown', { key: 'Enter', shiftKey: false, isComposing: true });
+  assert.equal(ui.calls.filter(c => c.name === 'assistant_action').length, 0);
+  draft.emit('compositionend'); ui.nodes.get('send-form').emit('submit'); ui.nodes.get('send-form').emit('submit');
+  const sends = ui.calls.filter(c => c.name === 'assistant_action'); assert.equal(sends.length, 1);
+  assert.equal(sends[0].args.request.action, 'send'); assert.equal(sends[0].args.request.text, draft.value);
+  assert.equal(typeof sends[0].args.request.clientTimeZone, 'string'); assert.ok(sends[0].args.request.requestId);
+  sending.reject(new Error('connection lost')); await tick();
+  assert.equal(draft.value, '保留这段草稿'); assert.match(ui.nodes.get('notice').textContent, /未确认/);
+  ui.nodes.get('send-form').emit('submit'); await tick();
+  assert.equal(ui.calls.filter(c => c.name === 'assistant_action').length, 1, 'explicit retry confirmation denied');
+  ui.window.emit('pagehide'); assert.equal([...ui.storage.values()].includes('保留这段草稿'), true);
+});
+test('authoritative user echo clears only original sent draft, never text typed during send', async () => {
+  const result = deferred(); const ui = setup({ actionResult: () => result.promise }); await tick();
+  const draft = ui.nodes.get('draft'); draft.value = '第一条'; draft.emit('input'); ui.nodes.get('send-form').emit('submit');
+  draft.value = '接下来的新想法'; draft.emit('input');
+  ui.emit(ready(2, { messages: [{ id: 'u1', role: 'user', text: '第一条', request_id: ui.calls.find(c => c.name === 'assistant_action').args.request.requestId }], running: true }));
+  assert.equal(draft.value, '接下来的新想法');
+  result.resolve(undefined); await tick();
+  assert.equal(draft.value, '接下来的新想法');
+});
+test('same text from another client cannot acknowledge or clear this draft', async () => {
+  const result = deferred(); const ui = setup({ actionResult: () => result.promise }); await tick();
+  const draft = ui.nodes.get('draft'); draft.value = '同一句话'; draft.emit('input'); ui.nodes.get('send-form').emit('submit');
+  ui.emit(ready(2, { messages: [{ id: 'foreign', role: 'user', text: '同一句话', request_id: 'other-client' }] }));
+  assert.equal(draft.value, '同一句话');
+  result.resolve(undefined); await tick(); assert.equal(draft.value, '同一句话');
+});
+test('lost action reply after authoritative echo does not resurrect or resend acknowledged draft', async () => {
+  const result = deferred(); const ui = setup({ actionResult: () => result.promise }); await tick();
+  const draft = ui.nodes.get('draft'); draft.value = '你好'; draft.emit('input'); ui.nodes.get('send-form').emit('submit');
+  ui.emit(ready(2, { messages: [{ id: 'u1', role: 'user', text: '你好', request_id: ui.calls.find(c => c.name === 'assistant_action').args.request.requestId }] }));
+  assert.equal(draft.value, ''); result.reject(new Error('reply lost')); await tick();
+  assert.equal(draft.value, ''); assert.equal(ui.calls.filter(c => c.name === 'assistant_action').length, 1);
+});
+test('pet drag crosses threshold once and suppresses the trailing click', async () => {
+  const ui = setup({ view: 'pet' }); await tick(); const pet = ui.nodes.get('pet');
+  pet.emit('pointerdown', { button: 0, pointerId: 1, clientX: 0, clientY: 0 });
+  pet.emit('pointermove', { pointerId: 1, clientX: 3, clientY: 4 });
+  assert.equal(ui.calls.filter(c => c.name === 'assistant_action').length, 0);
+  pet.emit('pointermove', { pointerId: 1, clientX: 6, clientY: 0 });
+  pet.emit('pointermove', { pointerId: 1, clientX: 30, clientY: 0 });
+  pet.emit('pointerup', { pointerId: 1 }); pet.emit('click', { detail: 1 }); await tick();
+  assert.equal(ui.petEvents.filter(e => e[0] === 'motion-begin').length, 1);
+  assert.equal(ui.petEvents.filter(e => e[0] === 'motion-end').length, 1);
+  assert.equal(ui.petEvents.filter(e => e[0] === 'drag-start').length, 1);
+  assert.deepEqual(ui.calls.filter(c => c.name === 'assistant_action').map(c => c.args.request.action), []);
+  pet.emit('click', { detail: 0 }); await tick();
+  assert.deepEqual(ui.calls.filter(c => c.name === 'assistant_action').map(c => c.args.request.action), ['toggle_chat']);
+});
+test('all received messages and titles use text-only DOM sinks, never HTML interpolation', async () => {
+  const hostile = '<img src=x onerror=alert(1)>';
+  const ui = setup({ getSnapshot: () => ready(1, { messages: [{ id: 'x', role: 'assistant', text: hostile }], sessions: [{ id: 's', title: hostile }] }) }); await tick();
+  const fragment = ui.nodes.get('conversation').children[0];
+  const collectText = node => node.textContent + node.children.map(collectText).join('');
+  assert.equal(collectText(fragment.children[0].children[1]), hostile);
+  assert.equal(ui.nodes.get('sessions').children[0].textContent, hostile);
+  assert.equal((source.match(/innerHTML\s*=/g) ?? []).length, 1, 'only static initial markup can use innerHTML');
+});
+
+test('upstream renderer mounts in preview without native motion or IPC and disposes on unload', async () => {
+  const ui = setup({ native:false,view:'pet' }); await tick();
+  assert.equal(ui.petEvents.filter(e=>e[0]==='renderer-mounted').length,1);
+  assert.equal(ui.petEvents.filter(e=>e[0]==='motion-mounted').length,0);
+  assert.equal(ui.calls.length,0); assert.equal(ui.events.length,0);
+  ui.nodes.get('pet').emit('click',{detail:1}); await tick();
+  assert.equal(ui.petEvents.filter(e=>e[0]==='click').length,1);
+  assert.equal(ui.calls.length,0);
+  ui.window.emit('pagehide');
+  assert.equal(ui.petEvents.filter(e=>e[0]==='renderer-dispose').length,1);
+});
+
+test('native pet visibility stops motion and rejects roaming until restored', async () => {
+  const ui=setup({view:'pet'}); await tick();
+  const hooks=ui.petEvents.find(e=>e[0]==='renderer-mounted')[1];
+  assert.equal(hooks.onMove('move',{durationSec:10},{facing:'left',video:{}}),true);
+  const before=ui.petEvents.filter(e=>e[0]==='roam').length;
+  ui.emitEvent('pet-visibility',{visible:false,revision:1});
+  assert.equal(hooks.onMove('move',{},{}),false);
+  assert.equal(ui.petEvents.filter(e=>e[0]==='roam').length,before);
+  ui.emitEvent('pet-visibility',{visible:true,revision:2});
+  assert.equal(hooks.onMove('move',{durationSec:10},{facing:'left',video:{}}),true);
+  ui.window.emit('pagehide');
+  assert.equal(ui.stopped(),5);
+});
+
+
+test('pet preference events beat a delayed initial read and same-state events do not restart actions', async () => {
+  const reply=deferred();const ui=setup({view:'pet',getPreferences:()=>reply.promise});await tick();
+  ui.emitEvent('pet-settings-state',{visible:true,roaming_enabled:false,revision:3});
+  const before=ui.petEvents.filter(e=>e[0]==='fixed').length;
+  reply.resolve({visible:true,roaming_enabled:true,revision:2});await tick();
+  assert.equal(ui.petEvents.filter(e=>e[0]==='fixed').length,before);
+  assert.equal(ui.petEvents.filter(e=>e[0]==='fixed').at(-1)[1],true);
+  ui.emitEvent('pet-settings-state',{visible:true,roaming_enabled:false,revision:4});
+  assert.equal(ui.petEvents.filter(e=>e[0]==='fixed').length,before);
+  ui.emitEvent('pet-settings-state',{visible:true,roaming_enabled:true,revision:5});
+  assert.equal(ui.petEvents.filter(e=>e[0]==='fixed').at(-1)[1],false);
+  ui.window.emit('pagehide');assert.equal(ui.stopped(),3);
+});
+
+test('pet rejects reordered visibility events independently of roaming preference revisions', async () => {
+  const ui=setup({view:'pet'});await tick();
+  const hooks=ui.petEvents.find(e=>e[0]==='renderer-mounted')[1];
+  ui.emitEvent('pet-visibility',{visible:false,revision:9});
+  ui.emitEvent('pet-visibility',{visible:true,revision:8});
+  ui.emitEvent('pet-settings-state',{visible:true,roaming_enabled:false,revision:7});
+  assert.equal(hooks.onMove('move',{},{}),false);
+  ui.emitEvent('pet-visibility',{visible:true,revision:10});
+  assert.equal(hooks.onMove('move',{},{}),true);
+});
+
+
+function clickTopmost(ui) {
+  const button=ui.nodes.get('pet-topmost');button.dataset.petCommand='topmost';
+  ui.nodes.get('assistant-root').emit('click',{target:button});
+}
+const petState=(revision,always_on_top)=>({visible:true,roaming_enabled:true,always_on_top,revision});
+
+test('right click reads actual topmost and its switch changes only the native pet window', async () => {
+  const ui=setup({view:'pet'});await tick();
+  const button=ui.nodes.get('pet-topmost');
+  assert.equal(button.getAttribute('aria-checked'),'true');
+  ui.nodes.get('pet-menu').hidden=true;
+  ui.nodes.get('pet').emit('contextmenu');await tick();
+  assert.equal(ui.nodes.get('pet-menu').hidden,false);
+  assert.equal(ui.calls.filter(c=>c.name==='get_pet_preferences').length,2);
+  clickTopmost(ui);await tick();
+  assert.equal(button.getAttribute('aria-checked'),'false');
+  assert.equal(ui.calls.find(c=>c.name==='set_pet_topmost').args.alwaysOnTop,false);
+  clickTopmost(ui);await tick();
+  assert.equal(button.getAttribute('aria-checked'),'true');
+  assert.equal(ui.calls.filter(c=>c.name==='assistant_action').length,0);
+});
+
+test('topmost pending prevents repeat writes and failed writes require read before retry', async () => {
+  const reply=deferred();let first=true;
+  const ui=setup({view:'pet',setTopmost:value=>{ if(first){first=false;return reply.promise;} return petState(1,value); }});await tick();
+  const button=ui.nodes.get('pet-topmost');clickTopmost(ui);clickTopmost(ui);
+  assert.equal(button.disabled,true);assert.equal(button.getAttribute('aria-checked'),'true');
+  assert.equal(ui.calls.filter(c=>c.name==='set_pet_topmost').length,1);
+  reply.reject(new Error('native failed'));await tick();
+  assert.equal(button.disabled,false);assert.equal(button.getAttribute('aria-checked'),undefined);
+  clickTopmost(ui);await tick();
+  assert.equal(ui.calls.filter(c=>c.name==='set_pet_topmost').length,1);
+  assert.equal(button.getAttribute('aria-checked'),'true');
+  clickTopmost(ui);await tick();
+  assert.equal(ui.calls.filter(c=>c.name==='set_pet_topmost').length,2);
+  assert.equal(button.getAttribute('aria-checked'),'false');
+});
+
+test('newer pet state beats delayed topmost reply and unknown booleans cannot alter switch', async () => {
+  const reply=deferred();const ui=setup({view:'pet',setTopmost:()=>reply.promise});await tick();
+  const button=ui.nodes.get('pet-topmost');clickTopmost(ui);
+  ui.emitEvent('pet-settings-state',petState(8,false));
+  reply.resolve(petState(2,true));await tick();
+  assert.equal(button.getAttribute('aria-checked'),'false');
+  ui.emitEvent('pet-settings-state',{revision:9,always_on_top:'true'});
+  assert.equal(button.getAttribute('aria-checked'),'false');
+});
+
+test('topmost is disabled and sends no IPC in browser preview', async () => {
+  const ui=setup({view:'pet',native:false});await tick();
+  const button=ui.nodes.get('pet-topmost');assert.equal(button.disabled,true);
+  assert.equal(button.getAttribute('aria-checked'),undefined);
+  clickTopmost(ui);ui.nodes.get('pet').emit('contextmenu');await tick();
+  assert.equal(ui.calls.length,0);
+});
+
+test('late topmost reply after unload cannot change the right-click switch', async () => {
+  const reply=deferred();const ui=setup({view:'pet',setTopmost:()=>reply.promise});await tick();
+  const button=ui.nodes.get('pet-topmost');clickTopmost(ui);
+  const before=[button.textContent,button.getAttribute('aria-checked'),button.disabled];
+  ui.window.emit('pagehide');reply.resolve(petState(1,false));await tick();
+  assert.deepEqual([button.textContent,button.getAttribute('aria-checked'),button.disabled],before);
+});
+
+
+const bubbleMessage=id=>({id,kind:'completed',title:'本轮执行结束',body:'点击查看对应会话'});
+const bubblePreferences=(revision,enabled=true,visible=true)=>({visible,bubble_notifications:enabled,roaming_enabled:true,message:'',revision});
+
+test('bubble host subscribes before pulling inbox and opens only opaque native ids', async () => {
+  const ui=setup({view:'pet',getInbox:()=>{assert.ok(ui.events.includes('pet-notification'));return [];}});await tick();
+  assert.equal(ui.calls.filter(c=>c.name==='get_pet_notifications').length,1);
+  ui.emitEvent('pet-notification',bubbleMessage('opaque-1'));
+  assert.equal(ui.petEvents.filter(e=>e[0]==='bubble-enqueue').at(-1)[1].id,'opaque-1');
+  const renderer=ui.petEvents.find(e=>e[0]==='renderer-mounted')[1];
+  assert.equal(renderer.onMove('move',{},{}),false);
+  const hooks=ui.petEvents.find(e=>e[0]==='bubble-mounted')[1];
+  await hooks.onOpen('opaque-1');hooks.onDismiss('opaque-1');await tick();
+  for(const name of ['open_pet_notification','dismiss_pet_notification']) {
+    const call=ui.calls.find(c=>c.name===name);assert.equal(call.args.id,'opaque-1');assert.deepEqual(Object.keys(call.args),['id']);
+  }
+  assert.equal(ui.calls.filter(c=>c.name==='assistant_action').length,0);
+});
+
+test('bubble visibility and its own preference clear and suppress notifications without showing pet', async () => {
+  const ui=setup({view:'pet'});await tick();ui.emitEvent('pet-notification',bubbleMessage('first'));
+  ui.emitEvent('pet-visibility',{visible:false,revision:1});
+  ui.emitEvent('pet-notification',bubbleMessage('hidden'));
+  assert.equal(ui.petEvents.filter(e=>e[0]==='bubble-enqueue').length,1);
+  ui.emitEvent('pet-settings-state',bubblePreferences(2,true,true));
+  ui.emitEvent('pet-notification',bubbleMessage('shown'));
+  ui.emitEvent('pet-settings-state',bubblePreferences(3,false,true));
+  ui.emitEvent('pet-notification',bubbleMessage('disabled'));
+  assert.deepEqual(ui.petEvents.filter(e=>e[0]==='bubble-enqueue').map(e=>e[1].id),['first','shown']);
+  assert.equal(ui.nodes.get('pet-bubble').hidden,true);
+  assert.equal(ui.calls.filter(c=>c.name==='assistant_action').length,0);
+});
+
+test('pet action menu pauses bubble clock and roaming without navigating away', async () => {
+  const ui=setup({view:'pet'});await tick();
+  const command=new Node();command.dataset.petCommand='menu';
+  ui.nodes.get('assistant-root').emit('click',{target:command});await tick();
+  assert.equal(ui.petEvents.filter(e=>e[0]==='bubble-obscured').at(-1)[1],true);
+  const renderer=ui.petEvents.find(e=>e[0]==='renderer-mounted')[1];assert.equal(renderer.onMove('move',{},{}),false);
+  command.dataset.petCommand='close-menu';ui.nodes.get('assistant-root').emit('click',{target:command});
+  assert.equal(ui.petEvents.filter(e=>e[0]==='bubble-obscured').at(-1)[1],false);
+});
+
+test('stale inbox reply cannot replay hidden-period bubbles after reactivation', async () => {
+  const old=deferred();let reads=0;
+  const ui=setup({view:'pet',getInbox:()=>++reads===1?old.promise:[bubbleMessage('fresh')]});await tick();
+  ui.emitEvent('pet-visibility',{visible:false,revision:1});ui.emitEvent('pet-visibility',{visible:true,revision:2});
+  old.resolve([bubbleMessage('old')]);await tick();
+  assert.equal(reads,2);assert.deepEqual(ui.petEvents.filter(e=>e[0]==='bubble-enqueue').map(e=>e[1].id),['fresh']);
+});
+
+test('bubble listener failure leaves chat transport usable and menu reopens retry the feed', async () => {
+  let failed=false;
+  const ui=setup({view:'pet',listenGate:name=>{if(name==='pet-notification'&&!failed){failed=true;throw new Error('listener');}}});await tick();
+  assert.equal(ui.calls.filter(c=>c.name==='get_assistant_snapshot').length,1);
+  const command=new Node();command.dataset.petCommand='menu';ui.nodes.get('assistant-root').emit('click',{target:command});await tick();
+  assert.equal(ui.events.filter(e=>e==='pet-notification').length,2);
+  assert.equal(ui.calls.filter(c=>c.name==='get_pet_notifications').length,1);
+});
+
+test('late bubble listener registration after unload is released without reading or rendering', async () => {
+  const gate=deferred();
+  const ui=setup({view:'pet',listenGate:name=>name==='pet-notification'?gate.promise:undefined});await tick();
+  ui.window.emit('pagehide');gate.resolve();await tick();
+  assert.equal(ui.stopped(),5);assert.equal(ui.calls.filter(c=>c.name==='get_pet_notifications').length,0);
+  ui.emitEvent('pet-notification',bubbleMessage('late'));
+  assert.equal(ui.petEvents.filter(e=>e[0]==='bubble-enqueue').length,0);
+  assert.equal(ui.petEvents.filter(e=>e[0]==='bubble-dispose').length,1);
+});
+
+
+const interactionCard=(id='opaque-question')=>({id,kind:'questions',agent_label:'会话 demo',questions:[{id:'q',question:'选择方案',options:[{label:'A'},{label:'B'}]}],can_allow:false,answerable:true});
+const interactionState=(revision,items=[],connected=true)=>({revision,items,connected});
+
+test('interactive host subscribes before get and sends only opaque id plus typed reply', async () => {
+  const ui=setup({view:'pet',getInteractions:()=>{assert.ok(ui.events.includes('pet-interactions-state'));return interactionState(1,[interactionCard()]);}});await tick();
+  const hooks=ui.petEvents.find(e=>e[0]==='interaction-mounted')[1];
+  await hooks.onSubmit('opaque-question',{kind:'questions',answers:[{id:'q',selected:['A']}]});
+  const call=ui.calls.find(c=>c.name==='submit_pet_interaction');
+  assert.deepEqual(Object.keys(call.args).sort(),['id','reply']);assert.equal(call.args.id,'opaque-question');
+  assert.equal(call.args.reply.answers[0].selected[0],'A');
+  await hooks.onOpen('opaque-question');assert.equal(ui.calls.find(c=>c.name==='open_pet_interaction').args.id,'opaque-question');
+  assert.equal(ui.calls.filter(c=>c.name==='assistant_action').length,0);
+});
+
+test('cancel snapshot rejects obsolete reply hooks and disables input surface without resending', async () => {
+  const ui=setup({view:'pet'});await tick();ui.emitEvent('pet-interactions-state',interactionState(1,[interactionCard()]));await tick();
+  const hooks=ui.petEvents.find(e=>e[0]==='interaction-mounted')[1];
+  ui.emitEvent('pet-interactions-state',interactionState(2,[]));await tick();
+  await assert.rejects(hooks.onSubmit('opaque-question',{kind:'approval',decision:'allowed-once'}));
+  assert.equal(ui.calls.filter(c=>c.name==='submit_pet_interaction').length,0);
+  assert.equal(ui.calls.filter(c=>c.name==='set_pet_interaction_surface').at(-1).args.active,false);
+  assert.equal(ui.nodes.get('pet-interaction').hidden,true);
+});
+
+test('newer interaction stream state defeats old initial get and pauses passive reminders', async () => {
+  const reply=deferred();const ui=setup({view:'pet',getInteractions:()=>reply.promise});await tick();
+  ui.emitEvent('pet-interactions-state',interactionState(5,[interactionCard()]));
+  reply.resolve(interactionState(1,[]));await tick();
+  assert.equal(ui.petEvents.filter(e=>e[0]==='interaction-update').at(-1)[1].revision,5);
+  assert.equal(ui.petEvents.filter(e=>e[0]==='bubble-obscured').at(-1)[1],true);
+  const renderer=ui.petEvents.find(e=>e[0]==='renderer-mounted')[1];assert.equal(renderer.onMove('move',{},{}),false);
+});
+
+test('hidden and disabled interaction surface cannot submit and hiding sends no business rejection', async () => {
+  const ui=setup({view:'pet'});await tick();ui.emitEvent('pet-interactions-state',interactionState(1,[interactionCard()]));
+  const hooks=ui.petEvents.find(e=>e[0]==='interaction-mounted')[1];
+  ui.emitEvent('pet-visibility',{visible:false,revision:1});await tick();
+  assert.equal(ui.nodes.get('pet-interaction').hidden,true);
+  await assert.rejects(hooks.onSubmit('opaque-question',{kind:'approval',decision:'rejected'}));
+  ui.emitEvent('pet-settings-state',bubblePreferences(2,false,true));await tick();
+  await assert.rejects(hooks.onSubmit('opaque-question',{kind:'questions',answers:[]}));
+  assert.equal(ui.calls.filter(c=>c.name==='submit_pet_interaction').length,0);
+});
+
+test('withdrawn passive reminder ids do not become a second waiting bubble', async () => {
+  const ui=setup({view:'pet'});await tick();
+  ui.emitEvent('pet-notification',{type:'withdraw',ids:['old-reminder']});
+  assert.equal(ui.petEvents.filter(e=>e[0]==='bubble-withdraw').at(-1)[1],'old-reminder');
+  assert.equal(ui.petEvents.filter(e=>e[0]==='bubble-enqueue').length,0);
+});
+
+test('late interactive listener is cleaned after unload and no snapshot or answer is sent', async () => {
+  const gate=deferred();const ui=setup({view:'pet',listenGate:name=>name==='pet-interactions-state'?gate.promise:undefined});await tick();
+  ui.window.emit('pagehide');gate.resolve();await tick();
+  assert.equal(ui.stopped(),5);assert.equal(ui.calls.filter(c=>c.name==='get_pet_interactions').length,0);
+  ui.emitEvent('pet-interactions-state',interactionState(1,[interactionCard()]));
+  assert.equal(ui.petEvents.filter(e=>e[0]==='interaction-update').length,0);
+  assert.equal(ui.petEvents.filter(e=>e[0]==='interaction-dispose').length,1);
+});

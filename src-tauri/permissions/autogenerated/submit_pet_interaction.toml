@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-submit-pet-interaction"
+description = "Enables the submit_pet_interaction command without any pre-configured scope."
+commands.allow = ["submit_pet_interaction"]
+
+[[permission]]
+identifier = "deny-submit-pet-interaction"
+description = "Denies the submit_pet_interaction command without any pre-configured scope."
+commands.deny = ["submit_pet_interaction"]

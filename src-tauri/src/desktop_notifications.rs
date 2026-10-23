@@ -1,11 +1,13 @@
 //! Windows notification adapter. No DSH-page IPC, injected scripts or Host mutations.
 use super::{assert_local, Controller};
 use crate::{
+    notification_channels::ChannelGate,
     notification_transport::RpcClient,
     notifications::{
         notification_session_url, task_notice_body, CursorTracker, NoticeKind,
         NotificationSettings, NotificationSnapshot,
     },
+    pet_notifications::BubbleKind,
     user_attention::AttentionTracker,
 };
 use base64::Engine;
@@ -122,9 +124,23 @@ impl Notifications {
             drop(self.wake.wait_timeout(data, Duration::from_secs(3)));
         }
     }
-    fn current(&self, epoch: u64) -> bool {
-        let data = self.data.lock().unwrap_or_else(|e| e.into_inner());
-        data.snapshot.enabled && data.epoch == epoch
+    fn gate(&self, app: &tauri::AppHandle) -> ChannelGate {
+        let (toasts, toast_epoch) = {
+            let data = self.data.lock().unwrap_or_else(|e| e.into_inner());
+            (data.snapshot.enabled, data.epoch)
+        };
+        let (bubbles, bubble_epoch) = super::pet_settings::bubble_gate(app);
+        // Pet display owns the notification surface, even if its bubble switch is off.
+        ChannelGate::route(
+            toasts,
+            toast_epoch,
+            super::pet_settings::pet_visible(app),
+            bubbles,
+            bubble_epoch,
+        )
+    }
+    fn current(&self, app: &tauri::AppHandle, captured: ChannelGate) -> bool {
+        captured.current(self.gate(app))
     }
 }
 
@@ -247,6 +263,11 @@ fn now_ms() -> u64 {
 /// Read only the HttpOnly auth cookie whose audience is this configured authority.
 /// Browser cookies are otherwise shared between localhost ports. Never log it.
 pub(super) fn client(app: &tauri::AppHandle, origin: &str) -> Result<RpcClient, String> {
+    RpcClient::new(origin, auth_cookie(app, origin)?)
+}
+
+/// Native authentication shared by fixed-purpose desktop clients. Never expose to JavaScript.
+pub(super) fn auth_cookie(app: &tauri::AppHandle, origin: &str) -> Result<String, String> {
     let url = Url::parse(origin).map_err(|_| "本机服务地址无效。".to_owned())?;
     let window = app
         .get_webview("dsh")
@@ -278,7 +299,7 @@ pub(super) fn client(app: &tauri::AppHandle, origin: &str) -> Result<RpcClient, 
         .find(|cookie| cookie.name() == name)
         .map(|cookie| format!("{}={}", cookie.name(), cookie.value()))
         .unwrap_or_default();
-    RpcClient::new(origin, cookie)
+    Ok(cookie)
 }
 
 fn foreground(app: &tauri::AppHandle) -> bool {
@@ -304,19 +325,34 @@ fn deliver(
     controller: &Controller,
     state: &Notifications,
     epoch: u64,
+    channels: ChannelGate,
     target: Url,
     title: &str,
     body: &str,
+    kind: BubbleKind,
+    key: &str,
 ) {
     // WebView/window queries may marshal to the UI thread. Never hold the state
     // lock while the UI could be reading a notification snapshot.
     let is_foreground = foreground(app);
+    if controller.exiting.load(Ordering::SeqCst) || controller.snapshot().state != "ready" {
+        return;
+    }
+    let notify_when_focused = {
+        let data = state.data.lock().unwrap_or_else(|e| e.into_inner());
+        data.snapshot.notify_when_focused
+    };
+    if channels.allows_bubble(state.gate(app)) && (!is_foreground || notify_when_focused) {
+        super::pet_notifications::emit(app, target.clone(), kind, title, body, key);
+    }
+    let toast_channel_current = channels.allows_toast(state.gate(app));
     let mut data = state.data.lock().unwrap_or_else(|e| e.into_inner());
     let settings = NotificationSettings {
         enabled: data.snapshot.enabled,
         notify_when_focused: data.snapshot.notify_when_focused,
     };
-    if !settings.should_notify(is_foreground)
+    if !toast_channel_current
+        || !settings.should_notify(is_foreground)
         || data.epoch != epoch
         || controller.exiting.load(Ordering::SeqCst)
         || controller.snapshot().state != "ready"
@@ -355,7 +391,7 @@ fn toast_app_id(app: &tauri::AppHandle) -> String {
 }
 
 /// Native activation worker only. No new window/service, injected script or remote IPC.
-fn open_notified_session(app: &tauri::AppHandle, target: &Url) -> Result<(), String> {
+pub(super) fn open_notified_session(app: &tauri::AppHandle, target: &Url) -> Result<(), String> {
     let controller = app
         .try_state::<Arc<Controller>>()
         .ok_or("启动器尚未就绪。")?;
@@ -402,6 +438,11 @@ fn open_notified_session(app: &tauri::AppHandle, target: &Url) -> Result<(), Str
     Ok(())
 }
 
+pub(super) fn wake(app: &tauri::AppHandle) {
+    if let Some(state) = app.try_state::<Arc<Notifications>>() {
+        state.wake.notify_all();
+    }
+}
 pub(super) fn stop(app: &tauri::AppHandle) {
     if let Some(state) = app.try_state::<Arc<Notifications>>() {
         state.toasts.shutdown();
@@ -417,16 +458,15 @@ pub(super) fn start(app: tauri::AppHandle, controller: Arc<Controller>, state: A
             if controller.exiting.load(Ordering::SeqCst) {
                 break;
             }
-            let (enabled, epoch) = {
-                let data = state.data.lock().unwrap_or_else(|e| e.into_inner());
-                (data.snapshot.enabled, data.epoch)
-            };
-            if generation != Some(epoch) {
+            let channels = state.gate(&app);
+            let epoch = channels.toast_epoch;
+            if !channels.continuous(generation) {
                 tracker.reset(now_ms());
-                attention.reset();
-                generation = Some(epoch);
+                // Rebase reads, but retain consumed questions across toast/bubble switches.
+                attention.disconnected();
             }
-            if !enabled {
+            generation = Some(channels);
+            if !channels.active() {
                 state.wait(epoch);
                 continue;
             }
@@ -446,13 +486,13 @@ pub(super) fn start(app: tauri::AppHandle, controller: Arc<Controller>, state: A
                 let backend = controller.backend()?;
                 let rpc = client(&app, &backend.config.origin())?;
                 let list = rpc.list()?;
-                if !state.current(epoch) {
+                if !state.current(&app, channels) {
                     return Ok(());
                 }
                 // Questions keep the Agent running, and can be nested inside run_code.
                 // Observe their durable starts/results without joining the answerer stream.
                 let waiting = attention.poll(&list, |session_id, cursor| {
-                    if !state.current(epoch) || controller.exiting.load(Ordering::SeqCst) {
+                    if !state.current(&app, channels) || controller.exiting.load(Ordering::SeqCst) {
                         return Err("通知检测已取消。".into());
                     }
                     rpc.page(session_id, cursor)
@@ -473,14 +513,17 @@ pub(super) fn start(app: tauri::AppHandle, controller: Arc<Controller>, state: A
                         &controller,
                         &state,
                         epoch,
+                        channels,
                         target,
                         "DSH · 需要你回答",
                         &body,
+                        BubbleKind::Waiting,
+                        &format!("waiting:{}:{}", notice.session_id, notice.call_id),
                     );
                 }
                 let requests = tracker.scan(&list)?;
                 for request in requests {
-                    if !state.current(epoch) || controller.exiting.load(Ordering::SeqCst) {
+                    if !state.current(&app, channels) || controller.exiting.load(Ordering::SeqCst) {
                         return Ok(());
                     }
                     let page = rpc.page(&request.session_id, request.cursor)?;
@@ -501,7 +544,26 @@ pub(super) fn start(app: tauri::AppHandle, controller: Arc<Controller>, state: A
                             &notice.session_id,
                             CLICK_SEQUENCE.fetch_add(1, Ordering::Relaxed),
                         )?;
-                        deliver(&app, &controller, &state, epoch, target, title, &body);
+                        let kind = match notice.kind {
+                            NoticeKind::Completed => BubbleKind::Completed,
+                            NoticeKind::Failed => BubbleKind::Failed,
+                        };
+                        let key = format!(
+                            "turn:{}:{:?}:{}",
+                            notice.session_id, notice.kind, notice.seq
+                        );
+                        deliver(
+                            &app,
+                            &controller,
+                            &state,
+                            epoch,
+                            channels,
+                            target,
+                            title,
+                            &body,
+                            kind,
+                            &key,
+                        );
                     }
                 }
                 Ok(())

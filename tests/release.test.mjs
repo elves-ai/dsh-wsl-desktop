@@ -7,7 +7,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join } from 'node:path';
-import { prepareAssets, readUpdaterPublicKey, readVersions, validateReleaseTag, verifyAssets, verifyUnsignedAssets, verifyUpdaterSignature } from '../scripts/release.mjs';
+import { readReleaseNotes, prepareAssets, readUpdaterPublicKey, readVersions, validateReleaseTag, verifyAssets, verifyUnsignedAssets, verifyUpdaterSignature } from '../scripts/release.mjs';
 import { fileURLToPath } from 'node:url';
 
 const VERSION = '0.1.0';
@@ -226,6 +226,8 @@ for (const version of [VERSION, '0.2.0-rc.1']) {
     assert.equal(manifest.version, version);
     assert.equal(manifest.pub_date, DATE);
     assert.ok(manifest.notes.includes(version));
+    assert.ok(manifest.notes.includes('https://github.com/PC2005-cloud/dsh-pet'));
+    assert.ok(manifest.notes.includes('prohibit commercial use'));
     assert.deepEqual(Object.keys(manifest.platforms), ['windows-x86_64']);
     assert.equal(manifest.platforms['windows-x86_64'].url,
       'https://github.com/elves-ai/dsh-wsl-desktop/releases/download/v' + version + '/' + fixture.installer);
@@ -412,4 +414,13 @@ test('signature parser rejects invalid UTF-8 instead of silently replacing bytes
   const decoded = Buffer.from(signatureFor(content), 'base64');
   decoded[0] = 0xff;
   assert.throws(() => verifyUpdaterSignature(content, decoded.toString('base64'), publicKeyFor(), VERSION), /encoded data|encoding/i);
+});
+
+test('version-matched release notes describe interactions and retain upstream asset restrictions', () => {
+  const notes=readReleaseNotes(readVersions().package);
+  assert.ok(notes.startsWith('# v'+readVersions().package+'\n'));
+  assert.ok(notes.includes('允许一次/拒绝'));
+  assert.ok(notes.includes('https://github.com/PC2005-cloud/dsh-pet'));
+  assert.ok(notes.includes('prohibit commercial use'));
+  assert.throws(()=>readReleaseNotes('99.0.0'),/match the application version/);
 });

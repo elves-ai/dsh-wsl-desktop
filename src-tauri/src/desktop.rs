@@ -27,12 +27,22 @@ use tauri::{
 };
 use url::Url;
 
+#[path = "desktop_assistant.rs"]
+mod assistant;
 #[path = "desktop_context_menu.rs"]
 mod context_menu;
 #[path = "desktop_setup.rs"]
 mod first_run;
 #[path = "desktop_notifications.rs"]
 mod notifications;
+#[path = "desktop_pet.rs"]
+mod pet;
+#[path = "desktop_pet_interactions.rs"]
+mod pet_interactions;
+#[path = "desktop_pet_notifications.rs"]
+mod pet_notifications;
+#[path = "desktop_pet_settings.rs"]
+mod pet_settings;
 #[path = "desktop_power.rs"]
 mod power;
 #[path = "desktop_settings.rs"]
@@ -189,7 +199,7 @@ impl Controller {
 fn settings_section(section: &str) -> bool {
     matches!(
         section,
-        "environment" | "notifications" | "power" | "updates" | "logs"
+        "environment" | "notifications" | "power" | "pet" | "updates" | "logs"
     )
 }
 
@@ -827,6 +837,14 @@ fn dispatch(app: &tauri::AppHandle, action: &'static str) {
 /// Tray actions keep their existing confirmations and update locks.
 fn handle_menu_action(app: &tauri::AppHandle, id: &str) {
     match id {
+        "assistant" => {
+            let app = app.clone();
+            thread::spawn(move || {
+                if let Err(error) = assistant::show(&app) {
+                    app.state::<Arc<Controller>>().record(&app, &error);
+                }
+            });
+        }
         "open" => dispatch(app, "open"),
         "logs" => dispatch(app, "logs"),
         "updates" => {
@@ -860,6 +878,22 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
+            assistant::get_assistant_snapshot,
+            assistant::assistant_action,
+            pet::get_pet_geometry,
+            pet::move_pet,
+            pet_settings::get_pet_settings,
+            pet_settings::set_pet_settings,
+            pet_settings::set_pet_visibility,
+            pet_settings::get_pet_preferences,
+            pet_settings::set_pet_topmost,
+            pet_notifications::get_pet_notifications,
+            pet_notifications::open_pet_notification,
+            pet_notifications::dismiss_pet_notification,
+            pet_interactions::get_pet_interactions,
+            pet_interactions::submit_pet_interaction,
+            pet_interactions::open_pet_interaction,
+            pet_interactions::set_pet_interaction_surface,
             get_snapshot,
             open_settings,
             settings_page::return_from_settings,
@@ -880,7 +914,9 @@ pub fn run() {
             titlebar::titlebar_action,
             titlebar::open_titlebar_settings,
             titlebar::open_titlebar_updates,
-            titlebar::get_titlebar_update_state
+            titlebar::get_titlebar_update_state,
+            titlebar::get_titlebar_pet_state,
+            titlebar::toggle_titlebar_pet
         ])
         .setup(|app| {
             let directory = app.path().app_config_dir()?;
@@ -928,6 +964,15 @@ pub fn run() {
                 log_path: directory.join("launcher.log"),
             });
             app.manage(controller.clone());
+            let assistant_state = Arc::new(assistant::Assistant::new(directory.clone()));
+            app.manage(assistant_state.clone());
+            app.manage(Arc::new(pet_settings::PetControls::new(directory.clone())));
+            app.manage(Arc::new(pet_notifications::PetNotifications::new()));
+            let interaction_state = Arc::new(pet_interactions::PetInteractions::new());
+            app.manage(interaction_state.clone());
+            pet_interactions::start(app.handle().clone(), controller.clone(), interaction_state);
+            pet_settings::restore(app.handle().clone());
+            assistant::start(app.handle().clone(), controller.clone(), assistant_state);
             let notification_state = Arc::new(notifications::Notifications::new(directory.clone()));
             app.manage(notification_state.clone());
             notifications::start(app.handle().clone(), controller.clone(), notification_state);
@@ -961,6 +1006,7 @@ pub fn run() {
             context_menu::attach(&view)?;
             titlebar::attach(&launcher)?;
             let open = MenuItem::with_id(app, "open", "打开 DSH", true, None::<&str>)?;
+            let assistant = MenuItem::with_id(app, "assistant", "桌面助手…", true, None::<&str>)?;
             let control = MenuItem::with_id(app, "logs", "诊断日志…", true, None::<&str>)?;
             let update = MenuItem::with_id(app, "updates", "检查启动器更新…", true, None::<&str>)?;
             let start = MenuItem::with_id(app, "start", "启动服务", true, None::<&str>)?;
@@ -972,7 +1018,7 @@ pub fn run() {
             let menu = Menu::with_items(
                 app,
                 &[
-                    &open, &control, &update, &start, &stop, &restart, &quit, &exit,
+                    &open, &assistant, &control, &update, &start, &stop, &restart, &quit, &exit,
                 ],
             )?;
             TrayIconBuilder::with_id("dsh-tray")
@@ -1051,11 +1097,22 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             titlebar::on_window_event(window, event);
+            assistant::on_window_event(window, event);
+            pet_settings::on_window_event(window, event);
             if let WindowEvent::CloseRequested { api, .. } = event {
                 if let Some(controller) = window.app_handle().try_state::<Arc<Controller>>() {
                     if !controller.exiting.load(Ordering::SeqCst) {
                         api.prevent_close();
-                        let _ = window.hide();
+                        if window.label() == "assistant-pet" {
+                            let app = window.app_handle().clone();
+                            thread::spawn(move || {
+                                let _ = app
+                                    .state::<Arc<pet_settings::PetControls>>()
+                                    .set_visible(&app, false);
+                            });
+                        } else {
+                            let _ = window.hide();
+                        }
                     }
                 }
             }
@@ -1064,6 +1121,7 @@ pub fn run() {
         .expect("Failed to initialize DSH WSL Desktop");
     app.run(|app, event| {
         if matches!(&event, tauri::RunEvent::Exit) {
+            assistant::stop(app);
             notifications::stop(app);
         }
         if let tauri::RunEvent::ExitRequested { api, .. } = event {

@@ -139,12 +139,13 @@ h2 { font-size: 13px; font-weight: 550; line-height: 1.7; }
 .switch input:disabled { cursor: not-allowed; }
 .switch:has(input:disabled) { opacity: .45; }
 .setting-actions { display: flex; gap: 10px; flex-wrap: wrap; }
-#notification-message[data-error="true"], #update-message[data-error="true"] { color: #e7a6b1; }
+#pet-message[data-error="true"], #notification-message[data-error="true"], #update-message[data-error="true"] { color: #e7a6b1; }
 #update-new-version { color: #b3caff; }
 #update-notes { margin: 15px 0; padding: 12px; border-radius: 5px; background: #11161d; color: #a6b5cc; white-space: pre-wrap; font: inherit; font-size: 12px; line-height: 1.8; max-height: 220px; overflow-y: auto; overflow-wrap: anywhere; }
 #update-progress-row { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 14px 0; color: #91a2be; font-size: 11px; }
 #update-progress { flex: 1; height: 5px; accent-color: #acc5ff; }
 #log-output { padding: 15px; background: #11161d; border: 1px solid #29313e; border-radius: 6px; font: 11px/1.9 "Cascadia Code", Consolas, monospace; color: #9dabc1; max-height: 400px; white-space: pre-wrap; overflow: auto; overflow-wrap: anywhere; }
+.pet-source a { color: #b3caff; text-underline-offset: 3px; }
 .settings-preview { margin-top: 22px; font-size: 10px; color: #6e7c94; }
 @keyframes breathe { 50% { opacity: .3; } }
 @keyframes travel { 0% { transform: translateX(-110%); } 100% { transform: translateX(400%); } }

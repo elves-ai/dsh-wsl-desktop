@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "pet-motion",
+  "description": "Only the bundled pet surface may read pointer/screen geometry and move its own bounded window.",
+  "local": true,
+  "webviews": [
+    "assistant-pet"
+  ],
+  "permissions": [
+    "allow-get-pet-geometry",
+    "allow-move-pet",
+    "allow-get-pet-preferences",
+    "allow-set-pet-topmost"
+  ]
+}

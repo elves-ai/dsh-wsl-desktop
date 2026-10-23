@@ -13,6 +13,8 @@
     "allow-titlebar-action",
     "allow-open-titlebar-settings",
     "allow-open-titlebar-updates",
-    "allow-get-titlebar-update-state"
+    "allow-get-titlebar-update-state",
+    "allow-get-titlebar-pet-state",
+    "allow-toggle-titlebar-pet"
   ]
 }

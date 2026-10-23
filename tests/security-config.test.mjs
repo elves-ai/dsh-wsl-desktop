@@ -5,14 +5,14 @@ const read = path => readFileSync(new URL('../' + path, import.meta.url), 'utf8'
 test('only trusted local content and titlebar views receive narrowly scoped IPC capabilities', () => {
   const config = JSON.parse(read('src-tauri/tauri.conf.json'));
   const capability = JSON.parse(read('src-tauri/capabilities/launcher.json'));
-  assert.deepEqual([...config.app.security.capabilities].sort(), ['launcher', 'settings-navigation', 'titlebar']);
+  assert.deepEqual([...config.app.security.capabilities].sort(), ['assistant', 'launcher', 'pet-interactions', 'pet-motion', 'pet-notifications', 'pet-settings', 'settings-navigation', 'titlebar']);
   assert.deepEqual(capability.webviews, ['launcher', 'launcher-settings', 'dsh-settings']);
   assert.equal(capability.windows, undefined);
   const titlebar = JSON.parse(read('src-tauri/capabilities/titlebar.json'));
   assert.deepEqual(titlebar.webviews, ['launcher-titlebar', 'dsh-titlebar']);
   assert.equal(titlebar.windows, undefined);
   assert.equal(titlebar.local, true); assert.equal(titlebar.remote, undefined);
-  assert.deepEqual([...titlebar.permissions].sort(), ['core:event:allow-listen', 'core:event:allow-unlisten', 'allow-titlebar-action', 'allow-open-titlebar-settings', 'allow-open-titlebar-updates', 'allow-get-titlebar-update-state'].sort());
+  assert.deepEqual([...titlebar.permissions].sort(), ['core:event:allow-listen', 'core:event:allow-unlisten', 'allow-titlebar-action', 'allow-open-titlebar-settings', 'allow-open-titlebar-updates', 'allow-get-titlebar-update-state', 'allow-get-titlebar-pet-state', 'allow-toggle-titlebar-pet'].sort());
   assert.equal(capability.local, true); assert.equal(capability.remote, undefined);
   assert.deepEqual([...capability.permissions].sort(), ['allow-get-snapshot', 'allow-open-settings', 'allow-perform-action', 'allow-set-project-directory', 'allow-setup-distributions', 'allow-setup-identity', 'allow-complete-setup', 'allow-get-update-snapshot', 'allow-check-update', 'allow-install-update', 'allow-get-notification-snapshot', 'allow-set-notifications-enabled', 'allow-test-notification', 'allow-get-power-snapshot', 'allow-set-power-enabled', 'core:event:allow-listen', 'core:event:allow-unlisten'].sort());
   const navigation = JSON.parse(read('src-tauri/capabilities/settings-navigation.json'));
@@ -39,8 +39,8 @@ test('titlebar settings opens its own verified parent directly and removes all p
   assert.doesNotMatch(body, /show_settings\(|perform_action|ensure_ready\(|open_dsh\(|[.]navigate\(|[.]destroy\(|[.]eval\(/);
   const tray = desktop.slice(desktop.indexOf('let open = MenuItem::with_id'), desktop.indexOf('TrayIconBuilder::with_id'));
   const trayIds = [...tray.matchAll(/MenuItem::with_id\(\s*app,\s*"([^"]+)"/g)].map(match => match[1]);
-  assert.deepEqual(trayIds, ['open', 'logs', 'updates', 'start', 'stop', 'restart', 'quit', 'exit']);
-  assert.match(tray, /&open,\s*&control,\s*&update,\s*&start,\s*&stop,\s*&restart,\s*&quit,\s*&exit/);
+  assert.deepEqual(trayIds, ['open', 'assistant', 'logs', 'updates', 'start', 'stop', 'restart', 'quit', 'exit']);
+  assert.match(tray, /&open,\s*&assistant,\s*&control,\s*&update,\s*&start,\s*&stop,\s*&restart,\s*&quit,\s*&exit/);
   assert.match(desktop, /TrayIconBuilder::with_id\("dsh-tray"\)[\s\S]*?\.menu\(&menu\)/);
   assert.equal((desktop.match(/\.on_menu_event\(/g) || []).length, 1, 'tray actions dispatch once');
   assert.ok(desktop.includes('handle_menu_action(app, event.id.as_ref())'));
@@ -62,14 +62,14 @@ test('titlebar commands validate the calling view, local document and its own pa
   assert.ok(titlebar.includes('url.query().is_none()'));
   assert.ok(titlebar.includes('url.fragment().is_none()'));
   assert.ok(titlebar.includes('url.port() == Some(1420)'));
-  assert.equal((titlebar.match(/assert_titlebar\(&view\)\?;/g) || []).length, 4);
+  assert.equal((titlebar.match(/assert_titlebar\(&view\)\?;/g) || []).length, 6);
   assert.doesNotMatch(titlebar, /x[.]is_finite|popup_at|show_titlebar_menu/);
   assert.ok(titlebar.includes('Action::Close => window.close()'));
   assert.ok(titlebar.includes('Action::Drag => window.start_dragging()'));
   assert.ok(titlebar.includes('EventTarget::webview('));
   assert.doesNotMatch(titlebar, /perform_action|install_update|backend\.|eval\(|initialization_script/);
   assert.doesNotMatch(read('src-tauri/build.rs'), /show_titlebar_menu/);
-  for (const command of ['titlebar_action', 'open_titlebar_settings', 'open_titlebar_updates', 'get_titlebar_update_state']) {
+  for (const command of ['titlebar_action', 'open_titlebar_settings', 'open_titlebar_updates', 'get_titlebar_update_state', 'get_titlebar_pet_state', 'toggle_titlebar_pet']) {
     assert.ok(read('src-tauri/build.rs').includes('"' + command + '"'));
     assert.ok(read('src-tauri/src/desktop.rs').includes('titlebar::' + command));
   }
@@ -272,7 +272,7 @@ test('all task notification kinds add matching session identity without new RPC 
   assert.match(waiting, /task_notice_body\(\s*&list,\s*&notice.session_id,/);
   assert.match(waiting, /"DSH · 需要你回答",\s*&body/);
   assert.match(results, /task_notice_body\(&list, &notice.session_id, body\)/);
-  assert.match(results, /deliver\(\s*&app,\s*&controller,\s*&state,\s*epoch,\s*target,\s*title,\s*&body,?\s*\)/);
+  assert.match(results, /deliver\(\s*&app,\s*&controller,\s*&state,\s*epoch,\s*channels,\s*target,\s*title,\s*&body,\s*kind,\s*&key,?\s*\)/);
   assert.equal((native.match(/task_notice_body\(/g) || []).length, 2);
   assert.doesNotMatch(native, /snapshot[.](?:title|body|task)|emit_to[\s\S]{0,120}&body/);
 });
@@ -374,7 +374,7 @@ test('power commands are local fixed-purpose settings with no remote power-contr
     assert.ok(read('src-tauri/src/desktop.rs').includes('power::' + command));
     assert.ok(capability.permissions.includes('allow-' + command.replaceAll('_', '-')));
   }
-  assert.ok(read('src-tauri/src/desktop.rs').includes('"notifications" | "power" | "updates"'));
+  assert.ok(read('src-tauri/src/desktop.rs').includes('"notifications" | "power" | "pet" | "updates"'));
   assert.ok(read('src-tauri/src/desktop_settings.rs').includes('"power" => "power"'));
 });
 

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-pet-interactions"
+description = "Enables the get_pet_interactions command without any pre-configured scope."
+commands.allow = ["get_pet_interactions"]
+
+[[permission]]
+identifier = "deny-get-pet-interactions"
+description = "Denies the get_pet_interactions command without any pre-configured scope."
+commands.deny = ["get_pet_interactions"]

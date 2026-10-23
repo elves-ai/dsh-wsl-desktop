@@ -168,6 +168,9 @@ export function prepareAssets(directory, version, { publicKey = readUpdaterPubli
       || names.some(name => ![...files, CHECKSUMS].includes(name))) throw new Error('Missing or unexpected release input files.');
   const encodedSignature = readFileSync(resolve(directory, signature), 'utf8').trim();
   verifyUpdaterSignature(readFileSync(resolve(directory, installer)), encodedSignature, publicKey, version);
+  if (typeof notes !== 'string' || !notes.trim()) throw new Error('Release notes must be non-empty text.');
+  const attribution = 'Pet code/animations: https://github.com/PC2005-cloud/dsh-pet (PC2005-cloud). Code MIT; animation assets prohibit commercial use. Derivative introductions, displays and distributions must retain this original-author URL.';
+  notes = notes.includes(attribution) ? notes : notes + '\n\n' + attribution;
   const manifest = { version, notes, pub_date: date, platforms: {
     'windows-x86_64': { signature: encodedSignature, url: updaterUrl(version, installer) },
   } };
@@ -175,6 +178,13 @@ export function prepareAssets(directory, version, { publicKey = readUpdaterPubli
   const checksums = [...files].sort().map(name => createHash('sha256').update(readFileSync(resolve(directory, name))).digest('hex') + '  ' + name);
   writeFileSync(resolve(directory, CHECKSUMS), checksums.join('\n') + '\n');
   return verifyAssets(directory, version, { publicKey });
+}
+
+export function readReleaseNotes(version) {
+  assertVersion(version);
+  const notes = readFileSync(new URL('../RELEASE_NOTES.md', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  if (!notes.startsWith('# v' + version + '\n') || !notes.trim()) throw new Error('Release notes must match the application version.');
+  return notes;
 }
 
 function main() {
@@ -185,7 +195,8 @@ function main() {
     console.log('Validated release version ' + release.version + (release.prerelease ? ' (prerelease)' : ''));
   } else if (['prepare', 'verify'].includes(process.argv[2]) && process.argv[3]) {
     const action = process.argv[2] === 'prepare' ? prepareAssets : verifyAssets;
-    console.log('Verified release files: ' + action(process.argv[3], release.version).join(', '));
+    const options = process.argv[2] === 'prepare' ? { notes: readReleaseNotes(release.version) } : undefined;
+    console.log('Verified release files: ' + action(process.argv[3], release.version, options).join(', '));
   } else throw new Error('Usage: RELEASE_TAG=vX.Y.Z node scripts/release.mjs validate|prepare|verify <artifact-directory>');
 }
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {

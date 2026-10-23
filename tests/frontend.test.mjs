@@ -13,10 +13,12 @@ const update = (extra = {}) => ({ current_version: '0.1.0', phase: 'idle', versi
 const notification = (extra = {}) => ({ enabled: false, notify_when_focused: false, phase: 'disabled', message: '未启用系统通知。', ...extra });
 const power = (extra = {}) => ({ enabled: true, active: false, phase: 'idle', message: '等待运行中的任务。', ...extra });
 const listening = (extra = {}) => notification({ enabled: true, phase: 'listening', message: '通知检查正常', ...extra });
+const pet = (extra = {}) => ({ visible: false, startup_visible: true, roaming_enabled: true, bubble_notifications: true, revision: 0, message: '桌面宠物设置已读取。', ...extra });
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 async function mount(native, initial = base(), options = {}) {
   let savedNotification = options.initialNotification || notification();
   let savedPower = options.initialPower || power();
+  let savedPet = options.initialPet || pet();
   const nodes = new Map(); const subscriptions = new Map(); const calls = []; const windowHandlers = new Map(); const listenCalls = []; const unlistened = [];
   const node = id => {
     if (!nodes.has(id)) nodes.set(id, { id, textContent: '', value: '', children: [], replaceChildren(...children) { this.children = children; }, dataset: {}, hidden: false, disabled: false, checked: false, open: false, scrollTop: 0, scrollHeight: 0, clientHeight: 0, handlers: {}, attributes: {}, set innerHTML(_) { throw new Error('Native data must not use HTML'); }, addEventListener(name, fn) { this.handlers[name] = fn; }, setAttribute(name, value) { this.attributes[name] = value; }, removeAttribute(name) { delete this.attributes[name]; if (name === 'value') delete this.value; }, focus() { this.focused = true; }, scrollIntoView() { this.scrolled = true; } });
@@ -37,6 +39,11 @@ async function mount(native, initial = base(), options = {}) {
         if (name === 'setup_distributions') return ['Ubuntu', 'Debian'];
         if (name === 'setup_identity') return { linux_user: args.linuxUser || 'test', home: '/home/test', node: '/usr/bin/node' };
         if (name === 'complete_setup') return base({ state: 'starting', busy: true });
+        if (name === 'get_pet_settings') return savedPet;
+        if (name === 'set_pet_settings' || name === 'set_pet_visibility') {
+          savedPet = { ...savedPet, ...(name === 'set_pet_settings' ? args.patch : { visible: args.visible }), revision: savedPet.revision + 1 };
+          return savedPet;
+        }
         if (name === 'get_power_snapshot') return savedPower;
         if (name === 'set_power_enabled') {
           savedPower = power({ enabled: args.enabled, phase: args.enabled ? 'idle' : 'disabled', message: args.enabled ? '等待运行中的任务。' : '未启用任务期间防休眠。' });
@@ -56,20 +63,384 @@ async function mount(native, initial = base(), options = {}) {
     },
   });
   vm.runInContext(source, context); await flush();
-  return { template: root.template, power(snapshot) { subscriptions.get('launcher-power-state')?.({ payload: snapshot }); }, node(id) { assert.ok(nodes.has(id), 'Missing DOM node: ' + id); return nodes.get(id); }, has: id => nodes.has(id), location, calls, subscriptions, listenCalls, unlistened, async fill(id, value) { const item = nodes.get(id); item.value = value; item.handlers.input?.(); await flush(); }, async choose(id, value) { const item = nodes.get(id); item.value = value; item.handlers.change?.(); await flush(); }, async submit() { nodes.get('setup-form')?.handlers.submit?.({ preventDefault() {} }); await flush(); }, async change(id, checked) { const item = nodes.get(id); if (!item) return; item.checked = checked; item.handlers.change?.(); await flush(); }, notification(snapshot) { subscriptions.get('launcher-notification-state')?.({ payload: snapshot }); }, unload() { windowHandlers.get('beforeunload')?.(); }, event(snapshot) { subscriptions.get('launcher-state')?.({ payload: snapshot }); }, update(snapshot) { subscriptions.get('launcher-update-state')?.({ payload: snapshot }); }, async click(id) { nodes.get(id)?.handlers.click?.(); await flush(); } };
+  return { template: root.template, pet(snapshot) { subscriptions.get('pet-settings-state')?.({ payload: snapshot }); }, power(snapshot) { subscriptions.get('launcher-power-state')?.({ payload: snapshot }); }, node(id) { assert.ok(nodes.has(id), 'Missing DOM node: ' + id); return nodes.get(id); }, has: id => nodes.has(id), location, calls, subscriptions, listenCalls, unlistened, async fill(id, value) { const item = nodes.get(id); item.value = value; item.handlers.input?.(); await flush(); }, async choose(id, value) { const item = nodes.get(id); item.value = value; item.handlers.change?.(); await flush(); }, async submit() { nodes.get('setup-form')?.handlers.submit?.({ preventDefault() {} }); await flush(); }, async change(id, checked) { const item = nodes.get(id); if (!item) return; item.checked = checked; item.handlers.change?.(); await flush(); }, notification(snapshot) { subscriptions.get('launcher-notification-state')?.({ payload: snapshot }); }, unload() { windowHandlers.get('beforeunload')?.(); }, event(snapshot) { subscriptions.get('launcher-state')?.({ payload: snapshot }); }, update(snapshot) { subscriptions.get('launcher-update-state')?.({ payload: snapshot }); }, async click(id) { nodes.get(id)?.handlers.click?.(); await flush(); } };
 }
+
+const petControls = ['pet-visible', 'pet-startup-visible', 'pet-roaming-enabled', 'pet-bubble-notifications'];
+const petCalls = app => app.calls.filter(([name]) => ['get_pet_settings', 'set_pet_settings', 'set_pet_visibility'].includes(name));
+const petValues = app => petControls.map(id => app.node(id).checked);
+
+test('pet category supports URL, native routing, sidebar navigation and unchanged neighboring routes', async () => {
+  const app = await mount(true, base(), { location: 'http://127.0.0.1:1420/index.html?view=settings&section=pet' });
+  assert.equal(app.node('settings-title').textContent, '桌面宠物');
+  assert.equal(app.node('settings-pet').hidden, false);
+  assert.equal(app.node('nav-pet').attributes['aria-current'], 'page');
+  await app.click('nav-updates');
+  assert.equal(app.node('settings-title').textContent, '软件更新');
+  assert.equal(app.node('settings-pet').hidden, true);
+  app.subscriptions.get('launcher-show-settings')({ payload: 'pet' });
+  assert.equal(app.node('settings-title').textContent, '桌面宠物');
+  assert.equal(app.node('settings-title').focused, true);
+  assert.equal(app.node('settings-updates').hidden, true);
+  await app.click('nav-power');
+  assert.equal(app.node('settings-title').textContent, '电源管理');
+  await app.click('nav-pet');
+  assert.equal(app.node('settings-pet').hidden, false);
+  assert.ok(app.template.includes('https://github.com/PC2005-cloud/dsh-pet'));
+  assert.match(app.template, /动画素材仅限非商业使用/);
+});
+
+test('pet subscribes before read and is usable while DSH is unavailable, busy or not yet loaded', async () => {
+  const launcher = deferred();
+  const app = await mount(true, base(), { initialPet: pet({ visible: true, startup_visible: false }), invoke(name, args, { subscriptions, fallback }) {
+    if (name === 'get_snapshot') return launcher.promise;
+    if (name === 'get_pet_settings') { assert.ok(subscriptions.has('pet-settings-state')); assert.equal(args, undefined); }
+    return fallback();
+  } });
+  assert.deepEqual(petValues(app), [true, false, true, true]);
+  for (const id of petControls) assert.equal(app.node(id).disabled, false);
+  await app.change('pet-visible', false);
+  assert.deepEqual(petValues(app), [false, false, true, true]);
+  launcher.resolve(base({ state: 'error', busy: true, last_error: 'DSH unavailable' })); await flush();
+  for (const id of petControls) assert.equal(app.node(id).disabled, false);
+  assert.equal(petCalls(app).length, 2);
+});
+
+test('pet visibility is immediate and persistent toggles write only their own patch, never service actions', async () => {
+  const app = await mount(true);
+  assert.deepEqual(petValues(app), [false, true, true, true]);
+  await app.change('pet-startup-visible', false);
+  assert.deepEqual(petValues(app), [false, false, true, true]);
+  await app.change('pet-visible', true);
+  assert.deepEqual(petValues(app), [true, false, true, true]);
+  await app.change('pet-roaming-enabled', false);
+  assert.deepEqual(petValues(app), [true, false, false, true]);
+  await app.change('pet-startup-visible', true);
+  assert.deepEqual(petValues(app), [true, true, false, true]);
+  await app.change('pet-visible', false);
+  await app.change('pet-roaming-enabled', true);
+  assert.deepEqual(petValues(app), [false, true, true, true]);
+  assert.deepEqual(JSON.parse(JSON.stringify(petCalls(app))), [
+    ['get_pet_settings', null],
+    ['set_pet_settings', { patch: { startup_visible: false } }],
+    ['set_pet_visibility', { visible: true }],
+    ['set_pet_settings', { patch: { roaming_enabled: false } }],
+    ['set_pet_settings', { patch: { startup_visible: true } }],
+    ['set_pet_visibility', { visible: false }],
+    ['set_pet_settings', { patch: { roaming_enabled: true } }],
+  ]);
+  assert.equal(app.calls.some(([name]) => ['perform_action', 'set_project_directory'].includes(name)), false);
+});
+
+test('pet settings are absent and never initialized on startup, including first-run setup', async () => {
+  for (const initial of [base(), base({ setup_required: true })]) {
+    const app = await mount(true, initial, { mode: 'startup' });
+    for (const id of [...petControls, 'pet-refresh', 'nav-pet']) assert.equal(app.has(id), false);
+    assert.equal(petCalls(app).length, 0);
+    assert.equal(app.listenCalls.includes('pet-settings-state'), false);
+  }
+});
+
+test('pet waits for a real snapshot and serializes read/write/repeated clicks without optimistic values', async () => {
+  const initial = deferred(), saving = deferred();
+  let reads = 0;
+  const app = await mount(true, base(), { invoke(name, _args, { fallback }) {
+    if (name === 'get_pet_settings' && ++reads === 1) return initial.promise;
+    if (name === 'set_pet_visibility') return saving.promise;
+    return fallback();
+  } });
+  for (const id of petControls) { assert.equal(app.node(id).disabled, true); await app.change(id, true); }
+  await app.click('pet-refresh');
+  assert.equal(petCalls(app).length, 1);
+  initial.resolve(pet()); await flush();
+  await app.change('pet-visible', true);
+  assert.deepEqual(petValues(app), [false, true, true, true]);
+  for (const id of petControls) assert.equal(app.node(id).disabled, true);
+  await app.change('pet-visible', false);
+  await app.change('pet-startup-visible', false);
+  await app.change('pet-roaming-enabled', false);
+  await app.change('pet-bubble-notifications', false);
+  await app.click('pet-refresh');
+  assert.equal(petCalls(app).length, 2);
+  app.pet(pet({ visible: true, revision: 2 }));
+  assert.deepEqual(petValues(app), [true, true, true, true]);
+  assert.equal(app.node('pet-visible').disabled, true);
+  saving.resolve(pet({ revision: 1 })); await flush();
+  assert.deepEqual(petValues(app), [true, true, true, true]);
+  assert.equal(app.node('pet-visible').disabled, false);
+});
+
+test('pet native revisions reject stale/equal events and delayed reads, while newer replies still win', async () => {
+  const initial = deferred();
+  const app = await mount(true, base(), { listen(name, callback) {
+    if (name === 'pet-settings-state') callback({ payload: pet({ visible: true, revision: 4, message: 'registration event' }) });
+  }, invoke(name, _args, { fallback }) { return name === 'get_pet_settings' ? initial.promise : fallback(); } });
+  assert.deepEqual(petValues(app), [true, true, true, true]);
+  app.pet(pet({ revision: 3, message: 'old event' }));
+  app.pet(pet({ revision: 4, message: 'duplicate event' }));
+  assert.match(app.node('pet-message').textContent, /registration event/);
+  initial.resolve(pet({ startup_visible: false, roaming_enabled: false, revision: 2 })); await flush();
+  assert.deepEqual(petValues(app), [true, true, true, true]);
+  const newer = await mount(true, base(), { listen(name, callback) {
+    if (name === 'pet-settings-state') callback({ payload: pet({ visible: true, revision: 1 }) });
+  }, initialPet: pet({ startup_visible: false, revision: 2 }) });
+  assert.deepEqual(petValues(newer), [false, false, true, true]);
+  newer.pet(pet({ visible: true, revision: 1 }));
+  assert.deepEqual(petValues(newer), [false, false, true, true]);
+});
+
+test('pet stale successful mutation replies and stale read failures cannot erase newer events', async () => {
+  for (const reject of [false, true]) {
+    const reply = deferred(); let reads = 0;
+    const app = await mount(true, base(), { invoke(name, _args, { fallback }) {
+      if (name === 'get_pet_settings' && ++reads > 1) return reply.promise;
+      return fallback();
+    } });
+    await app.click('pet-refresh');
+    app.pet(pet({ visible: true, startup_visible: false, roaming_enabled: false, revision: 8, message: 'latest' }));
+    if (reject) reply.reject(new Error('stale read failed')); else reply.resolve(pet({ revision: 3 }));
+    await flush();
+    assert.deepEqual(petValues(app), [true, false, false, true]);
+    assert.equal(app.node('pet-message').textContent, 'latest');
+    assert.equal(app.node('pet-message').dataset.error, 'false');
+  }
+});
+
+test('pet initial read or subscription failure blocks guessing and supports explicit read retry', async () => {
+  for (const fail of ['read', 'listen']) {
+    let reads = 0, registrations = 0;
+    const app = await mount(true, base(), { listen(name) {
+      if (name === 'pet-settings-state' && ++registrations === 1 && fail === 'listen') throw new Error('listen failed');
+    }, invoke(name, _args, { fallback }) {
+      if (name === 'get_pet_settings' && ++reads === 1 && fail === 'read') throw new Error('read failed token=private-pet');
+      return fallback();
+    } });
+    assert.equal(app.node('pet-message').dataset.error, 'true');
+    assert.doesNotMatch(app.node('pet-message').textContent, /private-pet/);
+    for (const id of petControls) { assert.equal(app.node(id).disabled, true); await app.change(id, true); }
+    assert.equal(app.node('pet-refresh').disabled, false);
+    await app.click('pet-refresh');
+    assert.deepEqual(petValues(app), [false, true, true, true]);
+    for (const id of petControls) assert.equal(app.node(id).disabled, false);
+    assert.equal(app.node('pet-message').dataset.error, 'false');
+    assert.equal(petCalls(app).some(([name]) => name.startsWith('set_')), false);
+  }
+});
+
+test('pet write failures preserve confirmed values, reconcile uncertain native writes and allow retry', async () => {
+  for (const [id, key] of [['pet-visible', 'visible'], ['pet-startup-visible', 'startup_visible'], ['pet-roaming-enabled', 'roaming_enabled'], ['pet-bubble-notifications', 'bubble_notifications']]) {
+    for (const value of [true, false]) {
+      let attempts = 0;
+      const app = await mount(true, base(), { initialPet: pet({ [key]: value }), invoke(name, _args, { fallback }) {
+        if (['set_pet_settings', 'set_pet_visibility'].includes(name) && ++attempts === 1) throw new Error('<img onerror=bad> token=private-pet');
+        return fallback();
+      } });
+      await app.change(id, !value);
+      assert.equal(app.node(id).checked, value);
+      assert.equal(app.node(id).disabled, false);
+      assert.match(app.node('pet-message').textContent, /可重新读取或重试.*<img onerror=bad>/);
+      assert.doesNotMatch(app.node('pet-message').textContent, /private-pet/);
+      assert.equal(petCalls(app).filter(([name]) => name === 'get_pet_settings').length, 2);
+      await app.change(id, !value);
+      assert.equal(app.node(id).checked, !value);
+      assert.equal(app.node('pet-message').dataset.error, 'false');
+    }
+  }
+  let reads = 0;
+  const app = await mount(true, base(), { invoke(name, _args, { fallback }) {
+    if (name === 'get_pet_settings' && ++reads > 1) return pet({ visible: true, revision: 4 });
+    if (name === 'set_pet_visibility') throw new Error('reply lost after native write');
+    return fallback();
+  } });
+  await app.change('pet-visible', true);
+  assert.equal(app.node('pet-visible').checked, true);
+  app.pet(pet({ revision: 3 }));
+  assert.equal(app.node('pet-visible').checked, true);
+});
+
+test('pet failed reconciliation retains last actual values and manual reading can recover', async () => {
+  let reads = 0;
+  const app = await mount(true, base(), { invoke(name, _args, { fallback }) {
+    if (name === 'get_pet_settings' && ++reads === 2) throw new Error('reconciliation failed');
+    if (name === 'set_pet_visibility') throw new Error('write failed');
+    return fallback();
+  } });
+  await app.change('pet-visible', true);
+  assert.deepEqual(petValues(app), [false, true, true, true]);
+  assert.equal(app.node('pet-message').dataset.error, 'true');
+  await app.click('pet-refresh');
+  assert.equal(app.node('pet-message').dataset.error, 'false');
+  assert.equal(reads, 3);
+});
+
+test('pet unload removes active and late listeners, ignores late callbacks/replies and prevents further IPC', async () => {
+  const registration = deferred(); let callback;
+  const app = await mount(true, base(), { listen(name, fn) {
+    if (name === 'pet-settings-state') { callback = fn; return registration.promise; }
+  } });
+  app.unload();
+  const text = app.node('pet-message').textContent;
+  registration.resolve(); await flush();
+  assert.ok(app.unlistened.includes('pet-settings-state'));
+  assert.equal(app.subscriptions.has('pet-settings-state'), false);
+  assert.equal(petCalls(app).length, 0);
+  callback({ payload: pet({ visible: true, revision: 10 }) });
+  assert.equal(app.node('pet-message').textContent, text);
+  const reply = deferred();
+  const mounted = await mount(true, base(), { invoke(name, _args, { fallback }) { return name === 'set_pet_visibility' ? reply.promise : fallback(); } });
+  await mounted.change('pet-visible', true);
+  mounted.unload();
+  assert.ok(mounted.unlistened.includes('pet-settings-state'));
+  const before = petValues(mounted);
+  reply.resolve(pet({ visible: true, revision: 3 })); await flush();
+  assert.deepEqual(petValues(mounted), before);
+  const count = petCalls(mounted).length;
+  await mounted.click('pet-refresh');
+  for (const id of petControls) await mounted.change(id, true);
+  assert.equal(petCalls(mounted).length, count);
+});
+
+test('bubble toggle follows native values and writes only its patch independently of system notifications or visibility', async () => {
+  for (const enabled of [false, true]) {
+    for (const bubble_notifications of [false, true]) {
+      const app = await mount(true, base({ state: 'error', busy: true }), {
+        initialNotification: enabled ? listening() : notification(),
+        initialPet: pet({ visible: false, startup_visible: false, roaming_enabled: false, bubble_notifications }),
+      });
+      assert.equal(app.node('pet-bubble-notifications').checked, bubble_notifications);
+      assert.equal(app.node('pet-bubble-notifications').disabled, false);
+      const notificationCalls = app.calls.filter(([name]) => name.includes('notification')).length;
+      await app.change('pet-bubble-notifications', !bubble_notifications);
+      assert.deepEqual(petValues(app), [false, false, false, !bubble_notifications]);
+      assert.equal(app.node('notifications-enabled').checked, enabled);
+      await app.change('pet-bubble-notifications', bubble_notifications);
+      assert.deepEqual(petValues(app), [false, false, false, bubble_notifications]);
+      assert.deepEqual(JSON.parse(JSON.stringify(petCalls(app))), [
+        ['get_pet_settings', null],
+        ['set_pet_settings', { patch: { bubble_notifications: !bubble_notifications } }],
+        ['set_pet_settings', { patch: { bubble_notifications } }],
+      ]);
+      assert.equal(app.calls.filter(([name]) => name.includes('notification')).length, notificationCalls);
+      assert.equal(app.calls.some(([name]) => name === 'perform_action'), false);
+      app.notification(notification({ enabled: !enabled }));
+      assert.equal(app.node('pet-bubble-notifications').checked, bubble_notifications);
+      assert.equal(app.node('pet-bubble-notifications').disabled, false);
+    }
+  }
+});
+
+test('bubble toggle explains independent preference, exclusive delivery and shared focused policy after existing pet toggles', async () => {
+  const app = await mount(true);
+  assert.ok(app.template.indexOf('id="pet-bubble-notifications"') > app.template.indexOf('id="pet-roaming-enabled"'));
+  assert.match(app.template, /需要回答、确认计划或授权时，可直接在气泡中选择、输入、允许一次或拒绝/);
+  assert.match(app.template, /不会自动授权或取消/);
+  assert.match(app.template, /待答和授权交互会保留，直到处理或手动收起/);
+  assert.match(app.template, /独立于系统通知开关/);
+  assert.match(app.template, /桌宠显示时仅用气泡提醒，不发送 Windows 通知；关闭气泡则静默，不回退系统通知/);
+  assert.match(app.template, /桌宠隐藏时按系统通知开关提醒，不补历史气泡/);
+  assert.match(app.template, /前台静默.*沿用系统通知中的“窗口聚焦时也通知”选项/);
+  assert.match(app.template, /aria-label="气泡通知" aria-describedby="pet-bubble-help pet-bubble-policy pet-message" disabled/);
+});
+
+test('bubble writes wait for native confirmation, serialize all pet controls and reject older replies and events', async () => {
+  const saving = deferred();
+  const app = await mount(true, base(), { invoke(name, args, { fallback }) {
+    if (name === 'set_pet_settings') {
+      assert.deepEqual(JSON.parse(JSON.stringify(args)), { patch: { bubble_notifications: false } });
+      return saving.promise;
+    }
+    return fallback();
+  } });
+  await app.change('pet-bubble-notifications', false);
+  assert.deepEqual(petValues(app), [false, true, true, true]);
+  for (const id of petControls) {
+    assert.equal(app.node(id).disabled, true);
+    await app.change(id, false);
+  }
+  await app.click('pet-refresh');
+  assert.equal(petCalls(app).length, 2);
+  app.pet(pet({ bubble_notifications: false, revision: 4 }));
+  assert.deepEqual(petValues(app), [false, true, true, false]);
+  saving.resolve(pet({ bubble_notifications: true, revision: 2 })); await flush();
+  app.pet(pet({ bubble_notifications: true, revision: 3 }));
+  app.pet(pet({ bubble_notifications: true, revision: 4 }));
+  assert.deepEqual(petValues(app), [false, true, true, false]);
+  for (const id of petControls) assert.equal(app.node(id).disabled, false);
+});
+
+test('pet malformed snapshots including missing or nonboolean bubble values cannot unlock unknown settings or poison revisions', async () => {
+  const missingBubble = pet(); delete missingBubble.bubble_notifications;
+  const invalid = [null, undefined, {}, missingBubble,
+    ...[undefined, null, 0, 1, 'true', 'false', {}, []].map(bubble_notifications => pet({ bubble_notifications })),
+    ...['visible', 'startup_visible', 'roaming_enabled'].map(key => pet({ [key]: 'true' })),
+    ...[-1, NaN, Infinity, 0.5, Number.MAX_SAFE_INTEGER + 1, '2'].map(revision => pet({ revision })),
+    pet({ message: null })];
+  for (const snapshot of invalid) {
+    let reads = 0;
+    const app = await mount(true, base(), { invoke(name, _args, { fallback }) {
+      if (name === 'get_pet_settings' && ++reads === 1) return snapshot;
+      return fallback();
+    } });
+    assert.equal(app.node('pet-message').dataset.error, 'true');
+    for (const id of petControls) {
+      assert.equal(app.node(id).disabled, true);
+      assert.equal(app.node(id).checked, false);
+      await app.change(id, true);
+    }
+    assert.equal(petCalls(app).length, 1);
+    app.pet(snapshot);
+    for (const id of petControls) assert.equal(app.node(id).disabled, true);
+    await app.click('pet-refresh');
+    assert.deepEqual(petValues(app), [false, true, true, true]);
+    for (const id of petControls) assert.equal(app.node(id).disabled, false);
+    app.pet(snapshot);
+    app.pet(pet({ bubble_notifications: 'false', revision: 99 }));
+    assert.deepEqual(petValues(app), [false, true, true, true]);
+    app.pet(pet({ bubble_notifications: false, revision: 1 }));
+    assert.deepEqual(petValues(app), [false, true, true, false]);
+  }
+});
+
+test('bubble mutation replies and callbacks cannot render or send more IPC after unload', async () => {
+  const saving = deferred(); let callback;
+  const app = await mount(true, base(), { listen(name, fn) {
+    if (name === 'pet-settings-state') callback = fn;
+  }, invoke(name, _args, { fallback }) {
+    return name === 'set_pet_settings' ? saving.promise : fallback();
+  } });
+  await app.change('pet-bubble-notifications', false);
+  app.unload();
+  const before = petValues(app);
+  callback({ payload: pet({ bubble_notifications: false, revision: 10 }) });
+  saving.resolve(pet({ bubble_notifications: false, revision: 11 })); await flush();
+  assert.deepEqual(petValues(app), before);
+  const calls = app.calls.length;
+  await app.change('pet-bubble-notifications', true);
+  assert.equal(app.calls.length, calls);
+  assert.ok(app.unlistened.includes('pet-settings-state'));
+});
+
+test('bubble browser preview changes are disabled and never touch native IPC or listeners', async () => {
+  const app = await mount(false, base(), { location: 'http://127.0.0.1:1420/index.html?view=settings&section=pet' });
+  assert.equal(app.node('pet-bubble-notifications').disabled, true);
+  await app.change('pet-bubble-notifications', true);
+  await app.click('pet-refresh');
+  assert.equal(app.calls.length, 0);
+  assert.equal(app.listenCalls.length, 0);
+});
 
 test('browser previews never invoke native commands or subscribe in either view', async () => {
   for (const mode of ['startup', 'settings']) {
     const app = await mount(false, base(), { mode });
-    for (const id of ['check', 'save-repository', 'open', 'logs', 'check-update', 'install-update', 'notifications-enabled', 'notifications-when-focused', 'test-notification', 'power-enabled', 'power-refresh']) {
+    for (const id of ['check', 'save-repository', 'open', 'logs', 'check-update', 'install-update', 'notifications-enabled', 'notifications-when-focused', 'test-notification', 'power-enabled', 'power-refresh', 'pet-visible', 'pet-startup-visible', 'pet-roaming-enabled', 'pet-bubble-notifications', 'pet-refresh']) {
       if (app.has(id)) assert.equal(app.node(id).disabled, true);
       await app.click(id);
     }
     await app.change('notifications-enabled', true);
     await app.change('notifications-when-focused', true);
     await app.change('power-enabled', false);
-    for (const section of ['environment', 'notifications', 'power', 'updates', 'logs']) await app.click('nav-' + section);
+    for (const id of ['pet-visible', 'pet-startup-visible', 'pet-roaming-enabled']) await app.change(id, true);
+    for (const section of ['environment', 'notifications', 'power', 'pet', 'updates', 'logs']) await app.click('nav-' + section);
     assert.equal(app.calls.length, 0); assert.equal(app.listenCalls.length, 0); assert.equal(app.subscriptions.size, 0);
     if (mode === 'settings') {
       assert.equal(app.node('notifications-enabled').checked, false);
@@ -325,13 +696,17 @@ test('notifications default off, subscribe before reading, and change only by ex
   assert.equal(app.unlistened.filter(name => name === 'launcher-notification-state').length, 1);
 });
 
-test('focused notifications require opt-in and preserve preference across master toggle', async () => {
+test('shared focused notifications require opt-in, support preconfiguration and preserve preference across system toggle', async () => {
   const app = await mount(true);
   assert.equal(app.node('notifications-when-focused').checked, false);
-  assert.equal(app.node('notifications-when-focused').disabled, true);
+  assert.equal(app.node('notifications-when-focused').disabled, false);
   await app.change('notifications-when-focused', true);
-  assert.equal(app.node('notifications-when-focused').checked, false);
-  assert.equal(app.calls.filter(([name]) => name === 'set_notifications_enabled').length, 0);
+  assert.equal(app.node('notifications-when-focused').checked, true);
+  assert.equal(app.node('notifications-enabled').checked, false);
+  assert.equal(app.node('test-notification').disabled, true);
+  const preconfiguration = app.calls.filter(([name]) => name === 'set_notifications_enabled');
+  assert.equal(preconfiguration.length, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(preconfiguration[0][1])), { enabled: false, notifyWhenFocused: true });
   await app.change('notifications-enabled', true);
   assert.equal(app.node('notifications-when-focused').disabled, false);
   await app.change('notifications-when-focused', true);
@@ -340,12 +715,67 @@ test('focused notifications require opt-in and preserve preference across master
   assert.equal(app.node('notifications-when-focused').checked, true);
   await app.change('notifications-enabled', false);
   assert.equal(app.node('notifications-when-focused').checked, true);
-  assert.equal(app.node('notifications-when-focused').disabled, true);
+  assert.equal(app.node('notifications-when-focused').disabled, false);
+  assert.equal(app.node('test-notification').disabled, true);
   await app.change('notifications-enabled', true);
   assert.equal(app.node('notifications-when-focused').checked, true);
   await app.change('notifications-when-focused', false);
   assert.equal(app.node('notifications-when-focused').checked, false);
   assert.equal(app.node('notifications-enabled').checked, true);
+});
+
+test('bubble-only foreground preference configures both directions without enabling Windows notifications or changing pet settings', async () => {
+  const app = await mount(true, base({ state: 'error', busy: true }), {
+    initialPet: pet({ visible: true, bubble_notifications: true }),
+    initialNotification: notification(),
+  });
+  assert.match(app.template, /同时用于桌宠气泡和系统通知/);
+  assert.match(app.template, /可在系统通知关闭时配置，不会开启系统通知/);
+  assert.equal(app.node('pet-bubble-notifications').checked, true);
+  assert.equal(app.node('notifications-when-focused').checked, false);
+  const initialPetCalls = petCalls(app).length;
+  for (const notifyWhenFocused of [true, false]) {
+    assert.equal(app.node('notifications-when-focused').disabled, false);
+    assert.equal(app.node('test-notification').disabled, true);
+    await app.click('test-notification');
+    await app.change('notifications-when-focused', notifyWhenFocused);
+    const args = app.calls.filter(([name]) => name === 'set_notifications_enabled').at(-1)[1];
+    assert.deepEqual(JSON.parse(JSON.stringify(args)), { enabled: false, notifyWhenFocused });
+    assert.equal(app.node('notifications-when-focused').checked, notifyWhenFocused);
+    assert.equal(app.node('notifications-enabled').checked, false);
+    assert.equal(app.node('test-notification').disabled, true);
+    assert.equal(app.node('pet-visible').checked, true);
+    assert.equal(app.node('pet-bubble-notifications').checked, true);
+  }
+  assert.equal(app.calls.filter(([name]) => name === 'set_notifications_enabled').length, 2);
+  assert.equal(app.calls.filter(([name]) => name === 'test_notification').length, 0);
+  assert.equal(petCalls(app).length, initialPetCalls);
+});
+
+test('bubble-only foreground configuration retains the shared pending lock and newer events while Windows test stays disabled', async () => {
+  const saving = deferred();
+  const app = await mount(true, base(), { initialNotification: notification(), initialPet: pet({ visible: true }), invoke(name, args, { fallback }) {
+    if (name === 'set_notifications_enabled') {
+      assert.deepEqual(JSON.parse(JSON.stringify(args)), { enabled: false, notifyWhenFocused: true });
+      return saving.promise;
+    }
+    return fallback();
+  } });
+  await app.change('notifications-when-focused', true);
+  for (const id of ['notifications-enabled', 'notifications-when-focused', 'test-notification']) assert.equal(app.node(id).disabled, true);
+  await app.change('notifications-when-focused', false);
+  await app.change('notifications-enabled', true);
+  await app.click('test-notification');
+  assert.equal(app.calls.filter(([name]) => name === 'set_notifications_enabled').length, 1);
+  assert.equal(app.calls.filter(([name]) => name === 'test_notification').length, 0);
+  app.notification(notification({ notify_when_focused: true, message: 'shared bubble policy event' }));
+  saving.resolve(notification()); await flush();
+  assert.equal(app.node('notifications-when-focused').checked, true);
+  assert.equal(app.node('notifications-when-focused').disabled, false);
+  assert.equal(app.node('notifications-enabled').checked, false);
+  assert.equal(app.node('test-notification').disabled, true);
+  assert.equal(app.node('pet-bubble-notifications').checked, true);
+  assert.match(app.node('notification-message').textContent, /shared bubble policy event/);
 });
 
 test('focused notification preference restores, rolls back on failure and retries', async () => {
@@ -540,7 +970,7 @@ test('power defaults enabled, subscribes before read, and provides the protectio
   assert.match(app.template, /默认启用.*仅防止系统自动休眠.*屏幕仍可熄灭/);
   assert.match(app.template, /托盘后继续保护.*退出启动器后不再保护.*不阻止手动睡眠或合盖休眠/);
   const sections = [...app.template.matchAll(/id="nav-([^"]+)"/g)].map(match => match[1]);
-  assert.deepEqual(sections, ['environment', 'notifications', 'power', 'updates', 'logs']);
+  assert.deepEqual(sections, ['environment', 'notifications', 'power', 'pet', 'updates', 'logs']);
   await app.click('nav-power');
   assert.equal(app.node('settings-title').textContent, '电源管理');
   assert.match(app.node('settings-description').textContent, /系统自动休眠保护/);
@@ -938,7 +1368,7 @@ test('settings has only check and logs service actions and navigation never invo
   const calls = [...app.calls];
   for (const selected of ['environment', 'notifications', 'power', 'updates', 'logs', 'environment']) {
     await app.click('nav-' + selected);
-    for (const section of ['environment', 'notifications', 'power', 'updates', 'logs']) {
+    for (const section of ['environment', 'notifications', 'power', 'pet', 'updates', 'logs']) {
       assert.equal(app.node('settings-' + section).hidden, section !== selected);
       assert.equal(app.node('nav-' + section).attributes['aria-current'], section === selected ? 'page' : 'false');
     }
@@ -964,7 +1394,7 @@ test('menu events route settings tabs without IPC even when the environment fail
   for (const selected of ['notifications', 'power', 'environment', 'updates', 'logs', 'notifications']) {
     show({ payload: selected }); await flush();
     assert.equal(app.node('settings-' + selected).hidden, false); assert.equal(app.node('settings-title').focused, true);
-    for (const section of ['environment', 'notifications', 'power', 'updates', 'logs']) assert.equal(app.node('settings-' + section).hidden, section !== selected);
+    for (const section of ['environment', 'notifications', 'power', 'pet', 'updates', 'logs']) assert.equal(app.node('settings-' + section).hidden, section !== selected);
     assert.equal(app.node('notifications-enabled').checked, true); assert.equal(app.node('notifications-enabled').disabled, false);
     assert.deepEqual(app.calls, calls);
   }

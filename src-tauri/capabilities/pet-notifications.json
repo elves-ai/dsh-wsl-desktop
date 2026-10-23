@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "pet-notifications",
+  "description": "Only the trusted pet may read bounded notification summaries and open or dismiss their opaque IDs.",
+  "local": true,
+  "webviews": [
+    "assistant-pet"
+  ],
+  "permissions": [
+    "allow-get-pet-notifications",
+    "allow-open-pet-notification",
+    "allow-dismiss-pet-notification"
+  ]
+}

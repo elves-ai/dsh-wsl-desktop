@@ -95,6 +95,7 @@ pub(super) fn show_in(window: &Window, section: &str) -> Result<(), String> {
     state.section = match section {
         "notifications" => "notifications",
         "power" => "power",
+        "pet" => "pet",
         "updates" => "updates",
         "logs" => "logs",
         _ => "environment",
