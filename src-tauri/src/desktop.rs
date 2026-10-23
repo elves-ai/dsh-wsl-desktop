@@ -29,6 +29,8 @@ use url::Url;
 
 #[path = "desktop_context_menu.rs"]
 mod context_menu;
+#[path = "desktop_setup.rs"]
+mod first_run;
 #[path = "desktop_notifications.rs"]
 mod notifications;
 #[path = "desktop_power.rs"]
@@ -55,6 +57,7 @@ pub struct Snapshot {
     environment: EnvironmentReport,
     environment_checking: bool,
     config_path: String,
+    setup_required: bool,
 }
 struct Controller {
     backend: Mutex<Option<config::Config>>,
@@ -437,6 +440,27 @@ fn ensure_ready(
     controller: &Controller,
     open_window: bool,
 ) -> Result<(), String> {
+    if config::needs_setup(&controller.config_directory, &controller.legacy_config) {
+        {
+            let mut s = controller
+                .snapshot
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            s.setup_required = true;
+            s.state = "setup".into();
+            s.phase = "首次配置".into();
+            s.message = "请选择已有 WSL 环境和 Harness 目录，完成首次配置。".into();
+            s.last_error = None;
+            s.environment_checking = false;
+        }
+        controller.publish(app);
+        return Ok(());
+    }
+    controller
+        .snapshot
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .setup_required = false;
     check_environment(app, controller)?;
     if controller.exiting.load(Ordering::SeqCst) {
         return Ok(());
@@ -842,6 +866,9 @@ pub fn run() {
             settings_page::settings_page_ready,
             perform_action,
             set_project_directory,
+            first_run::setup_distributions,
+            first_run::setup_identity,
+            first_run::complete_setup,
             updates::get_update_snapshot,
             updates::check_update,
             updates::install_update,
@@ -861,12 +888,14 @@ pub fn run() {
                 .map(PathBuf::from)
                 .unwrap_or_else(|| directory.clone())
                 .join("DeepSeekHarnessLauncher/config.json");
+            let setup_required = config::needs_setup(&directory, &legacy);
             let loaded = config::load(&directory, &legacy);
             let (backend, error, imported) = match loaded {
                 Ok(loaded) => {
                     let _ = loaded.path;
                     (Some(Backend::new(loaded.config)), None, loaded.imported)
                 }
+                Err(_) if setup_required => (None, None, false),
                 Err(error) => (None, Some(error), false),
             };
             let origin = backend
@@ -889,7 +918,8 @@ pub fn run() {
                     last_error: error,
                     logs: Vec::new(),
                     environment: EnvironmentReport::pending(),
-                    environment_checking: true,
+                    environment_checking: !setup_required,
+                    setup_required,
                     config_path: directory.join("config.json").to_string_lossy().into_owned(),
                 }),
                 busy: AtomicBool::new(false),

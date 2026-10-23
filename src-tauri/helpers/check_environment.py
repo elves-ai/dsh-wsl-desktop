@@ -267,6 +267,21 @@ def inspect(launcher, config_path, port, runner=run_node):
         checks['launcher'] = item('launcher', 'error')
     try:
         config = read_json(config_path)
+    except Exception:
+        checks['linux_config'] = item('linux_config', 'error')
+        return {'checks': list(checks.values()), 'repository': repository}
+    result = inspect_values(config, port, runner)
+    for check in result['checks']:
+        if check['id'] != 'launcher':
+            checks[check['id']] = check
+    return {'checks': list(checks.values()), 'repository': result['repository']}
+
+
+def inspect_values(config, port, runner=run_node):
+    """The same read-only checks for a not-yet-persisted first-run config."""
+    checks = {key: item(key, 'skipped') for key in LABELS}
+    repository = None
+    try:
         if isinstance(config, dict) and safe_path(config.get('repository')):
             repository = config['repository']
         if not valid_config(config, port):

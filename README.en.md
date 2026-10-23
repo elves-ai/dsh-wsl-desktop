@@ -18,14 +18,14 @@ Maintained by Evan Yang as an individual. Project code is licensed under the [MI
 
 ### 1. Prepare the prerequisites
 
-- **Windows x64 with WebView2 Runtime**, plus an existing WSL distribution and Linux user. Python 3 and the `ss` command (usually supplied by iproute2) must be available to that user in WSL.
+- **Windows x64 with WebView2 Runtime**, plus an existing WSL distribution and Linux user. That user must be able to run `/usr/bin/python3` (Python >= 3.9) and `ss` (usually supplied by iproute2) in WSL. The bundled manager also requires Linux `pidfd` support (WSL 2 is recommended); first-run deployment checks this read-only and refuses to save configuration or fall back to unsafe PID signalling when unavailable.
 - **An existing DeepSeek Harness checkout inside WSL.** Use Node.js satisfying its `engines.node` requirement and the pnpm version specified by its `packageManager` field. Read the manifest and upstream build instructions for the exact Harness version you use; additional version-specific native/build prerequisites may apply. These are Harness requirements, not the separate Windows launcher build requirements later in this guide.
 
   ~~~text
   <WSL Harness root>/package.json
   ~~~
 
-- **An existing compatible Python service manager and its Linux JSON configuration. Neither is bundled with or created by this launcher.** Existing users can reuse the legacy setup; a new setup must manually provide the manager, its Linux configuration, and the Windows configuration described under [Configuration](<#configuration>). Creating only the Windows JSON is not enough.
+- **Existing Node.js, installed Harness dependencies, and a completed full Harness build.** First-run setup selects an installed Node executable; it does not install one. The launcher bundles its own MIT-licensed Python manager **1.0.0** and can generate both configurations for new setups, so no private script is needed. Legacy users keep their configured manager and data.
 
 The launcher runs Harness from its source entry. A global npm installation, an ordinary work project, or a Harness subdirectory is not the required Harness root. This selects the Harness application, not the business project you want the AI to edit; choose work projects inside DSH later.
 
@@ -47,10 +47,11 @@ The **full build** prepares runtime, native, and client assets as well as the We
 
 Download the Windows x64 installer from the [Releases page](<https://github.com/elves-ai/dsh-wsl-desktop/releases>) and follow the [download guide](<DOWNLOADS.md>). Verify the source and checksums; current downloads are unsigned.
 
-- **Existing legacy-launcher users:** the first run imports the old Windows configuration without changing the original. It continues to use the configured WSL manager and Linux configuration.
-- **New setups:** manually provide the compatible manager and Linux JSON configuration first, then the Windows configuration in [Configuration](<#configuration>). This launcher is not a manager installer or a standalone Harness bootstrapper.
+- **Existing configurations:** use the Windows application configuration when present; otherwise import the legacy Windows configuration without changing the original. Existing invalid configurations report errors rather than being automatically overwritten. Legacy environments keep their configured WSL manager and Linux configuration.
+- **New setups:** the first-run wizard appears **only when neither the Windows application configuration nor the legacy configuration exists**. Choose an existing WSL distribution and Linux user, then enter the absolute WSL Harness source root. It detects the highest installed nvm Node version or system Node; you may instead specify an existing Node executable manually. The selected version must still meet Harness requirements. The default port is `3080`, adjustable under advanced options.
+- Selecting values or checking the environment does not deploy files. Clicking “完成配置并启动” (Complete setup and start) first reuses the read-only environment checks, then deploys the bundled manager and generates the Linux and Windows configurations only after checks pass, before following the existing startup flow. See [Configuration](<#configuration>) for paths and retries. The launcher does not install WSL/software, clone repositories, install dependencies, build Harness, or configure API keys.
 
-If needed, click the separate “设置” (Settings) gear icon next to the upper-left Logo, then select “环境与目录” (Environment & directory) on the settings page in the current window, enter the **absolute WSL Harness root**, and click “保存并重新检测” (Save and retry). Do not enter a Windows drive path or WSL UNC path. Directory changes require an idle service and free configured port: if a managed service is starting, wait until it is ready, then stop it through the tray right-click menu; manage an external service in its original terminal. This saves only `repository` in the **existing** Linux configuration, preserving other fields and file permissions. It checks the project entry, configured Node.js, resolvable/readable `tsx/esm`, and Web build assets; it does not install, clone, or build anything.
+For directory changes with an existing configuration, click the separate “设置” (Settings) gear icon next to the upper-left Logo, then select “环境与目录” (Environment & directory) on the settings page in the current window, enter the **absolute WSL Harness root**, and click “保存并重新检测” (Save and retry). Do not enter a Windows drive path or WSL UNC path. Directory changes require an idle service and free configured port: if a managed service is starting, wait until it is ready, then stop it through the tray right-click menu; manage an external service in its original terminal. This saves only `repository` in the **existing** Linux configuration, preserving other fields and file permissions. It checks the project entry, configured Node.js, resolvable/readable `tsx/esm`, and Web build assets; it does not install, clone, or build anything.
 
 ~~~text
 Example WSL Harness root: /home/your-user/deepseek-harness
@@ -64,7 +65,7 @@ After manually fixing dependencies or completing the full Harness build, click �
 The runtime chain is:
 
 ~~~text
-wsl.exe -> existing Python service manager -> configured Node.js
+wsl.exe -> bundled or existing Python service manager -> configured Node.js
 
 # Run by the manager from the configured Harness repository:
 <configured-node> --import tsx/esm apps/cli/src/bin.ts web --no-open --host 127.0.0.1 --port 3080
@@ -74,7 +75,7 @@ Here `3080` is the default; the actual port comes from configuration. The Window
 
 ## Features
 
-- Imports legacy launcher configuration automatically and reuses the existing WSL Python manager.
+- Provides first-run setup with a bundled manager and generated configurations when neither configuration exists; imports legacy configuration and reuses the original manager/data otherwise.
 - Checks/starts the service and opens DSH in a WebView after confirming Windows can reach it.
 - Single application instance and single DSH workspace window; reopening activates the existing window.
 - Startup progress, tray icon, start/stop/restart controls, and redacted operation logs.
@@ -116,22 +117,22 @@ This uses a temporary Windows system request, not a change to the power plan. It
 ## Architecture and security
 
 ~~~text
-Trusted local control page + native tray -> Tauri Rust -> wsl.exe -> existing Python manager -> WSL DSH
+Trusted local control page + native tray -> Tauri Rust -> wsl.exe -> bundled or existing Python manager -> WSL DSH
                                                                                                  ^
                                                                      DSH WebView without native IPC
 ~~~
 
-The initialization window handles only startup progress and error recovery. Once ready, it hides automatically and opens the DSH workspace. The separate “设置” (Settings) gear icon next to the passive upper-left Logo directly opens a settings page within the current primary window, without a dropdown or a separate native settings window. It contains “环境与目录” (Environment & directory), “系统通知” (System notifications), “电源管理” (Power management), “软件更新” (Software updates), and “诊断日志” (Diagnostic logs). Select “诊断日志” (Diagnostic logs) in the page sidebar to open the log category. The upper-left “返回” (Return) button restores the original workspace or initialization page. The native DSH WebView stays alive and is not reloaded when returning. Each window retains its settings form’s unsaved input when switching categories, returning, or reopening settings. Each window’s title bar is a separate trusted local WebView, isolated from its content. Service, notification, power-management, and update commands are granted only to the initialization/settings content WebViews. Title bars can invoke only fixed settings/update-page navigation, read a boolean update-availability indicator, and perform their own window operations; they cannot check, download, or install updates. Rust validates the view label, parent window, local origin, page path, and parameters. Remote DSH content has no native permissions and receives no injected title-bar script.
+With no configuration, the initialization window offers first-run setup; once configured, it handles startup progress and error recovery. Once ready, it hides automatically and opens the DSH workspace. The separate “设置” (Settings) gear icon next to the passive upper-left Logo directly opens a settings page within the current primary window, without a dropdown or a separate native settings window. It contains “环境与目录” (Environment & directory), “系统通知” (System notifications), “电源管理” (Power management), “软件更新” (Software updates), and “诊断日志” (Diagnostic logs). Select “诊断日志” (Diagnostic logs) in the page sidebar to open the log category. The upper-left “返回” (Return) button restores the original workspace or initialization page. The native DSH WebView stays alive and is not reloaded when returning. Each window retains its settings form’s unsaved input when switching categories, returning, or reopening settings. Each window’s title bar is a separate trusted local WebView, isolated from its content. Service, notification, power-management, and update commands are granted only to the initialization/settings content WebViews. Title bars can invoke only fixed settings/update-page navigation, read a boolean update-availability indicator, and perform their own window operations; they cannot check, download, or install updates. Rust validates the view label, parent window, local origin, page path, and parameters. Remote DSH content has no native permissions and receives no injected title-bar script.
 
 Launch URLs must strictly match the configured loopback address and port. Tokens are passed to the WebView only in memory, never sent to the control page or written to operation logs. WSL requests use argument arrays without a shell, with bounded response sizes and timeouts. External links permit only HTTP(S) URLs without a launch token or user information.
 
-The existing manager handles deduplication, readiness detection, identity checks, SIGTERM, and waiting for exit. The embedded [guarded-stop adapter](<src-tauri/helpers/guarded_stop.py>) additionally verifies the expected PID, management lock, and process start time while the original manager holds its operation lock, preventing accidental termination of an unrelated process. It runs through Python’s `-c` argument and does not overwrite the legacy script.
+The configured manager handles deduplication, readiness detection, identity checks, SIGTERM, and waiting for exit. The embedded [guarded-stop adapter](<src-tauri/helpers/guarded_stop.py>) additionally verifies the expected PID, management lock, and process start time while the original manager holds its operation lock, preventing accidental termination of an unrelated process. It runs through Python’s `-c` argument and does not overwrite the legacy script.
 
-“Managed by the launcher” includes services hosted by the same legacy Python manager, not only instances started by this desktop process. Externally launched services are only connected to, not automatically stopped. A new WebView reports an explicit error if no authentication information is available.
+“Managed by the launcher” includes services hosted by the same configured Python manager (including legacy setups), not only instances started by this desktop process. Externally launched services are only connected to, not automatically stopped. A new WebView reports an explicit error if no authentication information is available.
 
 ## Configuration
 
-On first run, the launcher imports the old Windows launcher configuration from the location below, leaving the old file unchanged. The Harness directory, Node.js path, and DSH_HOME continue to come from the configured WSL Python manager and Linux configuration. Adapt the distribution, user, and home directory in the examples to your environment.
+The launcher uses an existing Windows application configuration first; if absent, it imports the legacy configuration from the location below without changing the original. Only when both are absent does it offer first-run setup. Invalid existing configurations are not automatically overwritten. Legacy environments keep the Harness directory, Node.js path, and DSH_HOME specified by their original manager/configuration; old scripts and data are not automatically replaced or migrated.
 
 ~~~text
 Application configuration: %APPDATA%\io.local.dsh-wsl-desktop\config.json
@@ -140,11 +141,23 @@ WebView data:              %LOCALAPPDATA%\io.local.dsh-wsl-desktop\webview
 Legacy import source:      %LOCALAPPDATA%\DeepSeekHarnessLauncher\config.json
 ~~~
 
-### Without a legacy configuration
+### First-run generated configuration
 
-You must manually provide **both** a compatible existing Python service manager and its Linux JSON configuration. The desktop launcher bundles neither and does not create them. The Windows configuration below merely points to them; copying it alone cannot produce a working setup. Follow your manager’s own setup/schema requirements. The environment check expects the Linux configuration to contain absolute WSL paths for `repository`, `node`, and `state_directory`, plus an integer `port` matching Windows `Port`. Preserve any additional fields required by the manager.
+The project’s own MIT-licensed Python manager **1.0.0** is embedded in the desktop package using Rust `include_str!`. Its version is paired with the desktop application; setup does not download a remote “latest” manager. After you click “完成配置并启动” (Complete setup and start) and the pre-deployment read-only checks pass, it uses these paths under the selected Linux user:
 
-Then place the following Windows JSON at the application-configuration location above:
+~~~text
+Manager:     ~/.local/share/dsh-wsl-desktop/manager-1.0.0.py
+Linux JSON:  ~/.local/share/dsh-wsl-desktop/profiles/<profile-id>/config.json
+State/logs:  ~/.local/state/dsh-wsl-desktop/<profile-id>
+~~~
+
+The request-content hash determines `profile-id`, so the same request can be safely retried, reusing deployed files without overwriting old data. The complete Windows configuration is published atomically **last**, after Linux deployment. If Windows publication fails, Linux files may remain and be reused on retry; setup does not roll back by deleting them. Existing scripts/data are not automatically replaced or migrated, and installing a desktop update does not imply replacement of a legacy manager in use.
+
+### Manual configuration (advanced / legacy compatibility)
+
+These examples are for advanced users with an existing compatible manager, not a required step for new users. Adapt the distribution, user, home directory, and all paths. Copying the Windows JSON only points to existing files; it does not create the referenced manager or Linux configuration. The environment check expects absolute WSL `repository`, `node`, and `state_directory` paths plus an integer Linux `port` matching Windows `Port`. Preserve extra fields required by your manager.
+
+Place the following Windows JSON at the application-configuration location above only when manually configuring an existing setup:
 
 ~~~json
 {
@@ -190,7 +203,7 @@ node -p 'process.execPath'
 
 `repository` is the Harness source root. `state_directory` is the Python manager’s state/log directory, not a business project directory and **not DSH_HOME**. Preserve additional fields such as `home` (corresponding to DSH_HOME) according to your manager’s conventions. The settings UI changes only `repository`; it does not replace Node.js or migrate session data.
 
-This repository does not distribute the legacy Python manager. The JSON examples are configuration, not a substitute for the program. Without a legacy environment, obtain or prepare a compatible manager supporting the `probe` / `run` / `stop` / `logs` protocol first. A built Harness checkout alone cannot be started by this launcher without that manager.
+First-run setup uses the bundled manager and does not require obtaining a legacy script. These manual JSON examples only describe compatibility with an existing manager supporting `probe` / `run` / `stop` / `logs`; they are not the manager program. Setup does not automatically replace scripts at those legacy paths or migrate their data.
 
 If an nvm/Node.js update invalidates the configured absolute executable path, update the WSL manager’s configuration. The application does not rely on interactive shell initialization.
 
@@ -198,14 +211,14 @@ If an nvm/Node.js update invalidates the configured absolute executable path, up
 
 Startup checks cover WSL, launcher configuration, distribution, Linux user, Python, manager script, WSL service configuration, Harness repository, Node.js, installed dependencies, and Web artifacts. Once all checks pass, the launcher checks/starts the service and opens DSH automatically; there is no Continue button to click.
 
-The initialization view presents only three stages: “检查运行环境 → 准备本地服务 → 打开 DSH” (Check runtime environment → Prepare local service → Open DSH). It does not mix configuration forms, notifications, updates, or service controls into startup. The detailed checklist is collapsed by default. Failures show the cause and recovery guidance with “重新检测” (Retry) and “打开设置” (Open settings). Checks depending on an earlier failure show “等待前置项” (Waiting for prerequisites), rather than cascading errors. Checks do not automatically install, clone, or build anything. Retry rereads the latest configuration without restarting the app.
+First-run setup collects the required configuration and deploys only after explicit confirmation. Once configured, the initialization view presents three stages: “检查运行环境 → 准备本地服务 → 打开 DSH” (Check runtime environment → Prepare local service → Open DSH). This configured startup view does not mix in notifications, updates, or service controls. The detailed checklist is collapsed by default. Failures show the cause and recovery guidance with “重新检测” (Retry) and “打开设置” (Open settings). Checks depending on an earlier failure show “等待前置项” (Waiting for prerequisites), rather than cascading errors. Checks do not automatically install, clone, or build anything. Retry rereads the latest configuration without restarting the app.
 
-Click the separate “设置” (Settings) gear icon next to the upper-left Logo, then select “环境与目录” (Environment & directory) on the settings page in the current window, enter the **absolute DSH path inside WSL**, not a Windows path, and click “保存并重新检测” (Save and retry). It validates the project entry and updates only `repository` in the existing Linux service configuration, preserving other fields and permissions, then reruns checks. After passing, DSH opens automatically. Missing manager scripts or Linux configurations must still be prepared manually. Changing directories requires the service to be idle and the configured port free. If a managed service is still starting, wait until ready before stopping it through the tray right-click menu; handle external services in their original terminal. Saving does not automatically stop or restart an existing service.
+Click the separate “设置” (Settings) gear icon next to the upper-left Logo, then select “环境与目录” (Environment & directory) on the settings page in the current window, enter the **absolute DSH path inside WSL**, not a Windows path, and click “保存并重新检测” (Save and retry). It validates the project entry and updates only `repository` in the existing Linux service configuration, preserving other fields and permissions, then reruns checks. After passing, DSH opens automatically. This existing-configuration directory update does not rerun first-time deployment; missing original manager scripts or Linux configurations require manual repair. Changing directories requires the service to be idle and the configured port free. If a managed service is still starting, wait until ready before stopping it through the tray right-click menu; handle external services in their original terminal. Saving does not automatically stop or restart an existing service.
 
 ### Troubleshooting
 
-- **Missing Windows configuration:** existing users should check the legacy import source above. New users must manually prepare the compatible manager, its Linux configuration, and then the Windows JSON; there is no automatic manager/configuration bootstrap. Confirm the distribution and Linux user are correct.
-- **Missing helper, Python, Linux JSON, or `ss`:** verify `LinuxLauncher` and `LinuxConfig` refer to existing readable absolute WSL paths under the selected user. Prepare Python 3 and `ss` manually, and check the manager’s compatibility and configuration schema. Retry never creates or repairs the manager or Linux configuration.
+- **Missing Windows configuration:** check the legacy import source above. Only when both configurations are absent does first-run setup deploy the bundled manager and generate both configurations after confirmation and successful checks. Invalid existing files require manual repair; they are not automatically overwritten.
+- **Missing helper, Python, Linux JSON, or `ss`:** first-run setup supplies the manager/configuration, but `/usr/bin/python3` (>= 3.9) and `ss` remain prerequisites. With existing configurations, verify `LinuxLauncher` and `LinuxConfig` are readable absolute WSL paths under the selected user and repair missing original files manually. Ordinary Retry does not redeploy or repair a legacy environment.
 - **“已安装依赖” (Installed dependencies) fails / `tsx/esm` cannot resolve:** run `pnpm install` manually in the **Harness repository in WSL**, using its pinned pnpm and compatible Node.js. For a fresh clone, follow with the full `pnpm run build`, then click “重新检测” (Retry). Installing this launcher’s npm dependencies does not install Harness dependencies.
 - **“Web 构建产物” (Web build artifacts) fails:** complete the full Harness `pnpm run build` in WSL and ensure the generated HTML and referenced local assets are readable. A fresh clone or a Web-only build may still lack required runtime/native/client assets; `build:web` alone is not guaranteed sufficient. The asset locations are shown in Quick start.
 - **“Node.js” fails, especially after nvm changes:** check the Linux configuration’s absolute `node` path exists, is executable by the selected user, and satisfies Harness `engines.node`. A Node version working in an interactive terminal does not prove the configured path works; shell startup files are not loaded. Match the checkout’s `packageManager` and upstream build prerequisites too.
@@ -298,6 +311,16 @@ npm run desktop:build -- --config src-tauri/tauri.local-build.conf.json
 ~~~
 
 Do not run an ordinary `tauri build` in WSL expecting a Windows application. This project provides no Linux GUI; Linux is used only for editing, pure-logic tests, and cross-target compilation checks.
+
+## Windows first-run acceptance (pending real-machine execution)
+
+This is a checklist, **not a claim of completed Windows testing**. This documentation update did not run the application or any real service. Use an isolated Windows user/test WSL environment; do not remove or replace personal configurations or data.
+
+- **Entry routing:** show setup only with neither Windows configuration present; import a valid legacy configuration unchanged; use an existing new configuration. Invalid new or legacy files must report errors without automatic overwrite.
+- **Selection/prerequisites:** cover distribution/user selection, Harness root, highest installed nvm version and system Node detection, manual Node, default port 3080, and an advanced custom port. Missing `/usr/bin/python3` >= 3.9, `ss`, compatible Node, dependencies, or a full build must produce actionable errors, not installation, cloning, builds, or API-key configuration.
+- **Write boundary:** selecting/checking/canceling must not deploy the manager or publish either configuration. “完成配置并启动” (Complete setup and start) must first pass read-only checks. Then verify bundled manager 1.0.0 and profile/state/log paths, with no remote manager download.
+- **Failure/retry:** simulate final Windows publication failure in isolation. No partial Windows configuration should be visible; Linux deployment may remain. Retrying the same request must reuse the same `profile-id` without rollback deletion or overwrite of old scripts/data, then atomically publish the complete Windows configuration.
+- **Startup/compatibility:** successful deployment follows existing check/start/readiness/Windows-loopback verification. Reopening uses the published configuration without repeating setup. Legacy scripts/data and advanced manual configurations remain usable without automatic replacement or migration.
 
 ## Automated verification
 

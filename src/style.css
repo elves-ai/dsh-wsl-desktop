@@ -74,6 +74,25 @@ button, summary { -webkit-tap-highlight-color: transparent; }
 .startup-footer { display: flex; justify-content: space-between; gap: 20px; color: #647084; font-size: 10px; line-height: 1.6; }
 #phase { text-align: right; overflow-wrap: anywhere; }
 
+/* First-run setup stays separate from the transient startup view. */
+.setup-content { width: 100%; padding: 28px 0 32px; margin: auto; }
+.setup-content .startup-heading h1 { font-size: 24px; letter-spacing: -.5px; }
+.setup-content .startup-heading .setting-help { margin-bottom: 10px; }
+.setup-scope { margin: 12px 0 22px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 6px; color: #a0aec3; font-size: 11px; line-height: 1.9; }
+.setup-field { margin-top: 16px; }
+.setup-field label { display: block; color: #c3cddd; font-size: 12px; margin-bottom: 8px; }
+.setup-field input, .setup-field select { display: block; min-width: 0; width: 100%; border: 1px solid #3a4558; border-radius: 6px; background: #11161e; color: #ced9ed; padding: 9px 10px; font: 12px/1.6 "Cascadia Code", Consolas, monospace; }
+.setup-field input:disabled, .setup-field select:disabled { opacity: .55; }
+.setup-inline { display: flex; align-items: stretch; gap: 8px; }
+.setup-inline .button { flex-shrink: 0; padding: 7px 10px; }
+.setup-field .setting-help { margin: 7px 0 0; }
+.setup-advanced { border-top: 1px solid var(--line); margin-top: 20px; padding-top: 12px; }
+.setup-advanced summary { color: #a3b3cc; font-size: 12px; cursor: pointer; }
+.setup-advanced input { max-width: 150px; }
+#setup-submit { width: 100%; }
+select:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+@media (max-width: 450px) { .setup-inline { flex-wrap: wrap; } .setup-inline .button { margin-left: auto; } .setup-content .startup-heading h1 { font-size: 22px; } }
+
 /* A same-window settings page; only the selected category is visible. */
 .settings-shell { display: grid; grid-template-columns: 178px minmax(0, 1fr); min-height: 100vh; }
 .settings-sidebar { display: flex; flex-direction: column; border-right: 1px solid var(--line); background: #15181e; padding: 28px 13px 22px; }

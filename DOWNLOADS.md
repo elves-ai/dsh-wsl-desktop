@@ -14,7 +14,15 @@ Use the [GitHub Releases page](https://github.com/elves-ai/dsh-wsl-desktop/relea
 
 The development builds linked above are historical. New CI builds run only when a `v*` version tag is pushed and publish a Release after successful verification; branch pushes, pull requests, and manual dispatch do not trigger builds. The historical artifacts normally require GitHub login and expire after 30 days; they are separate from GitHub Release assets. If a development artifact has expired, use a published Release, select a newer successful run, or build the reviewed source. A successful CI build verifies compilation/tests/packaging, not end-to-end operation against every user's WSL installation.
 
-Unpack the downloaded artifact. Run the NSIS setup executable to install, or use the standalone executable with WebView2 Runtime available. The launcher imports the existing Windows launcher's configuration; users without that setup must configure the helper and paths as described in the [usage guide](<README.md#配置>). Keep the checksums with the exact downloaded build. Use Windows Installed apps to uninstall an installed copy; see [data retention notes](<PRIVACY.md#storage-and-removal>) before removing data directories.
+Unpack the downloaded artifact. Run the NSIS setup executable to install, or use the standalone executable with WebView2 Runtime available. Keep the checksums with the exact downloaded build. Use Windows Installed apps to uninstall an installed copy; see [data retention notes](<PRIVACY.md#storage-and-removal>) before removing data directories.
+
+## First-run setup
+
+The launcher uses an existing Windows application configuration or imports the legacy launcher configuration unchanged. Only when neither exists does first-run setup ask for the WSL distribution/user and Harness root, detect an installed Node (or accept a manual path), and offer port `3080` with an advanced override. Invalid existing configurations are not automatically overwritten.
+
+After you click “完成配置并启动” (Complete setup and start), read-only checks must pass before the bundled MIT-licensed Python manager 1.0.0 is deployed and Linux/Windows configurations are generated. This manager version is paired with the desktop package, not remotely downloaded as “latest”; legacy scripts/data are not automatically replaced or migrated.
+
+WSL, `/usr/bin/python3` (>= 3.9), `ss`, Node, and a dependency-installed, fully built Harness checkout remain prerequisites. Setup does not install WSL/software, clone, install dependencies, build, or configure API keys. See the [usage guide](<README.md#配置>) for paths, retry behavior, and advanced/legacy manual examples.
 
 ## In-app launcher updates
 

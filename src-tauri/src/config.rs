@@ -121,7 +121,7 @@ impl Config {
 /// Import only launcher settings, never Chrome profiles, credentials or DSH data.
 pub fn load(directory: &Path, legacy: &Path) -> Result<LoadedConfig, String> {
     let path = directory.join("config.json");
-    if path.is_file() {
+    if !missing(&path) {
         let data = fs::read(&path).map_err(|_| "无法读取启动器配置。")?;
         return Ok(LoadedConfig {
             config: Config::parse(&data)?,
@@ -129,8 +129,8 @@ pub fn load(directory: &Path, legacy: &Path) -> Result<LoadedConfig, String> {
             imported: false,
         });
     }
-    let data =
-        fs::read(legacy).map_err(|_| "没有找到旧启动器配置。请按 README 配置启动器后重试。")?;
+    let data = fs::read(legacy)
+        .map_err(|_| "无法读取旧启动器配置；请检查文件和权限，首次使用请完成初始化。")?;
     let config = Config::parse(&data)?;
     fs::create_dir_all(directory).map_err(|_| "无法创建启动器配置目录。")?;
     let serialized = serde_json::to_vec_pretty(&config).map_err(|_| "无法序列化启动器配置。")?;
@@ -151,6 +151,50 @@ pub fn load(directory: &Path, legacy: &Path) -> Result<LoadedConfig, String> {
         path,
         imported: true,
     })
+}
+
+/// Only genuinely absent files trigger onboarding. Broken files, directories,
+/// dangling links and permission errors must never be mistaken for a fresh user.
+fn missing(path: &Path) -> bool {
+    matches!(fs::symlink_metadata(path), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+}
+pub fn needs_setup(directory: &Path, legacy: &Path) -> bool {
+    missing(&directory.join("config.json")) && missing(legacy)
+}
+
+/// Publish fully written configuration last, without replacing a concurrent
+/// configuration or exposing a truncated file after a crash.
+pub fn save_new(directory: &Path, config: &Config) -> Result<(), String> {
+    config.validate()?;
+    fs::create_dir_all(directory).map_err(|_| "无法创建启动器配置目录。")?;
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| "无法生成配置文件名。")?
+        .as_nanos();
+    let temporary = directory.join(format!(".setup-{}-{nonce}.json", std::process::id()));
+    let mut created = false;
+    let result = (|| {
+        use std::io::Write;
+        let bytes = serde_json::to_vec_pretty(config).map_err(|_| "无法序列化启动配置。")?;
+        let mut file = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)
+            .map_err(|_| "无法准备启动配置；请检查 Windows 配置目录权限。")?;
+        created = true;
+        file.write_all(&bytes)
+            .and_then(|_| file.sync_all())
+            .map_err(|_| "无法写入启动配置；请检查磁盘空间和权限。")?;
+        drop(file);
+        fs::hard_link(&temporary, directory.join("config.json")).map_err(|_| {
+            "无法提交启动配置；目标可能已存在，或配置目录不支持硬链接。请重新检测，未覆盖已有配置。"
+        })
+    })();
+    // Remove only the exact temporary file this invocation successfully created.
+    if created {
+        let _ = fs::remove_file(&temporary);
+    }
+    result.map_err(str::to_owned)
 }
 
 #[cfg(test)]
@@ -209,6 +253,28 @@ mod tests {
         let new = root.join("new");
         assert!(load(&new, &old).unwrap().imported);
         assert!(!load(&new, &old).unwrap().imported);
+        assert_eq!(fs::read(&old).unwrap(), contents);
+        // A damaged new file must not fall back to/import the valid old one.
+        fs::write(new.join("config.json"), b"invalid JSON").unwrap();
+        assert!(load(&new, &old).is_err());
+        assert_eq!(fs::read(new.join("config.json")).unwrap(), b"invalid JSON");
+        assert!(!needs_setup(&new, &root.join("missing-legacy.json")));
+        let directory_config = root.join("directory-config");
+        fs::create_dir_all(directory_config.join("config.json")).unwrap();
+        assert!(!needs_setup(
+            &directory_config,
+            &root.join("missing-legacy.json")
+        ));
+        assert!(load(&directory_config, &old).is_err());
+        #[cfg(unix)]
+        {
+            let dangling = root.join("dangling");
+            fs::create_dir_all(&dangling).unwrap();
+            std::os::unix::fs::symlink(root.join("missing-target"), dangling.join("config.json"))
+                .unwrap();
+            assert!(!needs_setup(&dangling, &root.join("missing-legacy.json")));
+            assert!(load(&dangling, &old).is_err());
+        }
         assert_eq!(fs::read(&old).unwrap(), contents);
         // Cleanup only this unique absolute test directory.
         assert!(

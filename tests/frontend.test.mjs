@@ -8,7 +8,7 @@ const source = stripTypeScriptTypes(readFileSync(new URL('../src/main.ts', impor
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const checkIds = ['wsl', 'config', 'distribution', 'user', 'python', 'launcher', 'linux_config', 'repository', 'node', 'dependencies', 'web_assets'];
 const environment = (extra = {}) => ({ checks: checkIds.map(id => ({ id, label: id, status: 'passed', message: '已通过', hint: '' })), repository: '/home/test/deepseek-harness', ...extra });
-const base = (extra = {}) => ({ state: 'ready', phase: '已就绪', message: '正常', busy: false, managed: true, origin: 'http://127.0.0.1:3080', last_error: null, logs: [], environment: environment(), environment_checking: false, config_path: 'C:/test/config.json', ...extra });
+const base = (extra = {}) => ({ setup_required: false, state: 'ready', phase: '已就绪', message: '正常', busy: false, managed: true, origin: 'http://127.0.0.1:3080', last_error: null, logs: [], environment: environment(), environment_checking: false, config_path: 'C:/test/config.json', ...extra });
 const update = (extra = {}) => ({ current_version: '0.1.0', phase: 'idle', version: null, notes: null, downloaded: 0, total: null, message: '可检查更新', busy: false, ...extra });
 const notification = (extra = {}) => ({ enabled: false, notify_when_focused: false, phase: 'disabled', message: '未启用系统通知。', ...extra });
 const power = (extra = {}) => ({ enabled: true, active: false, phase: 'idle', message: '等待运行中的任务。', ...extra });
@@ -19,14 +19,14 @@ async function mount(native, initial = base(), options = {}) {
   let savedPower = options.initialPower || power();
   const nodes = new Map(); const subscriptions = new Map(); const calls = []; const windowHandlers = new Map(); const listenCalls = []; const unlistened = [];
   const node = id => {
-    if (!nodes.has(id)) nodes.set(id, { id, textContent: '', dataset: {}, hidden: false, disabled: false, checked: false, open: false, scrollTop: 0, scrollHeight: 0, clientHeight: 0, handlers: {}, attributes: {}, set innerHTML(_) { throw new Error('Native data must not use HTML'); }, addEventListener(name, fn) { this.handlers[name] = fn; }, setAttribute(name, value) { this.attributes[name] = value; }, removeAttribute(name) { delete this.attributes[name]; if (name === 'value') delete this.value; }, focus() { this.focused = true; }, scrollIntoView() { this.scrolled = true; } });
+    if (!nodes.has(id)) nodes.set(id, { id, textContent: '', value: '', children: [], replaceChildren(...children) { this.children = children; }, dataset: {}, hidden: false, disabled: false, checked: false, open: false, scrollTop: 0, scrollHeight: 0, clientHeight: 0, handlers: {}, attributes: {}, set innerHTML(_) { throw new Error('Native data must not use HTML'); }, addEventListener(name, fn) { this.handlers[name] = fn; }, setAttribute(name, value) { this.attributes[name] = value; }, removeAttribute(name) { delete this.attributes[name]; if (name === 'value') delete this.value; }, focus() { this.focused = true; }, scrollIntoView() { this.scrolled = true; } });
     return nodes.get(id);
   };
   const root = { template: '', set innerHTML(template) { this.template = template; for (const match of template.matchAll(/<[^>]+\bid="([^"]+)"[^>]*>/g)) { const item = node(match[1]); item.hidden = /\bhidden(?:\s|>)/.test(match[0]); item.disabled = /\bdisabled(?:\s|>)/.test(match[0]); } } };
   const location = { href: options.location || (options.mode === 'startup' ? 'http://127.0.0.1:1420/index.html' : 'http://127.0.0.1:1420/index.html?view=settings&section=environment') };
   const context = vm.createContext({
     appIconUrl: 'app-icon.png',
-    URL, console, document: { querySelector: () => root, getElementById: id => nodes.get(id) }, window: { location, addEventListener(name, handler) { windowHandlers.set(name, handler); } },
+    URL, console, document: { querySelector: () => root, getElementById: id => nodes.get(id), createElement: tag => ({ tagName: tag, value: '', textContent: '', set innerHTML(_) { throw new Error('Native data must not use HTML'); } }) }, window: { location, addEventListener(name, handler) { windowHandlers.set(name, handler); } },
     isTauri: () => native,
     listen: async (name, callback) => { listenCalls.push(name); if (options.listen) await options.listen(name, callback); subscriptions.set(name, callback); return () => { unlistened.push(name); subscriptions.delete(name); }; },
     invoke: async (name, args) => {
@@ -34,6 +34,9 @@ async function mount(native, initial = base(), options = {}) {
       const fallback = () => {
         if (name === 'get_snapshot' || name === 'perform_action' || name === 'set_project_directory') return initial;
         if (['get_update_snapshot', 'check_update', 'install_update'].includes(name)) return options.initialUpdate || update();
+        if (name === 'setup_distributions') return ['Ubuntu', 'Debian'];
+        if (name === 'setup_identity') return { linux_user: args.linuxUser || 'test', home: '/home/test', node: '/usr/bin/node' };
+        if (name === 'complete_setup') return base({ state: 'starting', busy: true });
         if (name === 'get_power_snapshot') return savedPower;
         if (name === 'set_power_enabled') {
           savedPower = power({ enabled: args.enabled, phase: args.enabled ? 'idle' : 'disabled', message: args.enabled ? '等待运行中的任务。' : '未启用任务期间防休眠。' });
@@ -53,7 +56,7 @@ async function mount(native, initial = base(), options = {}) {
     },
   });
   vm.runInContext(source, context); await flush();
-  return { template: root.template, power(snapshot) { subscriptions.get('launcher-power-state')?.({ payload: snapshot }); }, node(id) { assert.ok(nodes.has(id), 'Missing DOM node: ' + id); return nodes.get(id); }, has: id => nodes.has(id), location, calls, subscriptions, listenCalls, unlistened, async change(id, checked) { const item = nodes.get(id); if (!item) return; item.checked = checked; item.handlers.change?.(); await flush(); }, notification(snapshot) { subscriptions.get('launcher-notification-state')?.({ payload: snapshot }); }, unload() { windowHandlers.get('beforeunload')?.(); }, event(snapshot) { subscriptions.get('launcher-state')?.({ payload: snapshot }); }, update(snapshot) { subscriptions.get('launcher-update-state')?.({ payload: snapshot }); }, async click(id) { nodes.get(id)?.handlers.click?.(); await flush(); } };
+  return { template: root.template, power(snapshot) { subscriptions.get('launcher-power-state')?.({ payload: snapshot }); }, node(id) { assert.ok(nodes.has(id), 'Missing DOM node: ' + id); return nodes.get(id); }, has: id => nodes.has(id), location, calls, subscriptions, listenCalls, unlistened, async fill(id, value) { const item = nodes.get(id); item.value = value; item.handlers.input?.(); await flush(); }, async choose(id, value) { const item = nodes.get(id); item.value = value; item.handlers.change?.(); await flush(); }, async submit() { nodes.get('setup-form')?.handlers.submit?.({ preventDefault() {} }); await flush(); }, async change(id, checked) { const item = nodes.get(id); if (!item) return; item.checked = checked; item.handlers.change?.(); await flush(); }, notification(snapshot) { subscriptions.get('launcher-notification-state')?.({ payload: snapshot }); }, unload() { windowHandlers.get('beforeunload')?.(); }, event(snapshot) { subscriptions.get('launcher-state')?.({ payload: snapshot }); }, update(snapshot) { subscriptions.get('launcher-update-state')?.({ payload: snapshot }); }, async click(id) { nodes.get(id)?.handlers.click?.(); await flush(); } };
 }
 
 test('browser previews never invoke native commands or subscribe in either view', async () => {
@@ -1237,4 +1240,393 @@ test('readiness failure is static and cannot trigger service work, while unloade
   const error = pending.node('error-notice').textContent;
   ready.reject(new Error('late readiness error')); await flush();
   assert.equal(pending.node('error-notice').textContent, error);
+});
+
+const fresh = (extra = {}) => base({ setup_required: true, state: 'unknown', managed: false, environment: environment({ checks: [] , repository: null }), ...extra });
+const fillSetup = async app => { await app.fill('setup-repository', '/home/test/deepseek-harness'); };
+
+test('first-run routes from get_snapshot into launcher setup, never environment remediation or automatic writes', async () => {
+  const app = await mount(true, fresh({ state: 'error', last_error: 'missing config' }), { mode: 'startup' });
+  assert.equal(app.node('setup-panel').hidden, false);
+  assert.equal(app.node('startup-content').hidden, true);
+  assert.equal(app.node('startup-shell').dataset.state, 'setup');
+  assert.equal(app.node('setup-distribution').value, 'Ubuntu');
+  assert.equal(app.node('setup-user').value, 'test');
+  assert.equal(app.node('setup-node').value, '/usr/bin/node');
+  assert.equal(app.node('setup-port').value, '3080');
+  assert.equal(app.node('setup-submit').disabled, true);
+  const identity = app.calls.find(([name]) => name === 'setup_identity');
+  assert.equal(JSON.stringify(identity[1]), JSON.stringify({ distribution: 'Ubuntu', linuxUser: '' }));
+  assert.equal(app.calls.filter(([name]) => ['complete_setup', 'perform_action', 'set_project_directory'].includes(name)).length, 0);
+  assert.match(app.template, /Python 3.9\+/);
+  assert.match(app.template, /ss 和 Node.js/);
+  assert.match(app.template, /已安装依赖、已构建/);
+  assert.match(app.template, /内置版本 1.0.0/);
+  assert.match(app.template, /不会安装依赖、克隆或构建项目，也不会修改旧数据/);
+});
+
+test('existing startup and settings do not initialize setup and native URLs cannot force preview setup', async () => {
+  for (const mode of ['startup', 'settings']) {
+    const app = await mount(true, base(), { mode });
+    assert.equal(app.calls.filter(([name]) => /^setup_|^complete_setup$/.test(name)).length, 0);
+    if (mode === 'startup') { assert.equal(app.node('setup-panel').hidden, true); assert.equal(app.node('startup-content').hidden, false); }
+    else assert.equal(app.has('setup-panel'), false);
+  }
+  const app = await mount(true, base(), { location: 'http://localhost/index.html?preview=setup' });
+  assert.equal(app.node('setup-panel').hidden, true);
+});
+
+test('setup preview is nonnative, isolated from the normal preview and never invokes commands', async () => {
+  const app = await mount(false, base(), { location: 'http://localhost/index.html?preview=setup' });
+  assert.equal(app.node('setup-panel').hidden, false);
+  assert.equal(app.node('startup-content').hidden, true);
+  assert.equal(app.node('setup-distribution').value, 'Ubuntu');
+  for (const name of ['distribution', 'user', 'repository', 'node', 'port', 'detect-distributions', 'detect-identity', 'submit']) assert.equal(app.node('setup-' + name).disabled, true);
+  await app.click('setup-detect-distributions'); await app.click('setup-detect-identity'); await app.submit();
+  assert.equal(app.calls.length, 0); assert.equal(app.listenCalls.length, 0);
+  assert.match(app.node('setup-submit-status').textContent, /浏览器预览/);
+});
+
+test('setup discovery waits for snapshot and preserves newer event routing over delayed initial replies', async () => {
+  const initial = deferred();
+  const app = await mount(true, fresh(), { mode: 'startup', invoke(name, _args, { fallback }) { return name === 'get_snapshot' ? initial.promise : fallback(); } });
+  assert.equal(app.node('setup-panel').hidden, true);
+  assert.equal(app.calls.filter(([name]) => name === 'setup_distributions').length, 0);
+  app.event(fresh()); await flush();
+  assert.equal(app.node('setup-panel').hidden, false);
+  initial.resolve(base()); await flush();
+  assert.equal(app.node('setup-panel').hidden, false);
+  assert.equal(app.calls.filter(([name]) => name === 'setup_distributions').length, 1);
+});
+
+test('distribution discovery failures and empty lists are retryable without writes or losing form state', async () => {
+  let attempt = 0;
+  const app = await mount(true, fresh(), { mode: 'startup', invoke(name, _args, { fallback }) { if (name === 'setup_distributions' && ++attempt === 1) throw new Error('wsl failed token=private'); return fallback(); } });
+  assert.match(app.node('setup-error').textContent, /检测失败/);
+  assert.doesNotMatch(app.node('setup-error').textContent, /private/);
+  await app.fill('setup-repository', '/home/test/preserved');
+  await app.click('setup-detect-distributions');
+  assert.equal(app.node('setup-user').value, 'test');
+  assert.equal(app.node('setup-repository').value, '/home/test/preserved');
+  const empty = await mount(true, fresh(), { mode: 'startup', invoke(name, _args, { fallback }) { return name === 'setup_distributions' ? [] : fallback(); } });
+  assert.match(empty.node('setup-distribution-status').textContent, /未发现 WSL/);
+  assert.equal(empty.node('setup-submit').disabled, true);
+  assert.equal(empty.node('setup-detect-distributions').disabled, false);
+  assert.equal(empty.calls.filter(([name]) => name === 'setup_identity').length, 0);
+});
+
+test('rediscovery keeps current distribution and typed fields, and renders hostile WSL names only as text', async () => {
+  const hostile = '<img src=x onerror=alert(1)>';
+  let attempts = 0;
+  const app = await mount(true, fresh(), { mode: 'startup', invoke(name, _args, { fallback }) {
+    if (name === 'setup_distributions') { if (++attempts === 2) throw new Error('<script>retry</script>'); return [hostile, 'Debian']; }
+    if (name === 'setup_identity') return { linux_user: 'test', home: '<script>home</script>', node: '/usr/bin/node' };
+    return fallback();
+  } });
+  assert.equal(app.node('setup-distribution').children[1].textContent, hostile);
+  assert.equal(app.node('setup-distribution').children[1].value, hostile);
+  assert.match(app.node('setup-identity-status').textContent, /<script>home<\/script>/);
+  await fillSetup(app); await app.fill('setup-node', '/custom/node');
+  await app.click('setup-detect-distributions');
+  assert.equal(app.node('setup-distribution').value, hostile);
+  assert.equal(app.node('setup-node').value, '/custom/node');
+  assert.equal(app.node('setup-repository').value, '/home/test/deepseek-harness');
+  await app.click('setup-detect-distributions');
+  assert.equal(app.node('setup-node').value, '/custom/node');
+  assert.equal(app.calls.filter(([name]) => name === 'setup_identity').length, 1);
+});
+
+test('distribution switch rejects stale identity success and failure for the previous target', async () => {
+  for (const rejectOld of [false, true]) {
+    const old = deferred();
+    const app = await mount(true, fresh(), { mode: 'startup', invoke(name, args, { fallback }) { if (name === 'setup_identity' && args.distribution === 'Ubuntu') return old.promise; return fallback(); } });
+    await app.choose('setup-distribution', 'Debian');
+    assert.equal(app.node('setup-user').value, 'test');
+    await app.fill('setup-node', '/debian/node');
+    if (rejectOld) old.reject(new Error('obsolete error'));
+    else old.resolve({ linux_user: 'obsolete', home: '/old', node: '/old/node' });
+    await flush();
+    assert.equal(app.node('setup-distribution').value, 'Debian');
+    assert.equal(app.node('setup-user').value, 'test');
+    assert.equal(app.node('setup-node').value, '/debian/node');
+    assert.equal(app.node('setup-error').hidden, true);
+  }
+});
+
+test('typing a new user cancels old discovery and manual Node input survives in-flight detection', async () => {
+  const old = deferred(); const current = deferred();
+  const app = await mount(true, fresh(), { mode: 'startup', invoke(name, args, { fallback }) { if (name === 'setup_identity') return args.linuxUser === 'alice' ? current.promise : old.promise; return fallback(); } });
+  await app.fill('setup-user', 'alice');
+  old.resolve({ linux_user: 'old', home: '/old', node: '/old/node' }); await flush();
+  assert.equal(app.node('setup-user').value, 'alice');
+  await app.choose('setup-user', 'alice');
+  await app.fill('setup-node', '/home/alice/custom/node');
+  current.resolve({ linux_user: 'alice', home: '/home/alice', node: '/discovered/node' }); await flush();
+  assert.equal(app.node('setup-node').value, '/home/alice/custom/node');
+  assert.equal(app.node('setup-user').value, 'alice');
+});
+
+test('missing Node is manually recoverable and identity failures retain manually entered values', async () => {
+  let attempts = 0;
+  const app = await mount(true, fresh(), { mode: 'startup', invoke(name, _args, { fallback }) {
+    if (name === 'setup_identity') { if (++attempts === 2) throw new Error('discovery failed'); return { linux_user: 'test', home: '/home/test', node: '' }; }
+    return fallback();
+  } });
+  assert.match(app.node('setup-identity-status').textContent, /未发现 Node.js.*nvm/);
+  await fillSetup(app);
+  assert.equal(app.node('setup-submit').disabled, true);
+  await app.fill('setup-node', '/home/test/.nvm/versions/node/v24/bin/node');
+  assert.equal(app.node('setup-submit').disabled, false);
+  await app.click('setup-detect-identity');
+  assert.match(app.node('setup-error').textContent, /发现失败/);
+  assert.equal(app.node('setup-node').value, '/home/test/.nvm/versions/node/v24/bin/node');
+  assert.equal(app.node('setup-submit').disabled, false);
+  await app.click('setup-detect-identity');
+  assert.equal(attempts, 3);
+});
+
+test('setup validation rejects Windows/relative/control-character paths and invalid ports before any write', async () => {
+  const app = await mount(true, fresh(), { mode: 'startup' });
+  await fillSetup(app);
+  assert.equal(app.node('setup-submit').disabled, false);
+  for (const id of ['setup-repository', 'setup-node']) {
+    const valid = app.node(id).value;
+    for (const path of ['C:\\work', 'relative', '//server/path', '~/repo', '/a\npath', '/bad\u0000node']) {
+      await app.fill(id, path);
+      assert.equal(app.node('setup-submit').disabled, true, path);
+      await app.submit();
+    }
+    await app.fill(id, valid);
+  }
+  for (const port of ['', '0', '65536', '3.5', 'NaN']) {
+    await app.fill('setup-port', port); assert.equal(app.node('setup-submit').disabled, true); await app.submit();
+  }
+  await app.fill('setup-port', '3081');
+  assert.equal(app.node('setup-submit').disabled, false);
+  assert.equal(app.calls.filter(([name]) => name === 'complete_setup').length, 0);
+});
+
+test('explicit setup submission sends one request, locks operations and returns to normal startup', async () => {
+  const completion = deferred();
+  const app = await mount(true, fresh(), { mode: 'startup', invoke(name, _args, { fallback }) { return name === 'complete_setup' ? completion.promise : fallback(); } });
+  await fillSetup(app); await app.fill('setup-port', '3081');
+  await app.submit(); await app.submit();
+  const calls = app.calls.filter(([name]) => name === 'complete_setup');
+  assert.equal(calls.length, 1);
+  assert.equal(JSON.stringify(calls[0][1]), JSON.stringify({ request: { distribution: 'Ubuntu', linux_user: 'test', repository: '/home/test/deepseek-harness', node: '/usr/bin/node', port: 3081 } }));
+  for (const name of ['distribution', 'user', 'repository', 'node', 'port', 'detect-distributions', 'detect-identity', 'submit']) assert.equal(app.node('setup-' + name).disabled, true);
+  const count = app.calls.length;
+  await app.click('setup-detect-distributions'); await app.click('setup-detect-identity'); await app.click('open'); await app.click('check'); await app.click('open-settings');
+  assert.equal(app.calls.length, count);
+  completion.resolve(base({ state: 'starting', busy: true })); await flush();
+  assert.equal(app.node('setup-panel').hidden, true);
+  assert.equal(app.node('startup-content').hidden, false);
+  assert.equal(app.node('startup-shell').dataset.state, 'starting');
+  assert.equal(app.calls.filter(([name]) => name === 'perform_action').length, 0);
+});
+
+test('setup submission preserves a newer startup event over its delayed reply and keeps operations locked until settled', async () => {
+  const completion = deferred();
+  const app = await mount(true, fresh(), { mode: 'startup', invoke(name, _args, { fallback }) { return name === 'complete_setup' ? completion.promise : fallback(); } });
+  await fillSetup(app); await app.submit();
+  app.event(base());
+  assert.equal(app.node('setup-panel').hidden, true);
+  assert.equal(app.node('open').disabled, true);
+  assert.equal(app.node('check').disabled, true);
+  assert.equal(app.node('open-settings').disabled, true);
+  completion.resolve(fresh()); await flush();
+  assert.equal(app.node('setup-panel').hidden, true);
+  assert.equal(app.node('startup-shell').dataset.state, 'ready');
+  assert.equal(app.node('open').disabled, false);
+});
+
+test('setup completion failure preserves the entire draft and permits port-conflict recovery', async () => {
+  let attempts = 0;
+  const app = await mount(true, fresh(), { mode: 'startup', invoke(name, _args, { fallback }) { if (name === 'complete_setup' && ++attempts === 1) throw new Error('端口 3080 冲突 token=private'); return fallback(); } });
+  await fillSetup(app); await app.fill('setup-node', '/custom/node');
+  await app.submit();
+  assert.match(app.node('setup-error').textContent, /端口 3080 冲突/);
+  assert.doesNotMatch(app.node('setup-error').textContent, /private/);
+  assert.equal(app.node('setup-panel').hidden, false);
+  assert.equal(app.node('setup-submit').disabled, false);
+  assert.equal(app.node('setup-user').value, 'test');
+  assert.equal(app.node('setup-node').value, '/custom/node');
+  assert.equal(app.node('setup-repository').value, '/home/test/deepseek-harness');
+  app.event(fresh());
+  assert.equal(app.node('setup-node').value, '/custom/node');
+  await app.fill('setup-port', '3081'); await app.submit();
+  assert.equal(attempts, 2);
+  assert.equal(app.calls.filter(([name]) => name === 'complete_setup')[1][1].request.port, 3081);
+  assert.equal(app.node('setup-panel').hidden, true);
+});
+
+test('postcommit setup failure returns to normal startup error with delivered or missing events, including failed listener', async () => {
+  const failed = base({ state: 'error', phase: '准备本地服务', last_error: '服务启动失败', message: '服务启动失败' });
+  for (const mode of ['event', 'missing-event', 'intermediate-event', 'failed-listener']) {
+    let reads = 0;
+    const app = await mount(true, fresh(), { mode: 'startup', listen(name) { if (mode === 'failed-listener' && name === 'launcher-state') throw new Error('listener failed'); }, invoke(name, _args, { subscriptions, fallback }) {
+      if (name === 'get_snapshot') return ++reads === 1 ? fresh() : mode === 'event' ? fresh() : failed;
+      if (name === 'complete_setup') {
+        if (mode === 'event') subscriptions.get('launcher-state')({ payload: failed });
+        if (mode === 'intermediate-event') subscriptions.get('launcher-state')({ payload: fresh({ busy: true }) });
+        throw new Error('ensure_ready failed after saving');
+      }
+      return fallback();
+    } });
+    await fillSetup(app); await app.submit();
+    assert.equal(reads, 2, mode);
+    assert.equal(app.node('setup-panel').hidden, true, mode);
+    assert.equal(app.node('startup-content').hidden, false);
+    assert.equal(app.node('startup-shell').dataset.state, 'error');
+    assert.match(app.node('error-notice').textContent, /服务启动失败/);
+    assert.equal(app.node('check').disabled, false);
+    assert.equal(app.node('check').hidden, false);
+    assert.equal(app.node('setup-repository').value, '/home/test/deepseek-harness');
+    assert.equal(app.calls.filter(([name]) => name === 'complete_setup').length, 1);
+    assert.equal(app.calls.filter(([name]) => name === 'perform_action').length, 0);
+  }
+});
+
+test('precommit setup failure remains locked while refreshing then preserves the draft for explicit retry', async () => {
+  const refresh = deferred(); let reads = 0;
+  const app = await mount(true, fresh(), { mode: 'startup', invoke(name, _args, { fallback }) {
+    if (name === 'get_snapshot') return ++reads === 1 ? fresh() : refresh.promise;
+    if (name === 'complete_setup') throw new Error('预检查失败');
+    return fallback();
+  } });
+  await fillSetup(app); await app.fill('setup-node', '/custom/node'); await app.submit();
+  assert.equal(app.node('setup-submit').disabled, true);
+  assert.equal(app.node('setup-detect-distributions').disabled, true);
+  await app.submit();
+  assert.equal(app.calls.filter(([name]) => name === 'complete_setup').length, 1);
+  refresh.resolve(fresh()); await flush();
+  assert.equal(app.node('setup-panel').hidden, false);
+  assert.equal(app.node('setup-submit').disabled, false);
+  assert.match(app.node('setup-error').textContent, /预检查失败/);
+  assert.equal(app.node('setup-node').value, '/custom/node');
+  assert.equal(app.node('setup-repository').value, '/home/test/deepseek-harness');
+});
+
+test('failed post-error status read blocks duplicate setup and offers only a read-only status retry', async () => {
+  for (const saved of [true, false]) {
+    let reads = 0;
+    const app = await mount(true, fresh(), { mode: 'startup', invoke(name, _args, { fallback }) {
+      if (name === 'get_snapshot') {
+        if (++reads === 2) throw new Error('状态读取失败');
+        if (reads > 2) return saved ? base({ state: 'error', last_error: '已保存但启动失败' }) : fresh();
+        return fresh();
+      }
+      if (name === 'complete_setup') throw new Error('提交结果未知');
+      return fallback();
+    } });
+    await fillSetup(app); await app.submit();
+    assert.match(app.node('setup-error').textContent, /配置可能已保存.*重新读取状态.*不要重复提交/);
+    assert.equal(app.node('setup-detect-distributions').textContent, '重新读取状态');
+    assert.equal(app.node('setup-detect-distributions').disabled, false);
+    assert.equal(app.node('setup-submit').disabled, true);
+    await app.fill('setup-port', '3081'); await app.submit();
+    assert.match(app.node('setup-submit-status').textContent, /配置可能已保存/);
+    assert.equal(app.node('setup-submit').disabled, true);
+    const discoveryCalls = app.calls.filter(([name]) => name === 'setup_distributions').length;
+    await app.click('setup-detect-distributions');
+    assert.equal(reads, 3);
+    assert.equal(app.calls.filter(([name]) => name === 'complete_setup').length, 1);
+    assert.equal(app.calls.filter(([name]) => name === 'setup_distributions').length, discoveryCalls);
+    assert.equal(app.node('setup-repository').value, '/home/test/deepseek-harness');
+    assert.equal(app.node('setup-port').value, '3081');
+    assert.equal(app.node('setup-panel').hidden, saved);
+    if (!saved) {
+      assert.equal(app.node('setup-submit').disabled, false);
+      assert.equal(app.node('setup-detect-distributions').textContent, '重新检测');
+      assert.match(app.node('setup-error').textContent, /已确认尚未完成配置/);
+    }
+  }
+});
+
+test('late setup status reads and failures cannot overwrite newer events or restore an uncertain lock', async () => {
+  for (const reject of [false, true]) {
+    const refresh = deferred(); let reads = 0;
+    const app = await mount(true, fresh(), { mode: 'startup', invoke(name, _args, { fallback }) {
+      if (name === 'get_snapshot') return ++reads === 1 ? fresh() : refresh.promise;
+      if (name === 'complete_setup') throw new Error('late failure');
+      return fallback();
+    } });
+    await fillSetup(app); await app.submit();
+    app.event(base({ state: 'error', last_error: 'newer service error' }));
+    if (reject) refresh.reject(new Error('obsolete read failure')); else refresh.resolve(fresh());
+    await flush();
+    assert.equal(app.node('setup-panel').hidden, true);
+    assert.equal(app.node('startup-shell').dataset.state, 'error');
+    assert.match(app.node('error-notice').textContent, /newer service error/);
+    assert.equal(app.node('check').disabled, false);
+    assert.equal(app.calls.filter(([name]) => name === 'complete_setup').length, 1);
+  }
+});
+
+test('uncertain setup read retry remains available after stale busy events and update installation locks', async () => {
+  for (const installing of [false, true]) {
+    const refresh = deferred(); let reads = 0;
+    const app = await mount(true, fresh(), { mode: 'startup', invoke(name, _args, { subscriptions, fallback }) {
+      if (name === 'get_snapshot') {
+        if (++reads === 2) throw new Error('状态暂时不可读');
+        return reads > 2 ? refresh.promise : fresh();
+      }
+      if (name === 'complete_setup') {
+        subscriptions.get('launcher-state')({ payload: fresh({ busy: true }) });
+        if (installing) subscriptions.get('launcher-update-state')({ payload: update({ phase: 'installing', busy: true }) });
+        throw new Error('提交后启动结果未知');
+      }
+      return fallback();
+    } });
+    await fillSetup(app); await app.submit();
+    assert.equal(reads, 2);
+    assert.equal(app.node('setup-submit').disabled, true);
+    assert.equal(app.node('setup-detect-distributions').textContent, '重新读取状态');
+    assert.equal(app.node('setup-detect-distributions').disabled, false);
+    await app.click('setup-detect-distributions'); await app.click('setup-detect-distributions');
+    assert.equal(reads, 3);
+    assert.equal(app.node('setup-detect-distributions').disabled, true);
+    refresh.resolve(base({ state: 'error', last_error: '已保存但启动失败' })); await flush();
+    assert.equal(app.node('setup-panel').hidden, true);
+    assert.equal(app.node('startup-shell').dataset.state, 'error');
+    assert.match(app.node('error-notice').textContent, /已保存但启动失败/);
+    assert.equal(app.calls.filter(([name]) => name === 'complete_setup').length, 1);
+    assert.equal(app.calls.filter(([name]) => name === 'setup_distributions').length, 1);
+    assert.equal(app.node('setup-repository').value, '/home/test/deepseek-harness');
+  }
+});
+
+test('read-only uncertain setup retry respects newer events and unload before a delayed reply', async () => {
+  for (const dispose of [false, true]) {
+    const refresh = deferred(); let reads = 0;
+    const app = await mount(true, fresh(), { mode: 'startup', invoke(name, _args, { fallback }) {
+      if (name === 'get_snapshot') {
+        if (++reads === 2) throw new Error('unknown status');
+        return reads > 2 ? refresh.promise : fresh();
+      }
+      if (name === 'complete_setup') throw new Error('completion failed');
+      return fallback();
+    } });
+    await fillSetup(app); await app.submit(); await app.click('setup-detect-distributions');
+    assert.equal(app.node('setup-detect-distributions').disabled, true);
+    if (dispose) app.unload(); else app.event(base());
+    const status = app.node('setup-submit-status').textContent;
+    refresh.resolve(fresh()); await flush();
+    if (dispose) assert.equal(app.node('setup-submit-status').textContent, status);
+    else assert.equal(app.node('setup-panel').hidden, true);
+    assert.equal(app.calls.filter(([name]) => name === 'complete_setup').length, 1);
+  }
+});
+
+test('setup ignores discovery replies after leaving setup or unloading', async () => {
+  for (const dispose of [false, true]) {
+    const identity = deferred();
+    const app = await mount(true, fresh(), { mode: 'startup', invoke(name, _args, { fallback }) { return name === 'setup_identity' ? identity.promise : fallback(); } });
+    if (dispose) app.unload(); else app.event(base());
+    const status = app.node('setup-identity-status').textContent;
+    identity.resolve({ linux_user: 'late', home: '/late', node: '/late/node' }); await flush();
+    assert.equal(app.node('setup-user').value, '');
+    assert.equal(app.node('setup-identity-status').textContent, status);
+    assert.equal(app.calls.filter(([name]) => name === 'complete_setup').length, 0);
+  }
 });

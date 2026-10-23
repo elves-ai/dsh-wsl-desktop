@@ -20,6 +20,7 @@ const environmentItems = [
 const pendingEnvironment = (): EnvironmentReport => ({ checks: environmentItems.map(([id, label]) => ({ id, label, status: 'pending', message: '等待检测', hint: '' })), repository: null });
 
 interface Snapshot {
+  setup_required: boolean;
   state: string;
   phase: string;
   message: string;
@@ -91,7 +92,7 @@ app.innerHTML = settingsView ? `
 ` : `
 <main class="startup" id="startup-shell">
   <header class="startup-brand"><div class="app-mark">${mark}</div><span>DeepSeek Harness<small>WSL Desktop</small></span></header>
-  <section class="startup-content" aria-labelledby="status-title">
+  <section class="startup-content" id="startup-content" aria-labelledby="status-title">
     <div class="startup-heading"><span class="eyebrow">启动工作空间</span><h1 id="status-title">正在启动 DSH</h1><p id="status-message" role="status" aria-live="polite">正在检查本地运行环境，请稍候。</p></div>
     <ol class="startup-steps" aria-label="启动进度">
       <li id="stage-environment" data-state="active"><span class="step-marker" id="stage-environment-mark" aria-hidden="true"></span><span>检查运行环境</span><span class="step-status" id="stage-environment-state">正在检测</span></li>
@@ -102,6 +103,20 @@ app.innerHTML = settingsView ? `
     <div class="error-notice" id="error-notice" role="alert" hidden></div>
     <details class="check-details" id="environment-panel"><summary><span>环境检查</span><span id="environment-summary">11 项</span></summary><ul class="environment-list" aria-label="环境检查结果">${environmentItems.map(([id,label]) => `<li class="environment-item" id="check-${id}" data-status="pending"><div class="check-heading"><span>${label}</span><span class="check-state" id="check-${id}-state">待检测</span></div><p class="check-message" id="check-${id}-message" hidden></p><p class="check-hint" id="check-${id}-hint" hidden></p></li>`).join('')}</ul></details>
     <div class="startup-actions" id="startup-actions" hidden><button class="button primary" id="check" type="button" disabled>重新检测</button><button class="button secondary" id="open-settings" type="button">打开设置</button><button class="button primary" id="open" type="button" hidden disabled>打开 DSH</button></div>
+  </section>
+  <section class="setup-content" id="setup-panel" aria-labelledby="setup-title" hidden>
+    <div class="startup-heading"><span class="eyebrow">首次配置</span><h1 id="setup-title">连接已有的 WSL 工作空间</h1><p class="setting-help">准备好 WSL 发行版、Python 3.9+、ss 和 Node.js，以及已安装依赖、已构建的 Harness 项目。</p></div>
+    <p class="setup-scope">仅部署内置版本 1.0.0 管理器并生成配置；不会安装依赖、克隆或构建项目，也不会修改旧数据。点击“完成配置并启动”前不会写入配置。</p>
+    <form id="setup-form" novalidate>
+      <div class="setup-field"><label for="setup-distribution">WSL 发行版</label><div class="setup-inline"><select id="setup-distribution" aria-describedby="setup-distribution-status" disabled><option value="">请选择发行版</option></select><button class="button secondary" id="setup-detect-distributions" type="button" disabled>重新检测</button></div><p class="setting-help" id="setup-distribution-status" role="status" aria-live="polite">等待检测发行版。</p></div>
+      <div class="setup-field"><label for="setup-user">Linux 用户</label><div class="setup-inline"><input id="setup-user" type="text" placeholder="留空发现发行版默认用户" autocomplete="off" spellcheck="false" maxlength="256" aria-describedby="setup-identity-status" disabled><button class="button secondary" id="setup-detect-identity" type="button" disabled>发现用户与 Node</button></div><p class="setting-help" id="setup-identity-status" role="status" aria-live="polite">自动发现默认用户，也可填写其他用户名后重新发现。</p></div>
+      <div class="setup-field"><label for="setup-repository">Harness 项目目录</label><input id="setup-repository" type="text" placeholder="/home/用户名/deepseek-harness" autocomplete="off" spellcheck="false" maxlength="4096" aria-describedby="setup-repository-help" disabled><p class="setting-help" id="setup-repository-help">填写已准备好的 Harness WSL 绝对目录，不是 Windows 路径。</p></div>
+      <div class="setup-field"><label for="setup-node">Node.js 绝对路径</label><input id="setup-node" type="text" placeholder="/usr/bin/node" autocomplete="off" spellcheck="false" maxlength="4096" aria-describedby="setup-node-help" disabled><p class="setting-help" id="setup-node-help">自动发现后可修改；未发现时请手动填写。使用 nvm 时，请填写具体版本的绝对路径，例如 /home/用户名/.nvm/versions/node/v24.0.0/bin/node。</p></div>
+      <details class="setup-advanced" id="setup-advanced"><summary>高级配置</summary><div class="setup-field"><label for="setup-port">本地服务端口</label><input id="setup-port" type="number" value="3080" min="1" max="65535" step="1" aria-describedby="setup-port-help" disabled><p class="setting-help" id="setup-port-help">默认 3080。如提示端口冲突，可修改后重试。</p></div></details>
+      <div class="error-notice" id="setup-error" role="alert" hidden></div>
+      <p class="setting-help" id="setup-submit-status" role="status" aria-live="polite"></p>
+      <button class="button primary" id="setup-submit" type="submit" disabled>完成配置并启动</button>
+    </form>
   </section>
   <footer class="startup-footer"><span id="preview-note">本地运行 · 不自动安装</span><span id="phase">准备启动</span></footer>
 </main>
@@ -114,7 +129,7 @@ function element<T extends HTMLElement = HTMLElement>(id: string): T {
 }
 const actions: Action[] = settingsView ? ['check', 'logs'] : ['check', 'open'];
 const buttons = Object.fromEntries(actions.map(action => [action, element<HTMLButtonElement>(action)])) as Partial<Record<Action, HTMLButtonElement>>;
-let snapshot: Snapshot = { state: 'unknown', phase: '连接启动器', message: '正在与本地启动器建立连接，请稍候。', busy: true, managed: false, origin: '', last_error: null, logs: [], environment: pendingEnvironment(), environment_checking: true, config_path: '' };
+let snapshot: Snapshot = { setup_required: false, state: 'unknown', phase: '连接启动器', message: '正在与本地启动器建立连接，请稍候。', busy: true, managed: false, origin: '', last_error: null, logs: [], environment: pendingEnvironment(), environment_checking: true, config_path: '' };
 let pending = false;
 let repositoryPending = false;
 let repositoryDirty = false;
@@ -185,16 +200,176 @@ function safeOrigin(origin: string): string {
 function environmentPassed(): boolean {
   return environmentItems.every(([id]) => snapshot.environment.checks.some(item => item.id === id && item.status === 'passed'));
 }
+interface SetupIdentity { linux_user: string; home: string; node: string }
+let setupInitialized = false;
+let setupDisposed = false;
+let setupListing = false;
+let setupDiscovering = false;
+let setupSubmitting = false;
+let setupStateUnknown = false;
+let setupIdentityRevision = 0;
+let setupNodeRevision = 0;
+let setupError = '';
+const setupInput = (name: string) => element<HTMLInputElement>('setup-' + name);
+const setupDistribution = () => element<HTMLSelectElement>('setup-distribution');
+const setupActive = () => !settingsView && !setupDisposed && snapshot.setup_required;
+const absoluteLinuxPath = (value: string) => value.startsWith('/') && !value.startsWith('//') && value.length <= 4096 && !/[\u0000-\u001f\u007f]/.test(value);
+function setupValidation(): string {
+  if (!setupDistribution().value) return '请选择 WSL 发行版。';
+  const user = setupInput('user').value.trim();
+  if (!user || user.startsWith('-') || /[\s\u0000-\u001f\u007f]/.test(user)) return '请先发现默认用户，或填写有效的 Linux 用户名。';
+  if (!absoluteLinuxPath(setupInput('repository').value.trim())) return '请填写 Harness 的 WSL 绝对目录。';
+  if (!absoluteLinuxPath(setupInput('node').value.trim())) return '请填写 Node.js 的 WSL 绝对路径；可手动填写 nvm 中的具体路径。';
+  const port = Number(setupInput('port').value);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return '端口必须是 1–65535 的整数。';
+  return '';
+}
+function renderSetup(): void {
+  if (settingsView) return;
+  const active = setupActive();
+  element('setup-panel').hidden = !active;
+  element('startup-content').hidden = active;
+  if (!active) return;
+  element('startup-shell').dataset.state = 'setup';
+  element('phase').textContent = setupSubmitting ? setupStateUnknown ? '正在确认配置状态' : '正在配置并启动' : '首次配置';
+  const locked = !native || !connected || setupSubmitting || snapshot.busy || updateLocksService();
+  for (const name of ['user', 'repository', 'node', 'port']) setupInput(name).disabled = locked;
+  setupDistribution().disabled = locked || setupListing;
+  element<HTMLButtonElement>('setup-detect-distributions').disabled = setupStateUnknown ? !native || !connected || setupSubmitting || setupListing : locked || setupListing;
+  element('setup-detect-distributions').textContent = setupStateUnknown ? '重新读取状态' : '重新检测';
+  element<HTMLButtonElement>('setup-detect-identity').disabled = locked || setupListing || setupDiscovering || !setupDistribution().value;
+  element<HTMLButtonElement>('setup-submit').disabled = locked || setupListing || setupDiscovering || setupStateUnknown || Boolean(setupValidation());
+  element('setup-form').setAttribute('aria-busy', String(setupSubmitting));
+  element('setup-error').textContent = redact(setupError);
+  element('setup-error').hidden = !setupError;
+  element('setup-submit-status').textContent = !native ? '浏览器预览 · 不会发现环境或写入配置。' : setupStateUnknown ? setupSubmitting ? '正在只读确认配置状态，不会重复提交…' : '配置可能已保存，请先点击“重新读取状态”确认；确认前不会重复提交。' : setupSubmitting ? '正在检查环境、写入配置并启动，请稍候…' : setupValidation() || '检查以上信息后，点击下方按钮保存并启动。';
+  if (native && connected && !setupInitialized) { setupInitialized = true; void detectSetupDistributions(); }
+}
+async function detectSetupDistributions(): Promise<void> {
+  if (!native || !connected || !setupActive() || setupListing || setupSubmitting) return;
+  setupListing = true;
+  setupError = '';
+  element('setup-distribution-status').textContent = '正在检测 WSL 发行版…';
+  render();
+  try {
+    const distributions = await invoke<string[]>('setup_distributions');
+    if (!setupActive()) return;
+    const previous = setupDistribution().value;
+    const available = [...new Set(distributions)];
+    const choices = [document.createElement('option'), ...available.map(distribution => {
+      const option = document.createElement('option');
+      option.value = distribution;
+      option.textContent = distribution;
+      return option;
+    })];
+    choices[0]!.value = '';
+    choices[0]!.textContent = available.length ? '请选择发行版' : '未发现发行版';
+    setupDistribution().replaceChildren(...choices);
+    setupDistribution().value = available.includes(previous) ? previous : available[0] || '';
+    element('setup-distribution-status').textContent = available.length ? '已发现 ' + available.length + ' 个发行版。' : '未发现 WSL 发行版，请先准备好 WSL 后重新检测。';
+    if (setupDistribution().value !== previous) changeSetupDistribution();
+  } catch (error) {
+    if (setupActive()) {
+      setupError = '发行版检测失败，可重新检测：' + String(error);
+      element('setup-distribution-status').textContent = '检测未完成，已保留现有选择。';
+    }
+  } finally { setupListing = false; if (!setupDisposed) render(); }
+}
+function changeSetupDistribution(): void {
+  if (!setupActive() || setupSubmitting) return;
+  setupIdentityRevision += 1;
+  setupDiscovering = false;
+  setupInput('user').value = '';
+  setupInput('node').value = '';
+  setupNodeRevision += 1;
+  setupError = '';
+  element('setup-identity-status').textContent = '等待发现所选发行版的默认用户。';
+  if (setupDistribution().value) void detectSetupIdentity();
+  render();
+}
+async function detectSetupIdentity(): Promise<void> {
+  if (!native || !connected || !setupActive() || setupSubmitting || !setupDistribution().value) return;
+  const revision = ++setupIdentityRevision;
+  const nodeRevision = setupNodeRevision;
+  const distribution = setupDistribution().value;
+  const linuxUser = setupInput('user').value.trim();
+  setupDiscovering = true;
+  setupError = '';
+  element('setup-identity-status').textContent = '正在发现用户、主目录和 Node.js…';
+  render();
+  try {
+    const identity = await invoke<SetupIdentity>('setup_identity', { distribution, linuxUser });
+    if (!setupActive() || revision !== setupIdentityRevision) return;
+    setupInput('user').value = identity.linux_user;
+    if (nodeRevision === setupNodeRevision) setupInput('node').value = identity.node;
+    element('setup-identity-status').textContent = '用户：' + identity.linux_user + ' · 主目录：' + identity.home + (identity.node ? ' · 已发现 Node.js，可手动修改。' : ' · 未发现 Node.js，请手动填写绝对路径（支持 nvm）。');
+  } catch (error) {
+    if (setupActive() && revision === setupIdentityRevision) {
+      setupError = '用户或 Node.js 发现失败，可重试或手动填写：' + String(error);
+      element('setup-identity-status').textContent = '发现未完成，已保留表单。';
+    }
+  } finally {
+    if (revision === setupIdentityRevision) { setupDiscovering = false; if (!setupDisposed) render(); }
+  }
+}
+// Setup may have committed before service startup failed. Reconcile without writing again.
+async function readSetupSnapshot(revision: number, retry = false): Promise<void> {
+  try {
+    const result = await invoke<Snapshot>('get_snapshot');
+    if (!setupDisposed && eventRevision === revision) {
+      // A confirmed commit must not regress to setup, even if a read is stale.
+      if (snapshot.setup_required || !result.setup_required) snapshot = result;
+      if (retry) setupError = snapshot.setup_required ? '已确认尚未完成配置，表单已保留，可修改后重试。' : '';
+      setupStateUnknown = false;
+      localError = '';
+    }
+  } catch (error) {
+    if (!setupDisposed && eventRevision === revision && snapshot.setup_required) {
+      setupStateUnknown = true;
+      setupError = '配置可能已保存，但状态读取失败。请点击“重新读取状态”确认，不要重复提交：' + String(error);
+    }
+  }
+}
+async function retrySetupSnapshot(): Promise<void> {
+  if (!native || !connected || !setupActive() || setupSubmitting || setupListing || !setupStateUnknown) return;
+  setupSubmitting = true;
+  const revision = eventRevision;
+  render();
+  try { await readSetupSnapshot(revision, true); }
+  finally { setupSubmitting = false; if (!setupDisposed) render(); }
+}
+async function completeSetup(): Promise<void> {
+  if (!native || !connected || !setupActive() || setupSubmitting || element<HTMLButtonElement>('setup-submit').disabled) return;
+  const validation = setupValidation();
+  if (validation) { setupError = validation; render(); return; }
+  const request = { distribution: setupDistribution().value, linux_user: setupInput('user').value.trim(), repository: setupInput('repository').value.trim(), node: setupInput('node').value.trim(), port: Number(setupInput('port').value) };
+  setupSubmitting = true;
+  setupError = '';
+  const revision = eventRevision;
+  render();
+  try {
+    const result = await invoke<Snapshot>('complete_setup', { request });
+    if (!setupDisposed && (eventRevision === revision || snapshot.setup_required)) snapshot = result;
+    if (result.setup_required) setupError = '配置尚未完成，请检查信息后重试。';
+  } catch (error) {
+    if (!setupDisposed) {
+      setupError = '配置或启动未完成，已保留表单，可修改后重试：' + String(error);
+      setupStateUnknown = snapshot.setup_required;
+      render();
+      await readSetupSnapshot(eventRevision);
+    }
+  } finally { setupSubmitting = false; if (!setupDisposed) render(); }
+}
 function render(): void {
-  const busy = snapshot.busy || pending || repositoryPending;
+  const busy = snapshot.busy || pending || repositoryPending || setupSubmitting;
   const disabled = !native || !connected || busy || updateLocksService();
   const passed = environmentPassed();
   const error = redact(settingsReturnError || settingsReadyError || localError || snapshot.last_error || '');
   if (settingsView) element<HTMLButtonElement>('settings-back').disabled = settingsReturnPending;
   if (settingsView) renderSettings(disabled, passed, error);
-  else renderStartup(disabled, passed, busy, error);
-  if (buttons.check) buttons.check.disabled = disabled;
-  if (buttons.open) buttons.open.disabled = disabled || !passed;
+  else { renderStartup(disabled, passed, busy, error); renderSetup(); }
+  if (buttons.check) buttons.check.disabled = disabled || snapshot.setup_required;
+  if (buttons.open) buttons.open.disabled = disabled || snapshot.setup_required || !passed;
   if (buttons.logs) buttons.logs.disabled = disabled;
   renderUpdate();
   renderNotifications();
@@ -233,7 +408,7 @@ function renderStartup(disabled: boolean, passed: boolean, busy: boolean, error:
   element('startup-progress').hidden = idle || failed;
   element('startup-actions').hidden = !idle && !failed;
   element('open-settings').hidden = !failed;
-  element<HTMLButtonElement>('open-settings').disabled = settingsRequestPending;
+  element<HTMLButtonElement>('open-settings').disabled = settingsRequestPending || setupSubmitting;
   element('open').hidden = !passed || failed;
   element('check').hidden = !failed && passed;
   if (buttons.check) buttons.check.textContent = '重新检测';
@@ -505,7 +680,7 @@ async function returnFromSettings(): Promise<void> {
 }
 async function perform(action: Action): Promise<void> {
   const button = buttons[action];
-  if (!native || !button || button.disabled || pending || repositoryPending) return;
+  if (!native || !button || button.disabled || pending || repositoryPending || setupSubmitting) return;
   pending = true; localError = ''; render();
   const revision = eventRevision;
   try {
@@ -542,12 +717,22 @@ function previewSnapshot(): Snapshot {
     if (['node','dependencies','web_assets'].includes(item.id)) Object.assign(item, { status: 'skipped', message: '等待项目目录检查通过。' });
   }
   if (!settingsView && !failed && !ready) for (const item of checks) item.status = 'pending';
-  return { state: failed ? 'error' : ready ? 'ready' : settingsView ? 'stopped' : 'unknown', phase: failed ? '等待处理环境问题' : ready ? '已就绪' : '检测运行环境', message: '', busy: !settingsView && !failed && !ready, managed: ready, origin:'http://127.0.0.1:3080', last_error:failed ? '运行环境尚未准备好。' : null, logs:['[预览] 此处仅展示脱敏启动记录，未操作实际服务。'], environment:{checks,repository:'/home/user/deepseek-harness'}, environment_checking:!settingsView && !failed && !ready, config_path:'%APPDATA%/io.local.dsh-wsl-desktop/config.json' };
+  return { setup_required: preview === 'setup', state: failed ? 'error' : ready ? 'ready' : settingsView ? 'stopped' : 'unknown', phase: failed ? '等待处理环境问题' : ready ? '已就绪' : '检测运行环境', message: '', busy: preview !== 'setup' && !settingsView && !failed && !ready, managed: ready, origin:'http://127.0.0.1:3080', last_error:failed ? '运行环境尚未准备好。' : null, logs:['[预览] 此处仅展示脱敏启动记录，未操作实际服务。'], environment:{checks,repository:'/home/user/deepseek-harness'}, environment_checking:!settingsView && !failed && !ready, config_path:'%APPDATA%/io.local.dsh-wsl-desktop/config.json' };
 }
 async function initialize(): Promise<void> {
   if (!native) {
     connected = true;
     snapshot = previewSnapshot();
+    if (setupActive()) {
+      const option = document.createElement('option');
+      option.value = 'Ubuntu'; option.textContent = 'Ubuntu';
+      setupDistribution().replaceChildren(option); setupDistribution().value = 'Ubuntu';
+      setupInput('user').value = 'user';
+      setupInput('repository').value = '/home/user/deepseek-harness';
+      setupInput('node').value = '/home/user/.nvm/versions/node/v24.0.0/bin/node';
+      element('setup-distribution-status').textContent = '预览示例 · 不检测实际发行版。';
+      element('setup-identity-status').textContent = '预览示例 · 用户 user，主目录 /home/user。';
+    }
     element(settingsView ? 'settings-preview' : 'preview-note').textContent = '浏览器预览 · 不会操作本地服务';
     element(settingsView ? 'settings-preview' : 'preview-note').hidden = false;
     render(); return;
@@ -557,6 +742,7 @@ async function initialize(): Promise<void> {
     unlisten = await listen<Snapshot>('launcher-state', event => {
       eventRevision += 1;
       snapshot = event.payload;
+      setupStateUnknown = false;
       connected = true;
       localError = '';
       render();
@@ -642,9 +828,38 @@ if (settingsView) {
   checkUpdateButton.addEventListener('click', () => { void performUpdate('check_update'); });
   installUpdateButton.addEventListener('click', () => { void performUpdate('install_update'); });
   for (const section of settingsSections) element('nav-' + section).addEventListener('click', () => selectSettings(section));
-} else element('open-settings').addEventListener('click', () => { void openSettings(); });
+} else {
+  element('open-settings').addEventListener('click', () => { if (!setupSubmitting) void openSettings(); });
+  setupInput('port').value = '3080';
+  element('setup-detect-distributions').addEventListener('click', () => {
+    if (setupStateUnknown) void retrySetupSnapshot(); else void detectSetupDistributions();
+  });
+  setupDistribution().addEventListener('change', changeSetupDistribution);
+  element('setup-detect-identity').addEventListener('click', () => {
+    if (!element<HTMLButtonElement>('setup-detect-identity').disabled) void detectSetupIdentity();
+  });
+  setupInput('user').addEventListener('input', () => {
+    if (setupSubmitting) return;
+    setupIdentityRevision += 1;
+    setupDiscovering = false;
+    setupNodeRevision += 1;
+    setupInput('node').value = '';
+    element('setup-identity-status').textContent = '用户已修改，可重新发现 Node.js 或手动填写。';
+    setupError = '';
+    render();
+  });
+  setupInput('user').addEventListener('change', () => { if (!setupSubmitting) void detectSetupIdentity(); });
+  for (const name of ['repository', 'node', 'port']) setupInput(name).addEventListener('input', () => {
+    if (setupSubmitting) return;
+    if (name === 'node') setupNodeRevision += 1;
+    setupError = '';
+    render();
+  });
+  element('setup-form').addEventListener('submit', event => { event.preventDefault(); void completeSetup(); });
+}
 for (const action of actions) buttons[action]?.addEventListener('click', () => { void perform(action); });
 window.addEventListener('beforeunload', () => {
+  setupDisposed = true; setupIdentityRevision += 1;
   settingsDisposed = true;
   notificationsDisposed = true; unlistenNotifications?.(); unlistenNotifications = undefined;
   powerDisposed = true; unlistenPower?.(); unlistenPower = undefined;

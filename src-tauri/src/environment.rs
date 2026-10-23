@@ -25,7 +25,7 @@ const LINUX_IDS: [&str; 6] = [
     "dependencies",
     "web_assets",
 ];
-const HELPER: &str = include_str!("../helpers/check_environment.py");
+pub(crate) const HELPER: &str = include_str!("../helpers/check_environment.py");
 const MAX_OUTPUT: usize = 64 * 1024;
 const SAVE_ERROR: &str = "无法保存项目目录。请确认目标是已有 DSH 项目，Linux 配置是可写的普通 JSON 文件且含有效端口，并检查 WSL 用户权限；服务正在启动或端口仍有监听时请先手动停止。";
 
@@ -176,7 +176,7 @@ impl EnvironmentReport {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProbeError {
+pub(crate) enum ProbeError {
     Missing,
     Unavailable,
     Timeout,
@@ -184,22 +184,49 @@ enum ProbeError {
     Unsupported,
 }
 
-struct ProbeOutput {
-    success: bool,
-    stdout: Vec<u8>,
+pub(crate) struct ProbeOutput {
+    pub(crate) success: bool,
+    pub(crate) stdout: Vec<u8>,
 }
 
-trait Runner {
+pub(crate) trait Runner {
     fn run(&mut self, args: &[String], timeout: Duration) -> Result<ProbeOutput, ProbeError>;
+    fn run_input(
+        &mut self,
+        args: &[String],
+        input: Vec<u8>,
+        timeout: Duration,
+    ) -> Result<ProbeOutput, ProbeError> {
+        let _ = (args, input, timeout);
+        Err(ProbeError::Unsupported)
+    }
 }
 
-struct NativeRunner;
+pub(crate) struct NativeRunner;
 impl Runner for NativeRunner {
     fn run(&mut self, args: &[String], timeout: Duration) -> Result<ProbeOutput, ProbeError> {
+        NativeRunner::run_input(self, args, None, timeout)
+    }
+    fn run_input(
+        &mut self,
+        args: &[String],
+        input: Vec<u8>,
+        timeout: Duration,
+    ) -> Result<ProbeOutput, ProbeError> {
+        NativeRunner::run_input(self, args, Some(input), timeout)
+    }
+}
+impl NativeRunner {
+    pub(crate) fn run_input(
+        &mut self,
+        args: &[String],
+        input: Option<Vec<u8>>,
+        timeout: Duration,
+    ) -> Result<ProbeOutput, ProbeError> {
         #[cfg(windows)]
         {
             use std::{
-                io::Read,
+                io::{Read, Write},
                 os::windows::process::CommandExt,
                 path::PathBuf,
                 process::{Command, Stdio},
@@ -215,7 +242,11 @@ impl Runner for NativeRunner {
             let mut child = Command::new(executable)
                 .args(args)
                 .creation_flags(0x08000000) // CREATE_NO_WINDOW
-                .stdin(Stdio::null())
+                .stdin(if input.is_some() {
+                    Stdio::piped()
+                } else {
+                    Stdio::null()
+                })
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())
                 .spawn()
@@ -226,6 +257,14 @@ impl Runner for NativeRunner {
                         ProbeError::Unavailable
                     }
                 })?;
+            if let Some(input) = input {
+                let mut stdin = child.stdin.take().ok_or(ProbeError::Unavailable)?;
+                // Feed the bundled sources over stdin, not the Windows 32K command line.
+                // A stalled WSL is still bounded by the same process deadline below.
+                thread::spawn(move || {
+                    let _ = stdin.write_all(&input);
+                });
+            }
             let stdout = child.stdout.take().ok_or(ProbeError::Unavailable)?;
             let (sender, receiver) = mpsc::sync_channel(1);
             // Reading is capped even when a misbehaving process writes indefinitely.
@@ -281,14 +320,14 @@ impl Runner for NativeRunner {
         }
         #[cfg(not(windows))]
         {
-            let _ = (args, timeout);
+            let _ = (args, input, timeout);
             Err(ProbeError::Unsupported)
         }
     }
 }
 
 /// WSL --list --quiet commonly emits UTF-16LE, with or without a BOM.
-fn distributions(bytes: &[u8]) -> Result<Vec<String>, ProbeError> {
+pub(crate) fn distributions(bytes: &[u8]) -> Result<Vec<String>, ProbeError> {
     if bytes.len() > MAX_OUTPUT {
         return Err(ProbeError::TooLarge);
     }

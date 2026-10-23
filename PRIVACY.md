@@ -1,22 +1,22 @@
 # Privacy policy
 
-Last updated: 2026-10-22
+Last updated: 2026-10-23
 
 ## Scope
 
-This policy describes the DSH WSL Desktop launcher maintained by Evan Yang, an individual. It is not a privacy policy for DeepSeek Harness (DSH), its model providers, extensions, the separately configured WSL helper, Microsoft WebView2, or websites opened in the system browser.
+This policy describes the DSH WSL Desktop launcher maintained by Evan Yang, an individual. It is not a privacy policy for DeepSeek Harness (DSH), its model providers, extensions, third-party legacy WSL helpers, Microsoft WebView2, or websites opened in the system browser.
 
 The launcher does not implement its own analytics uploader, account service, or maintainer-operated data-collection endpoint. This does **not** mean that the embedded DSH application, its tools, WebView2, or external services are prevented from communicating with other systems.
 
 ## Local configuration and service control
 
-On first launch, the application imports launcher settings from the existing Windows launcher configuration. Settings include the WSL distribution and Linux user, helper/configuration paths, service port, timeouts, and window size. These settings stay in the local application configuration directory; the launcher does not upload them to the maintainer.
+The application uses existing Windows launcher settings or imports legacy Windows settings without changing the original. First-run setup appears only when neither configuration exists; invalid existing configurations are not automatically overwritten. Setup collects the WSL distribution and Linux user, Harness source root, and an existing Node executable (detected from the highest installed nvm version or system Node, or manually specified), with default port 3080 and an advanced override. Settings also include helper/configuration paths, timeouts, and window size. They stay in local configuration storage and are not uploaded to the maintainer.
 
 The application invokes the configured helper through Windows Subsystem for Linux to check, start, or explicitly stop DSH. It also makes HTTP readiness requests to the configured loopback address, normally http://127.0.0.1:3080/. Starting the desktop app may start the existing DSH service. Stopping or restarting requires a native confirmation and may interrupt existing tasks.
 
 The helper and DSH can access local projects, credentials, conversations, model providers, and other tools according to their own configuration and permissions. Review their settings and upstream documentation before use. This launcher does not audit, replace, or disable those systems' data handling or telemetry.
 
-Startup environment checks read WSL availability, the configured Linux files and project metadata, and run bounded Node version/module-resolution probes without importing project code. They do not install software, clone repositories, or build the project. Only when you explicitly save a DSH project directory does the launcher update the repository field in the existing Linux helper configuration; other fields and file permissions are preserved. Detection results and the configured project path are shown locally and are not uploaded to the maintainer.
+Startup environment checks read WSL availability, the configured Linux files and project metadata, and run bounded Node version/module-resolution probes without importing project code. They do not install software, clone repositories, or build the project. For first-run setup, only clicking “完成配置并启动” (Complete setup and start) authorizes deployment and generation of both configurations, after the same read-only environment checks pass. The launcher embeds its own MIT-licensed Python manager 1.0.0 using Rust `include_str!`; that version is paired with the desktop package, with no remote “latest manager” download. It requires an existing WSL installation, `/usr/bin/python3` (>= 3.9), `ss`, Node, installed Harness dependencies, and a completed Harness build; it does not configure API keys. With an existing configuration, explicitly saving a DSH directory updates only the repository field in the existing Linux helper configuration; other fields and permissions are preserved. Legacy scripts and data are not automatically replaced or migrated. Detection results and the configured project path are shown locally and are not uploaded to the maintainer.
 
 ## Embedded browser and external services
 
@@ -48,7 +48,7 @@ After explicit native confirmation, the launcher downloads an NSIS update packag
 
 ## Activity logs
 
-The launcher keeps a recent in-memory activity list and a local activity log for startup stages, service-control actions, and errors. It does not intentionally copy DSH conversations or the existing helper's service log into this activity log. Common token and Bearer forms are redacted, but redaction is not a guarantee that arbitrary user-supplied text is free of sensitive information.
+The launcher keeps a recent in-memory activity list and a local activity log for startup stages, service-control actions, and errors. It does not intentionally copy DSH conversations or the configured helper's service log into this activity log. Common token and Bearer forms are redacted, but redaction is not a guarantee that arbitrary user-supplied text is free of sensitive information.
 
 The in-memory list retains up to 120 entries. If the activity-log file is already larger than 512 KiB, the next write truncates it; this is not a strict maximum file size. There is no automatic upload of these launcher activity logs. Review logs before sharing them in support requests.
 
@@ -63,7 +63,17 @@ Typical Windows locations are:
 %LOCALAPPDATA%\io.local.dsh-wsl-desktop\webview
 ~~~
 
-The working WebView uses the last directory. WebView2 and the local control window may also use engine/system storage. Existing DSH and helper data remain in their separately configured locations.
+The working WebView uses the last directory. WebView2 and the local control window may also use engine/system storage. Existing DSH and legacy helper data remain in their separately configured locations.
+
+First-run setup additionally deploys these files/directories under the selected Linux user:
+
+~~~text
+~/.local/share/dsh-wsl-desktop/manager-1.0.0.py
+~/.local/share/dsh-wsl-desktop/profiles/<profile-id>/config.json
+~/.local/state/dsh-wsl-desktop/<profile-id>
+~~~
+
+The final directory holds manager state/logs, not DSH_HOME. A hash of the setup request contents determines `profile-id`; identical retries can reuse deployed files without overwriting old data. The complete Windows configuration is atomically published last, after Linux deployment. If Windows publication fails, deployed Linux files may remain for reuse on retry; the launcher does not automatically roll back by deleting them. These Linux files may also remain after uninstalling the Windows application.
 
 Closing a window hides it; quitting the launcher does not by itself delete configuration, activity logs, browser data, or DSH projects. The launcher has no built-in clear-all-data control. An installed copy can be uninstalled using Windows Installed apps. Automatic data cleanup during uninstallation has not been verified; inspect remaining application directories before removing them yourself. Do not delete DSH projects or authentication data unless you intend to remove them.
 

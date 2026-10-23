@@ -14,7 +14,7 @@ test('only trusted local content and titlebar views receive narrowly scoped IPC 
   assert.equal(titlebar.local, true); assert.equal(titlebar.remote, undefined);
   assert.deepEqual([...titlebar.permissions].sort(), ['core:event:allow-listen', 'core:event:allow-unlisten', 'allow-titlebar-action', 'allow-open-titlebar-settings', 'allow-open-titlebar-updates', 'allow-get-titlebar-update-state'].sort());
   assert.equal(capability.local, true); assert.equal(capability.remote, undefined);
-  assert.deepEqual([...capability.permissions].sort(), ['allow-get-snapshot', 'allow-open-settings', 'allow-perform-action', 'allow-set-project-directory', 'allow-get-update-snapshot', 'allow-check-update', 'allow-install-update', 'allow-get-notification-snapshot', 'allow-set-notifications-enabled', 'allow-test-notification', 'allow-get-power-snapshot', 'allow-set-power-enabled', 'core:event:allow-listen', 'core:event:allow-unlisten'].sort());
+  assert.deepEqual([...capability.permissions].sort(), ['allow-get-snapshot', 'allow-open-settings', 'allow-perform-action', 'allow-set-project-directory', 'allow-setup-distributions', 'allow-setup-identity', 'allow-complete-setup', 'allow-get-update-snapshot', 'allow-check-update', 'allow-install-update', 'allow-get-notification-snapshot', 'allow-set-notifications-enabled', 'allow-test-notification', 'allow-get-power-snapshot', 'allow-set-power-enabled', 'core:event:allow-listen', 'core:event:allow-unlisten'].sort());
   const navigation = JSON.parse(read('src-tauri/capabilities/settings-navigation.json'));
   assert.deepEqual(navigation.webviews, ['launcher-settings', 'dsh-settings']);
   assert.equal(navigation.local, true); assert.equal(navigation.remote, undefined); assert.equal(navigation.windows, undefined);
@@ -557,10 +557,39 @@ test('remote DSH and titlebars never inherit service or settings IPC', () => {
     assert.equal(capability.webviews.some(label => label.includes('*')), false);
   }
   assert.equal(launcher.webviews.some(label => label.endsWith('-titlebar')), false);
-  for (const permission of titlebar.permissions) assert.ok(!/allow-(?:get-snapshot|perform-action|open-settings|check-update|install-update|set-project-directory|set-notifications-enabled)/.test(permission));
+  for (const permission of titlebar.permissions) assert.ok(!/allow-(?:get-snapshot|perform-action|open-settings|check-update|install-update|set-project-directory|set-notifications-enabled|setup-distributions|setup-identity|complete-setup)/.test(permission));
   const desktop = read('src-tauri/src/desktop.rs');
   const remote = desktop.slice(desktop.indexOf('fn open_dsh('), desktop.indexOf('fn fit_window('));
   assert.ok(remote.includes('WebviewBuilder::new("dsh", WebviewUrl::External(url))'));
   assert.ok(remote.includes('target.origin() == nav_origin.origin()'));
   assert.doesNotMatch(remote, /initialization_script|[.]eval\(/);
+});
+
+test('first-run commands validate local callers before blocking and publish setup only on explicit completion', () => {
+  const source = read('src-tauri/src/desktop_setup.rs');
+  const desktop = read('src-tauri/src/desktop.rs');
+  const build = read('src-tauri/build.rs');
+  const capability = JSON.parse(read('src-tauri/capabilities/launcher.json'));
+  for (const command of ['setup_distributions', 'setup_identity', 'complete_setup']) {
+    const start = source.indexOf('async fn ' + command + '(');
+    assert.ok(start >= 0);
+    const tail = source.slice(start);
+    const next = tail.indexOf('#[tauri::command]');
+    const body = next < 0 ? tail : tail.slice(0, next);
+    assert.ok(body.indexOf('assert_local(&window)?') < body.indexOf('spawn_blocking'));
+    assert.ok(body.includes('assert_local(&window)?'));
+    assert.ok(build.includes('"' + command + '"'));
+    assert.ok(desktop.includes('first_run::' + command));
+    assert.ok(capability.permissions.includes('allow-' + command.replaceAll('_', '-')));
+  }
+  const discovery = source.slice(0, source.indexOf('struct SetupLease'));
+  assert.doesNotMatch(discovery, /setup::complete\(|ensure_ready\(|save_new\(|stop_service\(/);
+  const completion = source.slice(source.indexOf('async fn complete_setup('));
+  assert.ok(completion.includes('compare_exchange(false, true'));
+  assert.ok(completion.indexOf('setup::complete(') < completion.indexOf('ensure_ready('));
+  assert.doesNotMatch(completion, /stop_service|[.]stop\(|[.]run\(/);
+  assert.match(source, /impl Drop for SetupLease/);
+  const ensure = desktop.slice(desktop.indexOf('fn ensure_ready('), desktop.indexOf('fn stop_service('));
+  assert.ok(ensure.indexOf('config::needs_setup(') < ensure.indexOf('check_environment(app, controller)?'));
+  assert.ok(ensure.includes('s.setup_required = true'));
 });

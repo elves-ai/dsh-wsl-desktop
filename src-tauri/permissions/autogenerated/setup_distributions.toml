@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-setup-distributions"
+description = "Enables the setup_distributions command without any pre-configured scope."
+commands.allow = ["setup_distributions"]
+
+[[permission]]
+identifier = "deny-setup-distributions"
+description = "Denies the setup_distributions command without any pre-configured scope."
+commands.deny = ["setup_distributions"]
