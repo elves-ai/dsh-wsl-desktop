@@ -8,9 +8,11 @@
   </head>
   <body>
     <header id="titlebar" class="titlebar" aria-label="窗口标题栏" data-focused="true">
-      <button id="app-menu" class="app-icon" type="button" aria-label="应用菜单" aria-haspopup="menu" aria-keyshortcuts="Alt+M" title="应用菜单 (Alt+M)">
+      <span id="app-logo" class="app-icon" aria-hidden="true">
         <img src="/app-icon.png" width="16" height="16" alt="" />
-      </button>
+      </span>
+      <button id="titlebar-settings" class="settings-control" type="button" aria-label="设置" title="设置"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 2.5 5 0 .6 2.3 1.7 1 2.3-.6 2.5 4.3-1.7 1.7v1.6l1.7 1.7-2.5 4.3-2.3-.6-1.7 1-.6 2.3h-5l-.6-2.3-1.7-1-2.3.6-2.5-4.3 1.7-1.7v-1.6L2.9 9.5l2.5-4.3 2.3.6 1.7-1z" /><circle cx="12" cy="12" r="3" /></svg></button>
+      <button id="titlebar-updates" class="update-control" type="button" aria-label="软件更新" title="软件更新" data-update-available="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m-4 4 4-4 4 4M5 15v5h14v-5" /></svg><span id="titlebar-update-dot" class="update-dot" aria-hidden="true" hidden></span></button>
       <div id="drag-area" class="drag-area" title="拖动窗口；双击最大化或还原">
         <span id="window-title" class="window-title">DeepSeek Harness</span>
       </div>

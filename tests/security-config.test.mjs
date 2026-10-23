@@ -5,70 +5,127 @@ const read = path => readFileSync(new URL('../' + path, import.meta.url), 'utf8'
 test('only trusted local content and titlebar views receive narrowly scoped IPC capabilities', () => {
   const config = JSON.parse(read('src-tauri/tauri.conf.json'));
   const capability = JSON.parse(read('src-tauri/capabilities/launcher.json'));
-  assert.deepEqual(config.app.security.capabilities, ['launcher', 'titlebar']);
-  assert.deepEqual(capability.webviews, ['launcher', 'settings']);
+  assert.deepEqual([...config.app.security.capabilities].sort(), ['launcher', 'settings-navigation', 'titlebar']);
+  assert.deepEqual(capability.webviews, ['launcher', 'launcher-settings', 'dsh-settings']);
   assert.equal(capability.windows, undefined);
   const titlebar = JSON.parse(read('src-tauri/capabilities/titlebar.json'));
-  assert.deepEqual(titlebar.webviews, ['launcher-titlebar', 'settings-titlebar', 'dsh-titlebar']);
+  assert.deepEqual(titlebar.webviews, ['launcher-titlebar', 'dsh-titlebar']);
   assert.equal(titlebar.windows, undefined);
   assert.equal(titlebar.local, true); assert.equal(titlebar.remote, undefined);
-  assert.deepEqual([...titlebar.permissions].sort(), ['core:event:allow-listen', 'core:event:allow-unlisten', 'allow-titlebar-action', 'allow-show-titlebar-menu'].sort());
+  assert.deepEqual([...titlebar.permissions].sort(), ['core:event:allow-listen', 'core:event:allow-unlisten', 'allow-titlebar-action', 'allow-open-titlebar-settings', 'allow-open-titlebar-updates', 'allow-get-titlebar-update-state'].sort());
   assert.equal(capability.local, true); assert.equal(capability.remote, undefined);
   assert.deepEqual([...capability.permissions].sort(), ['allow-get-snapshot', 'allow-open-settings', 'allow-perform-action', 'allow-set-project-directory', 'allow-get-update-snapshot', 'allow-check-update', 'allow-install-update', 'allow-get-notification-snapshot', 'allow-set-notifications-enabled', 'allow-test-notification', 'core:event:allow-listen', 'core:event:allow-unlisten'].sort());
+  const navigation = JSON.parse(read('src-tauri/capabilities/settings-navigation.json'));
+  assert.deepEqual(navigation.webviews, ['launcher-settings', 'dsh-settings']);
+  assert.equal(navigation.local, true); assert.equal(navigation.remote, undefined); assert.equal(navigation.windows, undefined);
+  assert.deepEqual([...navigation.permissions].sort(), ['allow-return-from-settings', 'allow-settings-page-ready']);
   assert.ok(config.app.security.csp.includes("object-src 'none'"));
 });
-test('single titlebar application menu routes settings and leaves guarded service actions in the unchanged tray', () => {
+test('titlebar settings opens its own verified parent directly and removes all popup machinery while tray stays unchanged', () => {
   const desktop = read('src-tauri/src/desktop.rs');
   const titlebar = read('src-tauri/src/desktop_titlebar.rs');
-  const menuFields = titlebar.match(/struct Menus\s*\{([^}]+)\}/)[1];
-  assert.equal((menuFields.match(/:\s*Menu</g) || []).length, 1, 'only one application menu');
-  assert.doesNotMatch(menuFields, /\b(?:file|help)\s*:/);
-  assert.equal((titlebar.match(/Menu::with_items\(/g) || []).length, 1);
-  assert.equal((titlebar.match(/PredefinedMenuItem::separator\(app\)/g) || []).length, 1);
-  const titlebarIds = [...titlebar.matchAll(/MenuItem::with_id\(\s*app,\s*"([^"]+)"/g)].map(match => match[1]);
-  assert.deepEqual(titlebarIds.sort(), ['logs', 'open', 'settings']);
-  for (const label of ['打开 DSH', '设置…', '诊断日志…']) assert.ok(titlebar.includes(label));
-  assert.doesNotMatch(titlebar, /"(?:start|stop|restart|quit|exit|environment|notifications|updates)"/);
-  assert.match(titlebar, /\.popup_at\(window, LogicalPosition::new\(x, HEIGHT\)\)/);
+  assert.doesNotMatch(titlebar, /menu::|MenuItem|\bMenus\b|application_menu|show_titlebar_menu|popup_at/);
+  assert.doesNotMatch(desktop, /titlebar::Menus|application_menu|show_titlebar_menu|"(?:launcher|dsh)\.(?:settings|logs)"/);
+  const declaration = titlebar.slice(titlebar.indexOf('fn open_titlebar_settings('), titlebar.indexOf('pub(super) fn content_geometry('));
+  assert.ok(declaration.startsWith('fn open_titlebar_settings('));
+  const params = declaration.slice(0, declaration.indexOf(') ->'));
+  assert.match(params, /view:\s*Webview/);
+  assert.doesNotMatch(params, /(?:url|host|label|path|section|window|x):/);
+  const body = declaration.slice(declaration.indexOf(') ->'));
+  assert.match(body, /let window = assert_titlebar\(&view\)\?;/);
+  assert.ok(body.indexOf('assert_titlebar(&view)?') < body.indexOf('spawn_blocking'));
+  assert.match(body, /spawn_blocking/);
+  assert.match(body, /settings_page::show_in\(&window,\s*"environment"\)/);
+  assert.doesNotMatch(body, /show_settings\(|perform_action|ensure_ready\(|open_dsh\(|[.]navigate\(|[.]destroy\(|[.]eval\(/);
   const tray = desktop.slice(desktop.indexOf('let open = MenuItem::with_id'), desktop.indexOf('TrayIconBuilder::with_id'));
   const trayIds = [...tray.matchAll(/MenuItem::with_id\(\s*app,\s*"([^"]+)"/g)].map(match => match[1]);
   assert.deepEqual(trayIds, ['open', 'logs', 'updates', 'start', 'stop', 'restart', 'quit', 'exit']);
   assert.match(tray, /&open,\s*&control,\s*&update,\s*&start,\s*&stop,\s*&restart,\s*&quit,\s*&exit/);
   assert.match(desktop, /TrayIconBuilder::with_id\("dsh-tray"\)[\s\S]*?\.menu\(&menu\)/);
-  assert.equal((desktop.match(/\.on_menu_event\(/g) || []).length, 1, 'popup and tray must not dispatch twice');
+  assert.equal((desktop.match(/\.on_menu_event\(/g) || []).length, 1, 'tray actions dispatch once');
   assert.ok(desktop.includes('handle_menu_action(app, event.id.as_ref())'));
-  assert.equal((desktop.match(/\.decorations\(false\)/g) || []).length, 3);
-  assert.equal((desktop.match(/titlebar::attach\(&/g) || []).length, 3);
-  assert.doesNotMatch(desktop, /\.menu\(application_menu\)|initialization_script/);
+  assert.equal((desktop.match(/\.decorations\(false\)/g) || []).length, 2, 'settings creates no top-level window');
+  assert.equal((desktop.match(/titlebar::attach\(&/g) || []).length, 2);
+  assert.doesNotMatch(desktop, /initialization_script/);
   const handler = desktop.slice(desktop.indexOf('fn handle_menu_action('), desktop.indexOf('pub fn run()'));
   for (const action of ['open', 'logs', 'start', 'stop', 'restart', 'quit', 'exit']) assert.ok(handler.includes('"' + action + '" => dispatch(app, "' + action + '")'));
   assert.ok(handler.includes('updates::show_updates(&app)'));
   assert.ok(handler.includes('updates::check(&app, &state).await'));
-  const settingsHandler = handler.slice(handler.indexOf('"settings"'), handler.indexOf('"updates" =>'));
-  assert.match(settingsHandler, /"settings"\s*\|\s*"environment"\s*\|\s*"notifications"\s*=>/);
-  assert.match(settingsHandler, /let section = if id == "settings" \{ "environment" \} else \{ id \}\.to_owned\(\)/);
-  assert.ok(settingsHandler.includes('show_settings(&app, &section)'));
-  assert.doesNotMatch(handler, /show_launcher|launcher-show-settings/);
-  assert.doesNotMatch(handler, /install_update|set_notifications_enabled|set_project_directory|backend\./);
+  assert.doesNotMatch(handler, /settings_page::show_in|"settings"\s*\||"environment"\s*\||"notifications"\s*=>/);
+  assert.doesNotMatch(handler, /show_launcher|launcher-show-settings|install_update|set_notifications_enabled|set_project_directory|backend\./);
 });
 
 test('titlebar commands validate the calling view, local document and its own parent window', () => {
   const titlebar = read('src-tauri/src/desktop_titlebar.rs');
-  for (const pair of ['("launcher-titlebar", "launcher")', '("settings-titlebar", "settings")', '("dsh-titlebar", "dsh")']) assert.ok(titlebar.includes(pair));
+  for (const pair of ['("launcher-titlebar", "launcher")', '("dsh-titlebar", "dsh")']) assert.ok(titlebar.includes(pair));
   assert.ok(titlebar.includes('url.path() == "/titlebar.html"'));
   assert.ok(titlebar.includes('url.query().is_none()'));
   assert.ok(titlebar.includes('url.fragment().is_none()'));
   assert.ok(titlebar.includes('url.port() == Some(1420)'));
-  assert.equal((titlebar.match(/let window = assert_titlebar\(&view\)\?;/g) || []).length, 2);
-  assert.ok(titlebar.includes('x.is_finite()'));
+  assert.equal((titlebar.match(/assert_titlebar\(&view\)\?;/g) || []).length, 4);
+  assert.doesNotMatch(titlebar, /x[.]is_finite|popup_at|show_titlebar_menu/);
   assert.ok(titlebar.includes('Action::Close => window.close()'));
   assert.ok(titlebar.includes('Action::Drag => window.start_dragging()'));
   assert.ok(titlebar.includes('EventTarget::webview('));
   assert.doesNotMatch(titlebar, /perform_action|install_update|backend\.|eval\(|initialization_script/);
-  for (const command of ['titlebar_action', 'show_titlebar_menu']) {
+  assert.doesNotMatch(read('src-tauri/build.rs'), /show_titlebar_menu/);
+  for (const command of ['titlebar_action', 'open_titlebar_settings', 'open_titlebar_updates', 'get_titlebar_update_state']) {
     assert.ok(read('src-tauri/build.rs').includes('"' + command + '"'));
     assert.ok(read('src-tauri/src/desktop.rs').includes('titlebar::' + command));
   }
+});
+
+test('titlebar update navigation and availability getter remain own-parent fixed-purpose commands', () => {
+  const titlebar = read('src-tauri/src/desktop_titlebar.rs');
+  const extract = name => {
+    const start = titlebar.indexOf('fn ' + name + '('); assert.ok(start >= 0, name);
+    const tail = titlebar.slice(start); const next = tail.indexOf('#[tauri::command]');
+    return next < 0 ? tail.slice(0, tail.indexOf('pub(super) fn content_geometry(')) : tail.slice(0, next);
+  };
+  const open = extract('open_titlebar_updates');
+  const params = open.slice(0, open.indexOf(') ->'));
+  assert.match(params, /view:\s*Webview/); assert.doesNotMatch(params, /(?:url|host|label|path|section|window|state|x):/);
+  const body = open.slice(open.indexOf(') ->'));
+  assert.match(body, /let window = assert_titlebar\(&view\)\?;/);
+  assert.ok(body.indexOf('assert_titlebar(&view)?') < body.indexOf('spawn_blocking'));
+  assert.match(body, /settings_page::show_in\(&window,\s*"updates"\)/);
+  assert.doesNotMatch(body, /show_updates\(|show_settings\(|check\(|check_update|install_update|perform_action|ensure_ready\(|open_dsh\(|[.]navigate\(|[.]destroy\(|[.]eval\(/);
+  const getter = extract('get_titlebar_update_state');
+  const getterParams = getter.slice(0, getter.indexOf(') ->'));
+  assert.match(getterParams, /view:\s*Webview/); assert.match(getterParams, /State<'_,[^>]*Arc<[^>]*Updates/);
+  assert.doesNotMatch(getterParams, /(?:url|host|label|path|section|window|version|args):/);
+  assert.match(getter, /Result<[^>]*UpdateNotice, String>/);
+  assert.ok(getter.indexOf('assert_titlebar(&view)?') < getter.indexOf('state.titlebar_notice()'));
+  assert.match(getter, /Ok\(state[.]titlebar_notice\(\)\)/);
+  assert.doesNotMatch(getter, /check_update|install_update|perform_action|get_update_snapshot|[.]check\(|[.]download\(|[.]install\(|show_in\(|show_settings\(|backend[.]/);
+  const titlebarCapability = JSON.parse(read('src-tauri/capabilities/titlebar.json'));
+  for (const command of ['open_titlebar_updates', 'get_titlebar_update_state']) {
+    const permission = 'allow-' + command.replaceAll('_', '-');
+    assert.ok(titlebarCapability.permissions.includes(permission));
+    for (const other of ['launcher', 'settings-navigation']) assert.equal(JSON.parse(read('src-tauri/capabilities/' + other + '.json')).permissions.includes(permission), false);
+  }
+});
+
+test('titlebars receive only a boolean update projection while full updater state stays in trusted content', () => {
+  const source = read('src-tauri/src/desktop_updates.rs');
+  const fields = source.match(/struct UpdateNotice\s*\{([^}]+)\}/)[1];
+  assert.match(fields, /^\s*(?:pub(?:\([^)]*\))?\s+)?available:\s*bool,?\s*$/);
+  assert.doesNotMatch(fields, /version|notes|url|signature|package|download|phase|message/);
+  const getter = source.slice(source.indexOf('fn titlebar_notice('), source.indexOf('fn change('));
+  assert.match(getter, /UpdateNotice\s*\{\s*available:\s*self[.]snapshot\(\)[.]version[.]is_some\(\),?\s*\}/);
+  assert.doesNotMatch(getter, /check_update|install_update|[.]check\(|[.]download\(|[.]install\(|show_settings\(/);
+  const change = source.slice(source.indexOf('fn change('), source.indexOf('fn fail('));
+  const unlock = change.indexOf('};'); const firstEmit = change.indexOf('app.emit_to(');
+  assert.ok(unlock >= 0 && firstEmit > unlock, 'data lock must be released before emitting to any view');
+  assert.match(change, /let snapshot =\s*\{[\s\S]*?self[.]data[.]lock\(\)[\s\S]*?data[.]snapshot[.]clone\(\)\s*\};/);
+  const content = change.slice(change.indexOf('for label in ["launcher", "launcher-settings", "dsh-settings"]'), change.indexOf('let notice ='));
+  assert.match(content, /"launcher-update-state",\s*&snapshot/); assert.doesNotMatch(content, /titlebar/);
+  assert.match(change, /let notice = UpdateNotice\s*\{\s*available:\s*snapshot[.]version[.]is_some\(\),?\s*\};/);
+  const badge = change.slice(change.indexOf('for label in ["launcher-titlebar", "dsh-titlebar"]'));
+  assert.match(badge, /EventTarget::webview\(label\),\s*"titlebar-update-state",\s*&notice/);
+  assert.doesNotMatch(badge, /&snapshot|launcher-update-state|version|notes|signature|url/);
+  const frontend = read('src/titlebar.ts');
+  assert.doesNotMatch(frontend, /['"](?:check_update|install_update|get_update_snapshot|perform_action)['"]|['"]launcher-update-state['"]/);
 });
 
 test('split-view lifecycle keeps DSH authentication in its original remote content view', () => {
@@ -200,11 +257,23 @@ test('pending-question reminders share safe delivery and only read existing sess
   assert.ok(native.includes('rpc.page(session_id, cursor)'));
   assert.ok(native.includes('DSH · 需要你回答'));
   const delivery = native.slice(native.indexOf('fn deliver('), native.indexOf('pub(super) fn start('));
-  for (const guard of ['foreground(app)', '!data.snapshot.enabled', 'data.epoch != epoch', 'controller.exiting.load', 'controller.snapshot().state != "ready"']) assert.ok(delivery.includes(guard));
+  for (const guard of ['foreground(app)', '!settings.should_notify(is_foreground)', 'notify_when_focused: data.snapshot.notify_when_focused', 'data.epoch != epoch', 'controller.exiting.load', 'controller.snapshot().state != "ready"']) assert.ok(delivery.includes(guard));
   const transport = read('src-tauri/src/notification_transport.rs');
   assert.ok(!transport.includes('$events'));
   assert.ok(!transport.includes('userQuestions/answer'));
   assert.ok(!transport.includes('session/follow'));
+});
+
+test('focus policy saves before updating memory and does not reset notification generations', () => {
+  const source = read('src-tauri/src/desktop_notifications.rs');
+  const setter = source.slice(source.indexOf('pub(super) async fn set_notifications_enabled('), source.indexOf('pub(super) async fn test_notification('));
+  assert.ok(setter.includes('notify_when_focused: Option<bool>'));
+  assert.ok(setter.includes('.unwrap_or(data.snapshot.notify_when_focused)'));
+  assert.ok(setter.indexOf('settings.save(&state.directory)?') < setter.indexOf('data.snapshot.notify_when_focused = settings.notify_when_focused'));
+  assert.match(setter, /if data.snapshot.enabled != enabled \{\s*data.epoch = data.epoch.wrapping_add\(1\)/);
+  assert.equal((setter.match(/data.epoch =/g) || []).length, 1);
+  assert.ok(source.includes('notify_when_focused: settings.notify_when_focused'));
+  assert.ok(source.includes('listening_message(data.snapshot.notify_when_focused)'));
 });
 
 test('native notifications explicitly request the Windows default sound', () => {
@@ -267,15 +336,16 @@ test('local builds explicitly avoid production updater signing secrets', () => {
   }
 });
 
-test('trusted content IPC validates same-parent identity and exact local path and query', () => {
+test('trusted content IPC validates each fixed child-parent pair and exact local path and query', () => {
   const desktop = read('src-tauri/src/desktop.rs');
   const content = desktop.slice(desktop.indexOf('fn local_content('), desktop.indexOf('fn assert_local('));
   for (const guard of ['url.port().is_none()', 'cfg!(debug_assertions)', 'url.host_str() == Some("127.0.0.1")', 'url.port() == Some(1420)', '!url.username().is_empty()', 'url.password().is_some()', 'url.fragment().is_some()', 'matches!(url.path(), "/" | "/index.html")', '"launcher" => url.query().is_none()', 'pairs.len() == 2', 'key.as_ref() == "view" && value.as_ref() == "settings"', 'key.as_ref() == "section" && settings_section(value.as_ref())', '_ => false']) assert.ok(content.includes(guard), guard);
+  for (const label of ['launcher-settings', 'dsh-settings']) assert.ok(content.includes('"' + label + '"'));
   const local = desktop.slice(desktop.indexOf('fn assert_local('), desktop.indexOf('#[tauri::command]', desktop.indexOf('fn assert_local(')));
   assert.ok(local.includes('(window.label(), window.window().label())'));
-  assert.ok(local.includes('("launcher", "launcher") | ("settings", "settings")'));
+  for (const pair of ['("launcher", "launcher")', '("launcher-settings", "launcher")', '("dsh-settings", "dsh")']) assert.ok(local.includes(pair), pair);
   assert.ok(local.includes('!local_content(&url, window.label())'));
-  assert.doesNotMatch(local, /"dsh"|titlebar/);
+  assert.doesNotMatch(local, /\("dsh",\s*"dsh"\)|\("launcher-settings",\s*"dsh"\)|\("dsh-settings",\s*"launcher"\)|titlebar/);
   for (const command of ['open_settings', 'get_snapshot', 'perform_action', 'set_project_directory']) {
     const declaration = desktop.slice(desktop.indexOf('fn ' + command + '('));
     const body = declaration.slice(declaration.indexOf(') ->'));
@@ -283,22 +353,76 @@ test('trusted content IPC validates same-parent identity and exact local path an
   }
 });
 
-test('settings is a separate reusable trusted webview with isolated titlebar and fixed section routing', () => {
+test('settings navigation reuses local children in the existing parent without replacing the remote workspace', () => {
   const desktop = read('src-tauri/src/desktop.rs');
-  const settings = desktop.slice(desktop.indexOf('pub fn show_settings('), desktop.indexOf('fn activate('));
+  const settings = read('src-tauri/src/desktop_settings.rs');
+  assert.ok(settings.includes('"launcher" => Some("launcher-settings")'));
+  assert.ok(settings.includes('"dsh" => Some("dsh-settings")'));
+  assert.match(settings, /_ => None/);
   assert.ok(settings.includes('if !settings_section(section)'));
-  assert.ok(settings.includes('SETTINGS_WINDOW.lock()'));
-  assert.ok(settings.includes('app.get_window("settings")'));
-  assert.ok(settings.includes('WindowBuilder::new(app, "settings")'));
-  assert.ok(settings.includes('EventTarget::webview("settings")'));
-  assert.ok(settings.includes('"launcher-show-settings"'));
+  assert.ok(settings.includes('NAVIGATION.lock()'));
+  assert.match(settings, /AtomicU8/); assert.match(settings, /Ordering::SeqCst/);
+  assert.ok(settings.includes('app.get_webview(page_label)'));
+  assert.ok(settings.includes('page.window().label() != window.label()'));
+  assert.ok(settings.includes('window.add_child('));
   assert.ok(settings.includes('index.html?view=settings&section={section}'));
-  assert.ok(settings.includes('.on_navigation(|target| local_content(target, "settings"))'));
+  assert.ok(settings.includes('local_content(target, page_label)'));
   assert.ok(settings.includes('tauri::webview::NewWindowResponse::Deny'));
-  assert.ok(settings.includes('titlebar::attach(&window)'));
-  assert.doesNotMatch(settings, /[.]navigate\(|show_launcher|ensure_ready|perform\(|initialization_script/);
+  assert.ok(settings.includes('"launcher-show-settings"'));
+  assert.doesNotMatch(settings, /WindowBuilder|[.]navigate\(|[.]destroy\(|[.]reparent\(|[.]eval\(|ensure_ready\(|open_dsh\(|initialization_script/);
+  assert.doesNotMatch(desktop, /WindowBuilder::new\(app, "settings"\)|get_window\("settings"\)|SETTINGS_WINDOW/);
+  const guard = settings.slice(settings.indexOf('fn assert_page('), settings.indexOf('fn reveal('));
+  assert.ok(guard.includes('assert_local(view)?;'));
+  assert.ok(guard.includes('label(window.label()) != Some(view.label())'));
+  for (const command of ['return_from_settings', 'settings_page_ready']) {
+    const declaration = settings.slice(settings.indexOf('fn ' + command + '('));
+    assert.ok(declaration.startsWith('fn ' + command + '('), command);
+    const params = declaration.slice(0, declaration.indexOf(') ->'));
+    assert.match(params, /view:\s*Webview/);
+    assert.doesNotMatch(params, /(?:url|host|label|path|section|window):/);
+    const body = declaration.slice(declaration.indexOf(') ->'));
+    assert.ok(body.slice(body.indexOf('{') + 1).trimStart().startsWith('let window = assert_page(&view)?;'), command + ' first validates its own trusted settings child');
+    assert.ok(read('src-tauri/build.rs').includes('"' + command + '"'));
+    assert.ok(desktop.includes('settings_page::' + command));
+  }
+  const back = settings.slice(settings.indexOf('fn return_from_settings('));
+  assert.ok(back.includes('content.show()')); assert.ok(back.includes('view.hide()'));
+  assert.ok(back.indexOf('content.show()') < back.indexOf('view.hide()'), 'restore source before hiding settings');
+  assert.ok(back.includes('content.set_focus()'));
+  assert.ok(back.includes('REQUESTED.fetch_and(!bit(window.label())'));
+  assert.doesNotMatch(back, /[.]navigate\(|open_dsh\(|ensure_ready\(|perform\(/);
+  const ready = settings.slice(settings.indexOf('fn settings_page_ready('), settings.indexOf('fn return_from_settings('));
+  assert.ok(ready.includes('state.ready = true'));
+  assert.ok(ready.includes('REQUESTED.load(Ordering::SeqCst) & bit(window.label()) != 0'));
+  assert.ok(ready.includes('reveal(&window, &view)'));
+  assert.ok(ready.includes('REQUESTED.fetch_and(!bit(window.label())'));
+  assert.ok(ready.includes('return Err(error)'));
+  assert.ok(ready.includes('Ok(state.section.to_owned())'));
+  const reveal = settings.slice(settings.indexOf('fn reveal('), settings.indexOf('fn show_in('));
+  assert.ok(reveal.includes('if result.is_err()'));
+  assert.ok(reveal.includes('content.show()'));
+  assert.ok(reveal.includes('page.hide()'));
+  assert.doesNotMatch(reveal, /window[.]show\(|[.]unminimize\(|[.]destroy\(|[.]navigate\(/);
+  const open = desktop.slice(desktop.indexOf('async fn open_settings('), desktop.indexOf('fn get_snapshot('));
+  assert.ok(open.includes('window.window()'));
+  assert.ok(open.includes('settings_page::show_in('));
   assert.ok(read('src-tauri/build.rs').includes('"open_settings"'));
   assert.ok(desktop.includes('            open_settings,'));
+});
+
+test('all trusted settings children receive snapshots and foreground notifications follow the visible workspace route', () => {
+  for (const path of ['src-tauri/src/desktop.rs', 'src-tauri/src/desktop_updates.rs', 'src-tauri/src/desktop_notifications.rs']) {
+    const source = read(path);
+    assert.ok(source.includes('["launcher", "launcher-settings", "dsh-settings"]'), path);
+    assert.doesNotMatch(source, /EventTarget::webview\("settings"\)/);
+  }
+  const notifications = read('src-tauri/src/desktop_notifications.rs');
+  const foreground = notifications.slice(notifications.indexOf('fn foreground('), notifications.indexOf('fn listening_message('));
+  assert.ok(foreground.includes('settings_page::is_active("dsh")'));
+  assert.ok(foreground.includes('window.is_visible()'));
+  assert.ok(foreground.includes('window.is_minimized()'));
+  assert.ok(foreground.includes('window.is_focused()'));
+  assert.doesNotMatch(foreground, /epoch|reset\(|navigate\(|hide\(/);
 });
 
 test('tray-only service controls remain native, guarded and distinct from settings navigation', () => {
@@ -306,7 +430,7 @@ test('tray-only service controls remain native, guarded and distinct from settin
   const tray = desktop.slice(desktop.indexOf('let menu = Menu::with_items'), desktop.indexOf('TrayIconBuilder::with_id'));
   for (const action of ['open', 'start', 'stop', 'restart', 'quit', 'exit']) {
     assert.ok(tray.includes('&' + action), action);
-    if (action !== 'open') assert.ok(!titlebar.includes('"' + action + '"'), action + ' is tray-only');
+    assert.ok(!titlebar.includes('"' + action + '"'), action + ' is tray-only');
   }
   const perform = desktop.slice(desktop.indexOf('fn perform('), desktop.indexOf('fn dispatch('));
   assert.ok(perform.includes('["stop", "restart", "exit"].contains(&action) && !confirm(action)'));
@@ -333,7 +457,8 @@ test('silent available update checks publish state but never open or focus setti
 test('remote DSH and titlebars never inherit service or settings IPC', () => {
   const launcher = JSON.parse(read('src-tauri/capabilities/launcher.json'));
   const titlebar = JSON.parse(read('src-tauri/capabilities/titlebar.json'));
-  for (const capability of [launcher, titlebar]) {
+  const navigation = JSON.parse(read('src-tauri/capabilities/settings-navigation.json'));
+  for (const capability of [launcher, titlebar, navigation]) {
     assert.equal(capability.webviews.includes('dsh'), false); assert.equal(capability.remote, undefined); assert.equal(capability.windows, undefined);
     assert.equal(capability.webviews.some(label => label.includes('*')), false);
   }

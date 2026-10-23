@@ -32,6 +32,7 @@ impl Notifications {
         let snapshot = match NotificationSettings::load(&directory) {
             Ok(settings) => NotificationSnapshot {
                 enabled: settings.enabled,
+                notify_when_focused: settings.notify_when_focused,
                 phase: if settings.enabled {
                     "connecting"
                 } else {
@@ -39,7 +40,7 @@ impl Notifications {
                 }
                 .into(),
                 message: if settings.enabled {
-                    "等待 DSH 工作窗口完成登录；将自动检查后台执行结果。"
+                    "等待 DSH 工作窗口完成登录；将自动检查执行结果。"
                 } else {
                     "系统通知已关闭。"
                 }
@@ -47,6 +48,7 @@ impl Notifications {
             },
             Err(message) => NotificationSnapshot {
                 enabled: false,
+                notify_when_focused: false,
                 phase: "error".into(),
                 message,
             },
@@ -70,7 +72,7 @@ impl Notifications {
     }
     fn publish(&self, app: &tauri::AppHandle) {
         let snapshot = self.snapshot();
-        for label in ["launcher", "settings"] {
+        for label in ["launcher", "launcher-settings", "dsh-settings"] {
             let _ = app.emit_to(
                 EventTarget::webview(label),
                 "launcher-notification-state",
@@ -86,6 +88,10 @@ impl Notifications {
             }
             let (phase, message) = match &data.delivery_error {
                 Some(error) => ("error", error.clone()),
+                None if phase == "listening" => (
+                    phase,
+                    listening_message(data.snapshot.notify_when_focused).to_owned(),
+                ),
                 None => (phase, message.to_owned()),
             };
             if data.snapshot.phase == phase && data.snapshot.message == message {
@@ -127,6 +133,7 @@ pub(super) async fn set_notifications_enabled(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<Notifications>>,
     enabled: bool,
+    notify_when_focused: Option<bool>,
 ) -> Result<NotificationSnapshot, String> {
     assert_local(&window)?;
     let state = state.inner().clone();
@@ -134,19 +141,29 @@ pub(super) async fn set_notifications_enabled(
         {
             // Serializes disk writes and notification delivery with disable.
             let mut data = state.data.lock().unwrap_or_else(|e| e.into_inner());
-            NotificationSettings { enabled }.save(&state.directory)?;
-            data.epoch = data.epoch.wrapping_add(1);
-            data.delivery_error = None;
-            data.snapshot = NotificationSnapshot {
+            let settings = NotificationSettings {
                 enabled,
-                phase: if enabled { "connecting" } else { "disabled" }.into(),
-                message: if enabled {
-                    "已启用，正在连接 DSH；仅在工作窗口处于后台时提醒。"
+                notify_when_focused: notify_when_focused
+                    .unwrap_or(data.snapshot.notify_when_focused),
+            };
+            settings.save(&state.directory)?;
+            // Only enable/disable starts a new generation. Changing the focus policy
+            // must not discard cursors or replay already-consumed pending questions.
+            if data.snapshot.enabled != enabled {
+                data.epoch = data.epoch.wrapping_add(1);
+                data.delivery_error = None;
+                data.snapshot.phase = if enabled { "connecting" } else { "disabled" }.into();
+                data.snapshot.message = if enabled {
+                    "已启用，正在连接 DSH。"
                 } else {
                     "系统通知已关闭。"
                 }
-                .into(),
-            };
+                .into();
+            } else if data.snapshot.phase == "listening" && data.delivery_error.is_none() {
+                data.snapshot.message = listening_message(settings.notify_when_focused).into();
+            }
+            data.snapshot.enabled = settings.enabled;
+            data.snapshot.notify_when_focused = settings.notify_when_focused;
         }
         state.publish(&app);
         state.wake.notify_all();
@@ -254,14 +271,23 @@ fn client(app: &tauri::AppHandle, origin: &str) -> Result<RpcClient, String> {
 }
 
 fn foreground(app: &tauri::AppHandle) -> bool {
-    app.get_window("dsh").is_some_and(|window| {
-        window.is_visible().unwrap_or(true)
-            && !window.is_minimized().unwrap_or(false)
-            && window.is_focused().unwrap_or(true)
-    })
+    !super::settings_page::is_active("dsh")
+        && app.get_window("dsh").is_some_and(|window| {
+            window.is_visible().unwrap_or(true)
+                && !window.is_minimized().unwrap_or(false)
+                && window.is_focused().unwrap_or(true)
+        })
 }
 
-/// Share the same foreground, disable and exit guards for every notification kind.
+fn listening_message(notify_when_focused: bool) -> &'static str {
+    if notify_when_focused {
+        "正在检查执行结果与待答问题（约每 3 秒）；窗口聚焦时也提醒，不显示正文。"
+    } else {
+        "正在检查执行结果与待答问题（约每 3 秒）；前台静默，不显示正文。"
+    }
+}
+
+/// Share the same focus policy, disable and exit guards for every notification kind.
 fn deliver(
     app: &tauri::AppHandle,
     controller: &Controller,
@@ -274,9 +300,12 @@ fn deliver(
     // lock while the UI could be reading a notification snapshot.
     let is_foreground = foreground(app);
     let mut data = state.data.lock().unwrap_or_else(|e| e.into_inner());
-    if !data.snapshot.enabled
+    let settings = NotificationSettings {
+        enabled: data.snapshot.enabled,
+        notify_when_focused: data.snapshot.notify_when_focused,
+    };
+    if !settings.should_notify(is_foreground)
         || data.epoch != epoch
-        || is_foreground
         || controller.exiting.load(Ordering::SeqCst)
         || controller.snapshot().state != "ready"
     {

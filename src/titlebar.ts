@@ -4,6 +4,7 @@ import './titlebar.css';
 
 type TitlebarState = { maximized: boolean; focused: boolean; title: string };
 type WindowAction = 'state' | 'minimize' | 'maximize' | 'close' | 'drag';
+type UpdateNotice = { available: boolean };
 
 const native = isTauri();
 const titlebar = document.getElementById('titlebar')!;
@@ -11,12 +12,16 @@ const dragArea = document.getElementById('drag-area')!;
 const title = document.getElementById('window-title')!;
 const status = document.getElementById('titlebar-status')!;
 const maximize = document.getElementById('window-maximize')!;
-const menuButton = document.getElementById('app-menu') as HTMLButtonElement;
+const settingsButton = document.getElementById('titlebar-settings') as HTMLButtonElement;
+const updateButton = document.getElementById('titlebar-updates') as HTMLButtonElement;
+const updateDot = document.getElementById('titlebar-update-dot')!;
 const actions: WindowAction[] = ['minimize', 'maximize', 'close'];
 const windowButtons = actions.map(action => document.getElementById('window-' + action) as HTMLButtonElement);
 let disposed = false;
 let unlisten: (() => void) | undefined;
-let menuPending = false;
+let navigationPending = false;
+let unlistenUpdates: (() => void) | undefined;
+let updateRevision = 0;
 let stateRevision = 0;
 const pendingActions = new Set<WindowAction>();
 titlebar.setAttribute('data-native', String(native));
@@ -56,24 +61,32 @@ async function windowAction(action: WindowAction) {
   }
 }
 
-async function showMenu() {
-  if (!native || disposed || menuPending) return;
-  menuPending = true;
-  menuButton.disabled = true;
+async function showSettings(section: 'environment' | 'updates' = 'environment') {
+  if (disposed || navigationPending) return;
+  if (!native) {
+    window.location.href = section === 'updates'
+      ? './index.html?view=settings&section=updates'
+      : './index.html?view=settings&section=environment';
+    return;
+  }
+  navigationPending = true;
+  settingsButton.disabled = updateButton.disabled = true;
   try {
-    await invoke<void>('show_titlebar_menu', { x: menuButton.getBoundingClientRect().left });
+    await invoke<void>(section === 'updates' ? 'open_titlebar_updates' : 'open_titlebar_settings');
     announce('');
   } catch {
-    announce('菜单打开失败，请重试。');
+    announce(section === 'updates' ? '更新页面打开失败，请重试。' : '设置打开失败，请重试。');
   } finally {
-    menuPending = false;
-    if (!disposed) menuButton.disabled = false;
+    navigationPending = false;
+    if (!disposed) settingsButton.disabled = updateButton.disabled = false;
   }
 }
 
-menuButton.disabled = !native;
-menuButton.addEventListener('click', event => {
-  if (event.detail <= 1) void showMenu();
+settingsButton.addEventListener('click', event => {
+  if (event.detail <= 1) void showSettings();
+});
+updateButton.addEventListener('click', event => {
+  if (event.detail <= 1) void showSettings('updates');
 });
 actions.forEach((action, index) => {
   windowButtons[index].disabled = !native;
@@ -94,25 +107,22 @@ document.addEventListener('keydown', event => {
     (document.activeElement as HTMLElement | null)?.blur();
     return;
   }
-  if (!native || disposed || !event.altKey || event.ctrlKey || event.metaKey || event.repeat) return;
-  if (event.key.toLowerCase() === 'm') {
-    event.preventDefault();
-    void showMenu();
-  }
 });
 
 function cleanup() {
   disposed = true;
   unlisten?.();
   unlisten = undefined;
+  unlistenUpdates?.();
+  unlistenUpdates = undefined;
 }
 window.addEventListener('beforeunload', cleanup);
 window.addEventListener('pagehide', cleanup);
 
 async function initialize() {
   if (!native) {
-    title.textContent = '浏览器预览 · 原生功能不可用';
-    announce('浏览器预览：菜单及窗口操作仅在桌面应用可用。');
+    title.textContent = '浏览器预览 · 窗口操作不可用';
+    announce('浏览器预览：点击设置可预览页面，窗口操作仅在桌面应用可用。');
     return;
   }
   try {
@@ -129,4 +139,34 @@ async function initialize() {
   }
   if (!disposed) await windowAction('state');
 }
+function applyUpdateNotice(notice: UpdateNotice) {
+  if (disposed) return;
+  const available = notice?.available === true;
+  updateDot.hidden = !available;
+  updateButton.setAttribute('data-update-available', String(available));
+  const label = available ? '软件更新（有新版本）' : '软件更新';
+  updateButton.setAttribute('aria-label', label);
+  updateButton.setAttribute('title', label);
+}
+
+async function initializeUpdateNotice() {
+  if (!native || disposed) return;
+  try {
+    const stop = await listen<UpdateNotice>('titlebar-update-state', event => {
+      if (disposed) return;
+      updateRevision += 1;
+      applyUpdateNotice(event.payload);
+    });
+    if (disposed) { stop(); return; }
+    unlistenUpdates = stop;
+  } catch { /* The button remains usable even if the background indicator cannot subscribe. */ }
+  if (disposed) return;
+  const revision = updateRevision;
+  try {
+    const notice = await invoke<UpdateNotice>('get_titlebar_update_state');
+    if (!disposed && updateRevision === revision) applyUpdateNotice(notice);
+  } catch { /* Unknown availability is not an update; never block opening the update page. */ }
+}
+
 void initialize();
+void initializeUpdateNotice();

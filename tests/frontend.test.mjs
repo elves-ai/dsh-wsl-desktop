@@ -10,10 +10,11 @@ const checkIds = ['wsl', 'config', 'distribution', 'user', 'python', 'launcher',
 const environment = (extra = {}) => ({ checks: checkIds.map(id => ({ id, label: id, status: 'passed', message: '已通过', hint: '' })), repository: '/home/test/deepseek-harness', ...extra });
 const base = (extra = {}) => ({ state: 'ready', phase: '已就绪', message: '正常', busy: false, managed: true, origin: 'http://127.0.0.1:3080', last_error: null, logs: [], environment: environment(), environment_checking: false, config_path: 'C:/test/config.json', ...extra });
 const update = (extra = {}) => ({ current_version: '0.1.0', phase: 'idle', version: null, notes: null, downloaded: 0, total: null, message: '可检查更新', busy: false, ...extra });
-const notification = (extra = {}) => ({ enabled: false, phase: 'disabled', message: '未启用系统通知。', ...extra });
+const notification = (extra = {}) => ({ enabled: false, notify_when_focused: false, phase: 'disabled', message: '未启用系统通知。', ...extra });
 const listening = (extra = {}) => notification({ enabled: true, phase: 'listening', message: '通知检查正常', ...extra });
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 async function mount(native, initial = base(), options = {}) {
+  let savedNotification = options.initialNotification || notification();
   const nodes = new Map(); const subscriptions = new Map(); const calls = []; const windowHandlers = new Map(); const listenCalls = []; const unlistened = [];
   const node = id => {
     if (!nodes.has(id)) nodes.set(id, { id, textContent: '', dataset: {}, hidden: false, disabled: false, checked: false, open: false, scrollTop: 0, scrollHeight: 0, clientHeight: 0, handlers: {}, attributes: {}, set innerHTML(_) { throw new Error('Native data must not use HTML'); }, addEventListener(name, fn) { this.handlers[name] = fn; }, setAttribute(name, value) { this.attributes[name] = value; }, removeAttribute(name) { delete this.attributes[name]; if (name === 'value') delete this.value; }, focus() { this.focused = true; }, scrollIntoView() { this.scrolled = true; } });
@@ -31,9 +32,14 @@ async function mount(native, initial = base(), options = {}) {
       const fallback = () => {
         if (name === 'get_snapshot' || name === 'perform_action' || name === 'set_project_directory') return initial;
         if (['get_update_snapshot', 'check_update', 'install_update'].includes(name)) return options.initialUpdate || update();
-        if (name === 'get_notification_snapshot' || name === 'test_notification') return options.initialNotification || notification();
-        if (name === 'set_notifications_enabled') return args.enabled ? listening() : notification();
-        if (name === 'open_settings') return;
+        if (name === 'get_notification_snapshot' || name === 'test_notification') return savedNotification;
+        if (name === 'set_notifications_enabled') {
+          const extra = { notify_when_focused: args.notifyWhenFocused ?? savedNotification.notify_when_focused };
+          savedNotification = args.enabled ? listening(extra) : notification(extra);
+          return savedNotification;
+        }
+        if (name === 'open_settings' || name === 'return_from_settings') return;
+        if (name === 'settings_page_ready') return options.readySection || new URL(location.href).searchParams.get('section') || 'environment';
         throw new Error('Unexpected command: ' + name);
       };
       return options.invoke ? options.invoke(name, args, { subscriptions, fallback }) : fallback();
@@ -46,11 +52,12 @@ async function mount(native, initial = base(), options = {}) {
 test('browser previews never invoke native commands or subscribe in either view', async () => {
   for (const mode of ['startup', 'settings']) {
     const app = await mount(false, base(), { mode });
-    for (const id of ['check', 'save-repository', 'open', 'logs', 'check-update', 'install-update', 'notifications-enabled', 'test-notification']) {
+    for (const id of ['check', 'save-repository', 'open', 'logs', 'check-update', 'install-update', 'notifications-enabled', 'notifications-when-focused', 'test-notification']) {
       if (app.has(id)) assert.equal(app.node(id).disabled, true);
       await app.click(id);
     }
     await app.change('notifications-enabled', true);
+    await app.change('notifications-when-focused', true);
     for (const section of ['environment', 'notifications', 'updates', 'logs']) await app.click('nav-' + section);
     assert.equal(app.calls.length, 0); assert.equal(app.listenCalls.length, 0); assert.equal(app.subscriptions.size, 0);
     if (mode === 'settings') {
@@ -91,7 +98,7 @@ test('waiting for browser authentication stays active then advances without a ma
 test('startup has no settings dashboard or standalone service controls', async () => {
   const app = await mount(true, base({ managed: false }), { mode: 'startup' });
   assert.equal(app.has('startup-shell'), true);
-  for (const id of ['settings-shell', 'service-card', 'start', 'stop', 'restart', 'quit', 'exit', 'repository-input', 'save-repository', 'origin', 'config-location', 'notifications-enabled', 'notification-message', 'check-update', 'install-update', 'update-notes', 'logs', 'log-output', 'nav-environment']) {
+  for (const id of ['settings-shell', 'settings-back', 'service-card', 'start', 'stop', 'restart', 'quit', 'exit', 'repository-input', 'save-repository', 'origin', 'config-location', 'notifications-enabled', 'notification-message', 'check-update', 'install-update', 'update-notes', 'logs', 'log-output', 'nav-environment']) {
     assert.equal(app.has(id), false, id); await app.click(id);
   }
   assert.equal(app.calls.filter(([name]) => name === 'perform_action').length, 0);
@@ -293,6 +300,64 @@ test('notifications default off, subscribe before reading, and change only by ex
   app.unload();
   assert.equal(app.subscriptions.size, 0);
   assert.equal(app.unlistened.filter(name => name === 'launcher-notification-state').length, 1);
+});
+
+test('focused notifications require opt-in and preserve preference across master toggle', async () => {
+  const app = await mount(true);
+  assert.equal(app.node('notifications-when-focused').checked, false);
+  assert.equal(app.node('notifications-when-focused').disabled, true);
+  await app.change('notifications-when-focused', true);
+  assert.equal(app.node('notifications-when-focused').checked, false);
+  assert.equal(app.calls.filter(([name]) => name === 'set_notifications_enabled').length, 0);
+  await app.change('notifications-enabled', true);
+  assert.equal(app.node('notifications-when-focused').disabled, false);
+  await app.change('notifications-when-focused', true);
+  const args = app.calls.filter(([name]) => name === 'set_notifications_enabled').at(-1)[1];
+  assert.equal(args.enabled, true); assert.equal(args.notifyWhenFocused, true);
+  assert.equal(app.node('notifications-when-focused').checked, true);
+  await app.change('notifications-enabled', false);
+  assert.equal(app.node('notifications-when-focused').checked, true);
+  assert.equal(app.node('notifications-when-focused').disabled, true);
+  await app.change('notifications-enabled', true);
+  assert.equal(app.node('notifications-when-focused').checked, true);
+  await app.change('notifications-when-focused', false);
+  assert.equal(app.node('notifications-when-focused').checked, false);
+  assert.equal(app.node('notifications-enabled').checked, true);
+});
+
+test('focused notification preference restores, rolls back on failure and retries', async () => {
+  let attempts = 0;
+  const app = await mount(true, base(), { initialNotification: listening({ notify_when_focused: true }), invoke(name, args, { fallback }) {
+    if (name === 'set_notifications_enabled' && args.notifyWhenFocused !== undefined && attempts++ === 0) throw new Error('save failed');
+    return fallback();
+  } });
+  assert.equal(app.node('notifications-when-focused').checked, true);
+  await app.change('notifications-when-focused', false);
+  assert.equal(app.node('notifications-when-focused').checked, true);
+  assert.equal(app.node('notifications-when-focused').disabled, false);
+  assert.match(app.node('notification-message').textContent, /可重试.*save failed/);
+  await app.change('notifications-when-focused', false);
+  assert.equal(app.node('notifications-when-focused').checked, false);
+  assert.equal(app.node('notification-message').dataset.error, 'false');
+});
+
+test('focused notification changes share busy lock and respect newer events', async () => {
+  const saving = deferred();
+  const app = await mount(true, base(), { initialNotification: listening(), invoke(name, _args, { fallback }) {
+    return name === 'set_notifications_enabled' ? saving.promise : fallback();
+  } });
+  await app.change('notifications-when-focused', true);
+  for (const id of ['notifications-enabled', 'notifications-when-focused', 'test-notification']) assert.equal(app.node(id).disabled, true);
+  await app.change('notifications-when-focused', false);
+  await app.change('notifications-enabled', false);
+  await app.click('test-notification');
+  assert.equal(app.calls.filter(([name]) => name === 'set_notifications_enabled').length, 1);
+  assert.equal(app.calls.filter(([name]) => name === 'test_notification').length, 0);
+  app.notification(listening({ notify_when_focused: true, message: 'new policy event' }));
+  saving.resolve(listening()); await flush();
+  assert.equal(app.node('notifications-when-focused').checked, true);
+  assert.equal(app.node('notifications-when-focused').disabled, false);
+  assert.match(app.node('notification-message').textContent, /new policy event/);
 });
 
 test('notification settings and test share a busy lock without locking environment check', async () => {
@@ -729,4 +794,148 @@ test('failed startup snapshot read exposes a retryable error rather than endless
   assert.equal(app.node('error-notice').hidden, false); assert.match(app.node('error-notice').textContent, /snapshot unavailable/);
   assert.equal(app.node('startup-progress').hidden, true); assert.equal(app.node('startup-actions').hidden, false);
   assert.equal(app.node('check').disabled, false); assert.equal(app.node('open-settings').hidden, false);
+});
+
+test('settings Back has an icon and visible accessible text outside the brand hidden on narrow layouts', async () => {
+  const app = await mount(false);
+  assert.equal(app.has('settings-back'), true);
+  assert.equal(app.node('settings-back').hidden, false);
+  assert.equal(app.node('settings-back').disabled, false);
+  const raw = readFileSync(new URL('../src/main.ts', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8');
+  assert.match(raw, /<aside class="settings-sidebar"><button class="settings-back" id="settings-back" type="button" aria-label="返回"><svg[^>]*aria-hidden="true"[^>]*>[\s\S]*?<\/svg><span>返回<\/span><\/button><div class="settings-brand">/);
+  assert.match(css, /\.settings-back \{[^}]*display: flex;[^}]*min-height: 36px/);
+  assert.match(css, /@media \(max-width: 450px\) \{ \.settings-back \{ margin-bottom: 12px; \}/);
+  assert.doesNotMatch(css, /\.settings-back[^{}]*\{[^}]*display: none/);
+});
+
+test('native Back invokes only the fixed no-argument return command and preserves dirty settings', async () => {
+  const app = await mount(true, base({ state: 'stopped', managed: false }), { initialNotification: listening({ notify_when_focused: true }) });
+  const draft = '/home/test/unsaved settings draft';
+  app.node('repository-input').value = draft; app.node('repository-input').handlers.input();
+  await app.click('nav-notifications');
+  const calls = app.calls.length;
+  await app.click('settings-back');
+  assert.equal(app.calls.length, calls + 1);
+  assert.equal(app.calls.at(-1)[0], 'return_from_settings');
+  assert.equal(app.calls.at(-1)[1], undefined);
+  assert.equal(app.node('repository-input').value, draft);
+  assert.equal(app.node('settings-notifications').hidden, false);
+  assert.equal(app.node('notifications-enabled').checked, true);
+  assert.equal(app.node('notifications-when-focused').checked, true);
+  app.event(base({ state: 'stopped', environment: environment({ repository: '/home/test/new snapshot' }) }));
+  await app.click('nav-environment');
+  assert.equal(app.node('repository-input').value, draft);
+  assert.equal(app.node('save-repository').disabled, false);
+  assert.equal(app.calls.slice(calls).filter(([name]) => /perform_action|set_project_directory|set_notifications_enabled|install_update/.test(name)).length, 0);
+});
+
+test('Back remains independent of service and update locks and serializes repeated requests', async () => {
+  const returning = deferred();
+  const app = await mount(true, base({ busy: true }), { initialUpdate: update({ phase: 'installing', busy: true }), invoke(name, _args, { fallback }) { return name === 'return_from_settings' ? returning.promise : fallback(); } });
+  assert.equal(app.node('check').disabled, true);
+  assert.equal(app.node('settings-back').disabled, false);
+  await app.click('settings-back'); await app.click('settings-back');
+  assert.equal(app.node('settings-back').disabled, true);
+  app.event(base({ busy: true })); app.update(update({ phase: 'downloading', busy: true }));
+  assert.equal(app.node('settings-back').disabled, true);
+  assert.equal(app.calls.filter(([name]) => name === 'return_from_settings').length, 1);
+  returning.resolve(); await flush();
+  assert.equal(app.node('settings-back').disabled, false);
+});
+
+test('Back failure is static retryable Chinese and cannot discard an unsaved directory', async () => {
+  let attempts = 0;
+  const app = await mount(true, base({ state: 'stopped', managed: false }), { invoke(name, _args, { fallback }) { if (name === 'return_from_settings' && ++attempts === 1) throw new Error('<script>private diagnostics token=secret</script>'); return fallback(); } });
+  const draft = '/home/test/do not save on back';
+  app.node('repository-input').value = draft; app.node('repository-input').handlers.input();
+  await app.click('settings-back');
+  assert.equal(app.node('error-notice').hidden, false);
+  assert.equal(app.node('error-notice').textContent, '返回未完成，请重试。');
+  assert.equal(app.node('settings-back').disabled, false);
+  assert.equal(app.node('repository-input').value, draft);
+  assert.equal(app.node('save-repository').disabled, false);
+  await app.click('settings-back');
+  assert.equal(attempts, 2);
+  assert.equal(app.node('error-notice').hidden, true);
+  assert.equal(app.node('repository-input').value, draft);
+  assert.equal(app.calls.filter(([name]) => name === 'set_project_directory').length, 0);
+});
+
+test('unloaded settings ignores Back and late return failures without touching UI', async () => {
+  for (const native of [true, false]) {
+    const app = await mount(native);
+    const calls = app.calls.length;
+    app.unload(); await app.click('settings-back');
+    assert.equal(app.calls.length, calls);
+    assert.equal(app.location.search, undefined);
+  }
+  const returning = deferred();
+  const app = await mount(true, base(), { invoke(name, _args, { fallback }) { return name === 'return_from_settings' ? returning.promise : fallback(); } });
+  await app.click('settings-back'); app.unload();
+  const error = app.node('error-notice').textContent;
+  returning.reject(new Error('late private error')); await flush();
+  assert.equal(app.node('error-notice').textContent, error);
+  assert.equal(app.node('settings-back').disabled, true);
+  const count = app.calls.length;
+  await app.click('settings-back'); assert.equal(app.calls.length, count);
+});
+
+test('browser Back drops all return targets using only a fixed local startup fallback', async () => {
+  for (const target of ['https://evil.example/steal', '//evil.example/path', 'javascript:alert(1)', 'dsh', 'launcher']) {
+    const app = await mount(false, base(), { location: 'http://127.0.0.1:1420/index.html?view=settings&section=environment&return=' + encodeURIComponent(target) + '&returnUrl=' + encodeURIComponent(target) + '&window=' + encodeURIComponent(target) });
+    await app.click('settings-back');
+    assert.equal(app.location.search, '');
+    assert.equal(new URL(app.location.href).origin, 'http://127.0.0.1:1420');
+    assert.equal(app.calls.length, 0); assert.equal(app.listenCalls.length, 0);
+  }
+  assert.doesNotMatch(source, /history[.]back|parameters[.]get\(['"]return/);
+  const startup = await mount(false, base(), { mode: 'startup' });
+  await startup.click('open-settings');
+  assert.equal(startup.location.search, '?view=settings&section=environment');
+});
+
+test('settings ready handshake runs only natively after all initialization subscriptions settle', async () => {
+  const registration = deferred();
+  const app = await mount(true, base(), { readySection: 'notifications', listen(name) { return name === 'launcher-show-settings' ? registration.promise : undefined; }, invoke(name, args, { subscriptions, fallback }) {
+    if (name === 'settings_page_ready') {
+      assert.equal(args, undefined);
+      for (const event of ['launcher-state', 'launcher-show-settings', 'launcher-show-logs', 'launcher-update-state', 'launcher-show-updates', 'launcher-notification-state']) assert.ok(subscriptions.has(event), event);
+    }
+    return fallback();
+  } });
+  assert.equal(app.calls.filter(([name]) => name === 'settings_page_ready').length, 0);
+  registration.resolve(); await flush();
+  assert.equal(app.calls.filter(([name]) => name === 'settings_page_ready').length, 1);
+  assert.equal(app.node('settings-notifications').hidden, false);
+  for (const [native, mode] of [[false, 'settings'], [false, 'startup'], [true, 'startup']]) {
+    const other = await mount(native, base(), { mode });
+    assert.equal(other.calls.filter(([name]) => name === 'settings_page_ready').length, 0);
+  }
+});
+
+test('newer settings navigation beats a pending readiness reply', async () => {
+  const ready = deferred();
+  const app = await mount(true, base(), { invoke(name, _args, { fallback }) { return name === 'settings_page_ready' ? ready.promise : fallback(); } });
+  app.subscriptions.get('launcher-show-settings')({ payload: 'logs' });
+  ready.resolve('notifications'); await flush();
+  assert.equal(app.node('settings-logs').hidden, false);
+  assert.equal(app.node('settings-notifications').hidden, true);
+});
+
+test('readiness failure is static and cannot trigger service work, while unloaded initialization never signals ready', async () => {
+  const app = await mount(true, base(), { invoke(name, _args, { fallback }) { if (name === 'settings_page_ready') throw new Error('private native readiness token=secret'); return fallback(); } });
+  assert.equal(app.node('error-notice').textContent, '设置页面准备失败，请重试打开设置。');
+  assert.equal(app.node('error-notice').hidden, false);
+  assert.equal(app.calls.filter(([name]) => ['perform_action', 'set_project_directory', 'install_update', 'return_from_settings'].includes(name)).length, 0);
+  const registration = deferred();
+  const late = await mount(true, base(), { listen(name) { return name === 'launcher-show-settings' ? registration.promise : undefined; } });
+  late.unload(); registration.resolve(); await flush();
+  assert.equal(late.calls.filter(([name]) => name === 'settings_page_ready').length, 0);
+  const ready = deferred();
+  const pending = await mount(true, base(), { invoke(name, _args, { fallback }) { return name === 'settings_page_ready' ? ready.promise : fallback(); } });
+  pending.unload();
+  const error = pending.node('error-notice').textContent;
+  ready.reject(new Error('late readiness error')); await flush();
+  assert.equal(pending.node('error-notice').textContent, error);
 });

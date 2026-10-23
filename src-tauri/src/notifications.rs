@@ -17,6 +17,7 @@ static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct NotificationSnapshot {
     pub enabled: bool,
+    pub notify_when_focused: bool,
     pub phase: String,
     pub message: String,
 }
@@ -25,6 +26,7 @@ impl Default for NotificationSnapshot {
     fn default() -> Self {
         Self {
             enabled: false,
+            notify_when_focused: false,
             phase: "disabled".into(),
             message: "未启用系统通知。".into(),
         }
@@ -35,9 +37,16 @@ impl Default for NotificationSnapshot {
 #[serde(deny_unknown_fields)]
 pub struct NotificationSettings {
     pub enabled: bool,
+    #[serde(default)]
+    pub notify_when_focused: bool,
 }
 
 impl NotificationSettings {
+    /// Foreground notifications require an explicit opt-in; disabled always wins.
+    pub fn should_notify(&self, foreground: bool) -> bool {
+        self.enabled && (!foreground || self.notify_when_focused)
+    }
+
     /// Missing settings are disabled. Invalid settings are an error, never opt-in.
     pub fn load(directory: &Path) -> Result<Self, String> {
         let path = directory.join("notifications.json");
@@ -834,6 +843,109 @@ mod tests {
     }
 
     #[test]
+    fn notification_defaults_do_not_opt_into_foreground_delivery() {
+        let snapshot = NotificationSnapshot::default();
+        assert!(!snapshot.enabled);
+        assert!(!snapshot.notify_when_focused);
+        assert_eq!(
+            serde_json::to_value(snapshot).unwrap()["notify_when_focused"],
+            json!(false)
+        );
+        let settings = NotificationSettings::default();
+        assert!(!settings.enabled);
+        assert!(!settings.notify_when_focused);
+        assert!(!settings.should_notify(false));
+        assert!(!settings.should_notify(true));
+    }
+
+    #[test]
+    fn notification_policy_covers_enabled_focus_and_opt_in_matrix() {
+        for (enabled, notify_when_focused, foreground, expected) in [
+            (false, false, false, false),
+            (false, false, true, false),
+            (false, true, false, false),
+            (false, true, true, false),
+            (true, false, false, true),
+            (true, false, true, false),
+            (true, true, false, true),
+            (true, true, true, true),
+        ] {
+            let settings = NotificationSettings {
+                enabled,
+                notify_when_focused,
+            };
+            assert_eq!(
+                settings.should_notify(foreground),
+                expected,
+                "enabled={enabled}, notify_when_focused={notify_when_focused}, foreground={foreground}"
+            );
+        }
+    }
+
+    #[test]
+    fn old_settings_default_to_background_only_without_rewriting_file() {
+        let directory = TestDirectory::new();
+        let path = directory.0.join("notifications.json");
+        for enabled in [false, true] {
+            let bytes = serde_json::to_vec(&json!({ "enabled": enabled })).unwrap();
+            fs::write(&path, &bytes).unwrap();
+            let settings = NotificationSettings::load(&directory.0).unwrap();
+            assert_eq!(settings.enabled, enabled);
+            assert!(!settings.notify_when_focused);
+            assert_eq!(settings.should_notify(false), enabled);
+            assert!(!settings.should_notify(true));
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+        }
+    }
+
+    #[test]
+    fn settings_persist_both_flags_including_disabled_foreground_preference() {
+        let directory = TestDirectory::new();
+        for enabled in [false, true] {
+            for notify_when_focused in [true, false] {
+                let settings = NotificationSettings {
+                    enabled,
+                    notify_when_focused,
+                };
+                settings.save(&directory.0).unwrap();
+                assert_eq!(NotificationSettings::load(&directory.0).unwrap(), settings);
+                let persisted: Value = serde_json::from_slice(
+                    &fs::read(directory.0.join("notifications.json")).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(
+                    persisted,
+                    json!({ "enabled": enabled, "notify_when_focused": notify_when_focused })
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn settings_reject_non_boolean_foreground_preference() {
+        let directory = TestDirectory::new();
+        for enabled in [false, true] {
+            for invalid in [
+                json!("true"),
+                json!(1),
+                json!(0),
+                Value::Null,
+                json!([]),
+                json!({}),
+            ] {
+                let bytes = serde_json::to_vec(&json!({
+                    "enabled": enabled,
+                    "notify_when_focused": invalid,
+                }))
+                .unwrap();
+                assert!(serde_json::from_slice::<NotificationSettings>(&bytes).is_err());
+                fs::write(directory.0.join("notifications.json"), bytes).unwrap();
+                assert!(NotificationSettings::load(&directory.0).is_err());
+            }
+        }
+    }
+
+    #[test]
     fn settings_missing_default_and_roundtrip_never_modify_main_config() {
         let directory = TestDirectory::new();
         assert_eq!(
@@ -841,9 +953,12 @@ mod tests {
             NotificationSettings::default()
         );
         fs::write(directory.0.join("config.json"), b"keep launcher config").unwrap();
-        NotificationSettings { enabled: true }
-            .save(&directory.0)
-            .unwrap();
+        NotificationSettings {
+            enabled: true,
+            ..NotificationSettings::default()
+        }
+        .save(&directory.0)
+        .unwrap();
         assert!(NotificationSettings::load(&directory.0).unwrap().enabled);
         NotificationSettings::default().save(&directory.0).unwrap();
         assert!(!NotificationSettings::load(&directory.0).unwrap().enabled);
@@ -880,9 +995,12 @@ mod tests {
         let destination = directory.0.join("notifications.json");
         fs::create_dir(&destination).unwrap();
         fs::write(destination.join("old"), b"keep").unwrap();
-        assert!(NotificationSettings { enabled: true }
-            .save(&directory.0)
-            .is_err());
+        assert!(NotificationSettings {
+            enabled: true,
+            ..NotificationSettings::default()
+        }
+        .save(&directory.0)
+        .is_err());
         assert_eq!(fs::read(destination.join("old")).unwrap(), b"keep");
         assert_eq!(fs::read_dir(&directory.0).unwrap().count(), 1);
     }

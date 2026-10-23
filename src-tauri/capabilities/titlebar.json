@@ -1,17 +1,18 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "titlebar",
-  "description": "Only bundled titlebar webviews can open fixed native menus and control their own parent window. No service, filesystem or updater IPC.",
+  "description": "Only bundled titlebars may open fixed settings pages in their own parent, read a boolean update indicator and control that window. No service, filesystem, update checking, downloading or installation IPC.",
   "local": true,
   "webviews": [
     "launcher-titlebar",
-    "settings-titlebar",
     "dsh-titlebar"
   ],
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "allow-titlebar-action",
-    "allow-show-titlebar-menu"
+    "allow-open-titlebar-settings",
+    "allow-open-titlebar-updates",
+    "allow-get-titlebar-update-state"
   ]
 }

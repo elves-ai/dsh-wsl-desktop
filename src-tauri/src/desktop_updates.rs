@@ -8,6 +8,12 @@ use std::{
 use tauri::{Emitter, EventTarget, Manager, Webview};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
+/// Minimal projection for titlebars: never send release notes, URLs or download controls.
+#[derive(Clone, serde::Serialize)]
+pub(super) struct UpdateNotice {
+    available: bool,
+}
+
 struct Data {
     snapshot: UpdateSnapshot,
     package: Option<Update>,
@@ -33,17 +39,32 @@ impl Updates {
             .snapshot
             .clone()
     }
+    pub(super) fn titlebar_notice(&self) -> UpdateNotice {
+        UpdateNotice {
+            available: self.snapshot().version.is_some(),
+        }
+    }
     fn change(&self, app: &tauri::AppHandle, change: impl FnOnce(&mut Data)) -> UpdateSnapshot {
         let snapshot = {
             let mut data = self.data.lock().unwrap_or_else(|e| e.into_inner());
             change(&mut data);
             data.snapshot.clone()
         };
-        for label in ["launcher", "settings"] {
+        for label in ["launcher", "launcher-settings", "dsh-settings"] {
             let _ = app.emit_to(
                 EventTarget::webview(label),
                 "launcher-update-state",
                 &snapshot,
+            );
+        }
+        let notice = UpdateNotice {
+            available: snapshot.version.is_some(),
+        };
+        for label in ["launcher-titlebar", "dsh-titlebar"] {
+            let _ = app.emit_to(
+                EventTarget::webview(label),
+                "titlebar-update-state",
+                &notice,
             );
         }
         snapshot

@@ -29,6 +29,8 @@ use url::Url;
 
 #[path = "desktop_notifications.rs"]
 mod notifications;
+#[path = "desktop_settings.rs"]
+mod settings_page;
 #[path = "desktop_titlebar.rs"]
 mod titlebar;
 #[path = "desktop_updates.rs"]
@@ -71,7 +73,7 @@ impl Controller {
     }
     fn publish(&self, app: &tauri::AppHandle) {
         let snapshot = self.snapshot();
-        for label in ["launcher", "settings"] {
+        for label in ["launcher", "launcher-settings", "dsh-settings"] {
             let _ = app.emit_to(EventTarget::webview(label), "launcher-state", &snapshot);
         }
         if let Some(tray) = app.tray_by_id("dsh-tray") {
@@ -201,7 +203,7 @@ fn local_content(url: &Url, label: &str) -> bool {
     }
     match label {
         "launcher" => url.query().is_none(),
-        "settings" => {
+        "launcher-settings" | "dsh-settings" => {
             let pairs: Vec<_> = url.query_pairs().collect();
             pairs.len() == 2
                 && pairs
@@ -219,7 +221,7 @@ fn assert_local(window: &Webview) -> Result<(), String> {
     let url = window.url().map_err(|_| "无法验证调用窗口。")?;
     if !matches!(
         (window.label(), window.window().label()),
-        ("launcher", "launcher") | ("settings", "settings")
+        ("launcher", "launcher") | ("launcher-settings", "launcher") | ("dsh-settings", "dsh")
     ) || !local_content(&url, window.label())
     {
         return Err("此页面无权控制本机服务。".into());
@@ -228,14 +230,11 @@ fn assert_local(window: &Webview) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn open_settings(
-    window: Webview,
-    app: tauri::AppHandle,
-    section: String,
-) -> Result<(), String> {
+async fn open_settings(window: Webview, section: String) -> Result<(), String> {
     assert_local(&window)?;
     // WebView2 child creation must not synchronously block the Windows UI thread.
-    tauri::async_runtime::spawn_blocking(move || show_settings(&app, &section))
+    let host = window.window();
+    tauri::async_runtime::spawn_blocking(move || settings_page::show_in(&host, &section))
         .await
         .map_err(|_| "设置窗口线程异常结束。".to_owned())?
 }
@@ -313,58 +312,9 @@ fn show_launcher(app: &tauri::AppHandle) {
         let _ = window.set_focus();
     }
 }
-// Serialize concurrent menu/IPC requests without ever taking this lock on the UI thread.
-static SETTINGS_WINDOW: Mutex<()> = Mutex::new(());
-
-/// Create or reactivate the single settings window. Call from a worker thread.
+/// Open a settings page in an existing primary window. Call from a worker thread.
 pub fn show_settings(app: &tauri::AppHandle, section: &str) -> Result<(), String> {
-    if !settings_section(section) {
-        return Err("不支持的设置页面。".into());
-    }
-    let _guard = SETTINGS_WINDOW.lock().unwrap_or_else(|e| e.into_inner());
-    let window = if let Some(window) = app.get_window("settings") {
-        // Preserve the loaded page and unsaved edits when switching sections.
-        app.emit_to(
-            EventTarget::webview("settings"),
-            "launcher-show-settings",
-            section,
-        )
-        .map_err(|_| "无法切换设置页面。")?;
-        window
-    } else {
-        let window = WindowBuilder::new(app, "settings")
-            .title("DSH · 设置")
-            .decorations(false)
-            .inner_size(860.0, 680.0)
-            .min_inner_size(700.0, 560.0)
-            .visible(false)
-            .build()
-            .map_err(|_| "无法创建设置窗口。")?;
-        fit_window(&window, 860, 680);
-        let result = (|| -> tauri::Result<()> {
-            let (position, size) = titlebar::content_geometry(&window)?;
-            window.add_child(
-                WebviewBuilder::new(
-                    "settings",
-                    WebviewUrl::App(format!("index.html?view=settings&section={section}").into()),
-                )
-                .on_navigation(|target| local_content(target, "settings"))
-                .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny),
-                position,
-                size,
-            )?;
-            titlebar::attach(&window)
-        })();
-        if result.is_err() {
-            let _ = window.destroy();
-            return Err("无法创建设置 WebView2 窗口，请检查 WebView2 Runtime。".into());
-        }
-        window
-    };
-    window.show().map_err(|_| "无法显示设置窗口。")?;
-    window.unminimize().map_err(|_| "无法还原设置窗口。")?;
-    window.set_focus().map_err(|_| "无法激活设置窗口。")?;
-    Ok(())
+    settings_page::show(app, section)
 }
 
 fn activate(app: &tauri::AppHandle) {
@@ -650,7 +600,9 @@ fn open_dsh(app: &tauri::AppHandle, config: &config::Config, url: Url) -> Result
     if let Some(view) = app.get_webview("dsh") {
         view.navigate(url)
             .map_err(|_| "无法重新连接 DSH 工作窗口。")?;
-        show_dsh(app);
+        if !settings_page::is_open("launcher") {
+            show_dsh(app);
+        }
         return Ok(());
     }
     let data = app
@@ -701,11 +653,14 @@ fn open_dsh(app: &tauri::AppHandle, config: &config::Config, url: Url) -> Result
                     if payload.event() == tauri::webview::PageLoadEvent::Finished
                         && payload.url().origin() == page_origin.origin()
                     {
-                        let window = view.window();
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                        if let Some(launcher) = view.app_handle().get_window("launcher") {
-                            let _ = launcher.hide();
+                        // A late workspace load must not replace a newer settings navigation.
+                        if !settings_page::is_open("launcher") && !settings_page::is_open("dsh") {
+                            let window = view.window();
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                            if let Some(launcher) = view.app_handle().get_window("launcher") {
+                                let _ = launcher.hide();
+                            }
                         }
                     }
                 }),
@@ -719,8 +674,10 @@ fn open_dsh(app: &tauri::AppHandle, config: &config::Config, url: Url) -> Result
         let _ = window.destroy();
         return Err("无法创建 WebView2 工作窗口，请检查 WebView2 Runtime。".into());
     }
-    let _ = window.show();
-    let _ = window.set_focus();
+    if !settings_page::is_open("launcher") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
     Ok(())
 }
 fn fit_window(window: &Window, width: u32, height: u32) {
@@ -836,20 +793,11 @@ fn dispatch(app: &tauri::AppHandle, action: &'static str) {
     });
 }
 
-/// One handler for both the top menu and tray: keep confirmations and update locks intact.
+/// Tray actions keep their existing confirmations and update locks.
 fn handle_menu_action(app: &tauri::AppHandle, id: &str) {
     match id {
         "open" => dispatch(app, "open"),
         "logs" => dispatch(app, "logs"),
-        "settings" | "environment" | "notifications" => {
-            let app = app.clone();
-            let section = if id == "settings" { "environment" } else { id }.to_owned();
-            thread::spawn(move || {
-                if let Err(error) = show_settings(&app, &section) {
-                    app.state::<Arc<Controller>>().record(&app, &error);
-                }
-            });
-        }
         "updates" => {
             let app = app.clone();
             thread::spawn(move || {
@@ -883,6 +831,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_snapshot,
             open_settings,
+            settings_page::return_from_settings,
+            settings_page::settings_page_ready,
             perform_action,
             set_project_directory,
             updates::get_update_snapshot,
@@ -892,7 +842,9 @@ pub fn run() {
             notifications::set_notifications_enabled,
             notifications::test_notification,
             titlebar::titlebar_action,
-            titlebar::show_titlebar_menu
+            titlebar::open_titlebar_settings,
+            titlebar::open_titlebar_updates,
+            titlebar::get_titlebar_update_state
         ])
         .setup(|app| {
             let directory = app.path().app_config_dir()?;
@@ -949,7 +901,6 @@ pub fn run() {
                     "已导入旧启动器配置；旧脚本、浏览器数据和 DSH 配置未修改。",
                 );
             }
-            app.manage(titlebar::Menus::new(app.handle())?);
             let launcher = WindowBuilder::new(app, "launcher")
                 .title("DSH · WSL Desktop")
                 .decorations(false)
@@ -1096,13 +1047,17 @@ mod content_security_tests {
                     "{origin}/index.html?view=settings&section={section}"
                 ))
                 .unwrap();
-                assert!(local_content(&url, "settings"));
+                assert!(local_content(&url, "launcher-settings"));
+                assert!(local_content(&url, "dsh-settings"));
+                assert!(!local_content(&url, "settings"));
                 assert!(!local_content(&url, "launcher"));
                 assert!(!local_content(&url, "dsh"));
             }
         }
         let dev = Url::parse("http://127.0.0.1:1420/?view=settings&section=environment").unwrap();
-        assert_eq!(local_content(&dev, "settings"), cfg!(debug_assertions));
+        for label in ["launcher-settings", "dsh-settings"] {
+            assert_eq!(local_content(&dev, label), cfg!(debug_assertions));
+        }
     }
 
     #[test]
@@ -1118,10 +1073,12 @@ mod content_security_tests {
             "http://tauri.localhost/index.html?view=settings&section=logs#other",
             "http://user:password@tauri.localhost/index.html?view=settings&section=logs",
         ] {
-            assert!(
-                !local_content(&Url::parse(raw).unwrap(), "settings"),
-                "unexpected trusted URL: {raw}"
-            );
+            for label in ["launcher-settings", "dsh-settings"] {
+                assert!(
+                    !local_content(&Url::parse(raw).unwrap(), label),
+                    "unexpected trusted URL: {raw}"
+                );
+            }
         }
     }
 }

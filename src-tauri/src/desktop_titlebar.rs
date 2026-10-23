@@ -1,29 +1,12 @@
 //! A bundled, isolated titlebar webview. The DSH page retains no native capabilities.
 use serde::{Deserialize, Serialize};
 use tauri::{
-    menu::{ContextMenu, Menu, MenuItem, PredefinedMenuItem},
-    webview::WebviewBuilder,
-    Emitter, EventTarget, LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize,
-    Rect, Webview, WebviewUrl, Window, WindowEvent,
+    webview::WebviewBuilder, Emitter, EventTarget, LogicalPosition, LogicalSize, Manager,
+    PhysicalPosition, PhysicalSize, Rect, Webview, WebviewUrl, Window, WindowEvent,
 };
 use url::Url;
 
 const HEIGHT: f64 = 32.0;
-
-pub(super) struct Menus {
-    application: Menu<tauri::Wry>,
-}
-impl Menus {
-    pub(super) fn new(app: &tauri::AppHandle) -> tauri::Result<Self> {
-        let open = MenuItem::with_id(app, "open", "打开 DSH", true, None::<&str>)?;
-        let separator = PredefinedMenuItem::separator(app)?;
-        let settings = MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
-        let logs = MenuItem::with_id(app, "logs", "诊断日志…", true, None::<&str>)?;
-        // Service lifecycle and exit actions belong exclusively to the tray menu.
-        let application = Menu::with_items(app, &[&open, &separator, &settings, &logs])?;
-        Ok(Self { application })
-    }
-}
 
 #[derive(Serialize, Clone)]
 pub(super) struct State {
@@ -58,9 +41,7 @@ fn assert_titlebar(view: &Webview) -> Result<Window, String> {
     let pair = (view.label(), window.label());
     if !matches!(
         pair,
-        ("launcher-titlebar", "launcher")
-            | ("settings-titlebar", "settings")
-            | ("dsh-titlebar", "dsh")
+        ("launcher-titlebar", "launcher") | ("dsh-titlebar", "dsh")
     ) || !view.url().ok().is_some_and(|url| local_titlebar(&url))
     {
         return Err("此页面无权操作窗口标题栏。".into());
@@ -100,22 +81,31 @@ pub(super) async fn titlebar_action(view: Webview, action: Action) -> Result<Sta
 }
 
 #[tauri::command]
-pub(super) async fn show_titlebar_menu(
-    view: Webview,
-    menus: tauri::State<'_, Menus>,
-    x: f64,
-) -> Result<(), String> {
+pub(super) async fn open_titlebar_settings(view: Webview) -> Result<(), String> {
     let window = assert_titlebar(&view)?;
-    let width = window.inner_size().map_err(|_| "无法读取窗口尺寸。")?.width as f64
-        / window.scale_factor().map_err(|_| "无法读取窗口缩放。")?;
-    if !x.is_finite() || x < 0.0 || x >= width {
-        return Err("菜单位置无效。".into());
-    }
-    // Native popup is not clipped by the titlebar webview and keeps native keyboard navigation.
-    menus
-        .application
-        .popup_at(window, LogicalPosition::new(x, HEIGHT))
-        .map_err(|_| "无法打开菜单，请重试。".into())
+    // Child creation runs off the UI thread; only this verified parent can be selected.
+    tauri::async_runtime::spawn_blocking(move || {
+        super::settings_page::show_in(&window, "environment")
+    })
+    .await
+    .map_err(|_| "设置页面线程异常结束。".to_owned())?
+}
+
+#[tauri::command]
+pub(super) async fn open_titlebar_updates(view: Webview) -> Result<(), String> {
+    let window = assert_titlebar(&view)?;
+    tauri::async_runtime::spawn_blocking(move || super::settings_page::show_in(&window, "updates"))
+        .await
+        .map_err(|_| "更新页面线程异常结束。".to_owned())?
+}
+
+#[tauri::command]
+pub(super) fn get_titlebar_update_state(
+    view: Webview,
+    state: tauri::State<'_, std::sync::Arc<super::updates::Updates>>,
+) -> Result<super::updates::UpdateNotice, String> {
+    assert_titlebar(&view)?;
+    Ok(state.titlebar_notice())
 }
 
 pub(super) fn content_geometry(
@@ -158,6 +148,16 @@ fn layout(window: &Window) -> tauri::Result<()> {
             position: position.into(),
             size: content_size.into(),
         })?;
+        if let Some(settings) =
+            super::settings_page::label(window.label()).and_then(|label| app.get_webview(label))
+        {
+            if settings.window().label() == window.label() {
+                settings.set_bounds(Rect {
+                    position: position.into(),
+                    size: content_size.into(),
+                })?;
+            }
+        }
         titlebar.set_bounds(Rect {
             position: PhysicalPosition::new(0, 0).into(),
             size: PhysicalSize::new(size.width, position.y as u32).into(),
@@ -167,7 +167,7 @@ fn layout(window: &Window) -> tauri::Result<()> {
 }
 
 pub(super) fn on_window_event(window: &Window, event: &WindowEvent) {
-    if !matches!(window.label(), "launcher" | "settings" | "dsh") {
+    if !matches!(window.label(), "launcher" | "dsh") {
         return;
     }
     if matches!(

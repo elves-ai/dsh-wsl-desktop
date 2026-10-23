@@ -46,6 +46,7 @@ interface UpdateSnapshot {
 
 interface NotificationSnapshot {
   enabled: boolean;
+  notify_when_focused: boolean;
   phase: 'disabled' | 'connecting' | 'listening' | 'error';
   message: string;
 }
@@ -64,7 +65,7 @@ const mark = `<img src="${appIconUrl}" width="36" height="36" alt="" />`;
 // Templates contain only developer-owned markup. All native values use textContent/value.
 app.innerHTML = settingsView ? `
 <main class="settings-shell" id="settings-shell">
-  <aside class="settings-sidebar"><div class="settings-brand"><span class="small-mark">${mark}</span><span>DSH<small>应用设置</small></span></div><nav aria-label="设置分类">${settingsSections.map((section,index) => `<button class="settings-nav" id="nav-${section}" type="button"><span class="nav-index" aria-hidden="true">0${index+1}</span>${['环境与目录','系统通知','软件更新','诊断日志'][index]}</button>`).join('')}</nav><p class="settings-sidebar-note">设置保存在本机<br>不会上传到维护者</p></aside>
+  <aside class="settings-sidebar"><button class="settings-back" id="settings-back" type="button" aria-label="返回"><svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="m11.5 4.5-5.5 5.5 5.5 5.5M6 10h10" /></svg><span>返回</span></button><div class="settings-brand"><span class="small-mark">${mark}</span><span>DSH<small>应用设置</small></span></div><nav aria-label="设置分类">${settingsSections.map((section,index) => `<button class="settings-nav" id="nav-${section}" type="button"><span class="nav-index" aria-hidden="true">0${index+1}</span>${['环境与目录','系统通知','软件更新','诊断日志'][index]}</button>`).join('')}</nav><p class="settings-sidebar-note">设置保存在本机<br>不会上传到维护者</p></aside>
   <div class="settings-content">
     <header class="settings-heading"><p class="eyebrow">应用设置</p><h1 id="settings-title" tabindex="-1">环境与目录</h1><p id="settings-description">指定已有的 DSH 项目，查看本地运行配置。</p></header>
     <div class="error-notice" id="error-notice" role="alert" hidden></div>
@@ -73,7 +74,7 @@ app.innerHTML = settingsView ? `
       <div class="setting-group"><div class="group-heading"><h2>运行环境</h2><span id="status-label" class="muted">读取中</span></div><dl class="connection-info"><div><dt>服务地址</dt><dd><code id="origin">尚未连接</code></dd></div><div><dt>进程归属</dt><dd id="ownership">等待检查</dd></div><div><dt>启动配置</dt><dd id="config-location">尚未读取</dd></div></dl><p class="setting-help" id="ownership-hint">仅管理由启动器托管的服务。</p><button class="button secondary" id="check" type="button" disabled>重新检测并进入 DSH</button></div>
       <p class="setting-help">不自动安装软件、克隆项目或安装依赖。修改目录前，请通过托盘右键菜单停止服务。</p>
     </section>
-    <section id="settings-notifications" aria-label="系统通知" hidden><div class="setting-group"><div class="toggle-row"><div><h2>后台任务通知</h2><p>DSH 不在前台时，提醒任务结束、失败，以及需要你选择、回答或确认计划。</p></div><label class="switch"><input id="notifications-enabled" type="checkbox" aria-label="启用系统通知" disabled><span></span></label></div><p id="notification-message" class="setting-help" role="status" aria-live="polite">正在读取通知设置。</p><button class="button secondary" id="test-notification" type="button" disabled>发送测试通知</button></div><p class="setting-help">默认关闭。通知不显示任务正文；本轮结束不代表整个长任务完成。退出启动器后不再提醒。</p><p class="setting-help">若未看到横幅，请检查 Windows 通知权限及勿扰模式。</p></section>
+    <section id="settings-notifications" aria-label="系统通知" hidden><div class="setting-group"><div class="toggle-row"><div><h2>任务通知</h2><p>提醒任务结束、失败，以及需要你选择、回答或确认计划。默认仅在 DSH 不在前台时通知。</p></div><label class="switch"><input id="notifications-enabled" type="checkbox" aria-label="启用系统通知" disabled><span></span></label></div><div class="toggle-row"><div><h2>窗口聚焦时也通知</h2><p id="notifications-focused-help">开启后，即使 DSH 工作窗口已打开且正在使用，也会发送系统通知。</p></div><label class="switch"><input id="notifications-when-focused" type="checkbox" aria-label="窗口聚焦时也通知" aria-describedby="notifications-focused-help" disabled><span></span></label></div><p id="notification-message" class="setting-help" role="status" aria-live="polite">正在读取通知设置。</p><button class="button secondary" id="test-notification" type="button" disabled>发送测试通知</button></div><p class="setting-help">默认关闭。通知不显示任务正文；本轮结束不代表整个长任务完成。退出启动器后不再提醒。</p><p class="setting-help">若未看到横幅，请检查 Windows 通知权限及勿扰模式。</p></section>
     <section id="settings-updates" aria-label="软件更新" hidden><div class="setting-group"><div class="group-heading"><h2>DSH WSL Desktop</h2><span id="update-current-version" class="muted">正在读取版本</span></div><p id="update-new-version" hidden></p><p id="update-message" role="status" aria-live="polite" tabindex="-1">正在读取更新状态。</p><pre id="update-notes" aria-label="更新说明" hidden></pre><div id="update-progress-row" hidden><progress id="update-progress" aria-label="更新下载进度"></progress><span id="update-progress-label"></span></div><div class="setting-actions"><button class="button secondary" id="check-update" type="button" disabled>检查更新</button><button class="button primary" id="install-update" type="button" hidden disabled>下载并安装</button></div></div><p class="setting-help">仅更新 Windows 启动器，不会更新或停止 WSL 中的 DSH。安装前需要你确认。</p></section>
     <section id="settings-logs" aria-label="诊断日志" hidden><div class="group-heading"><h2>启动与服务操作</h2><button class="text-button" id="logs" type="button" disabled>刷新</button></div><p class="setting-help">只显示启动器的脱敏记录，不包含 DSH 对话内容。</p><pre id="log-output" tabindex="0" aria-label="脱敏操作日志">暂无操作日志</pre></section>
     <p class="settings-preview" id="settings-preview" hidden>浏览器预览 · 不会连接或操作本地服务</p>
@@ -110,6 +111,11 @@ let pending = false;
 let repositoryPending = false;
 let repositoryDirty = false;
 let settingsRequestPending = false;
+let settingsReturnPending = false;
+let settingsDisposed = false;
+let settingsReturnError = '';
+let settingsReadyError = '';
+let settingsSectionRevision = 0;
 const repositoryInput = document.getElementById('repository-input') as HTMLInputElement;
 const saveRepositoryButton = document.getElementById('save-repository') as HTMLButtonElement;
 let connected = false;
@@ -128,8 +134,9 @@ let updateRevision = 0;
 const checkUpdateButton = document.getElementById('check-update') as HTMLButtonElement;
 const installUpdateButton = document.getElementById('install-update') as HTMLButtonElement;
 const notificationsEnabled = document.getElementById('notifications-enabled') as HTMLInputElement;
+const notificationsWhenFocused = document.getElementById('notifications-when-focused') as HTMLInputElement;
 const testNotificationButton = document.getElementById('test-notification') as HTMLButtonElement;
-let notificationSnapshot: NotificationSnapshot = { enabled: false, phase: 'disabled', message: '未启用系统通知。' };
+let notificationSnapshot: NotificationSnapshot = { enabled: false, notify_when_focused: false, phase: 'disabled', message: '未启用系统通知。' };
 let notificationPending = false;
 let notificationRevision = 0;
 let notificationError = '';
@@ -165,7 +172,8 @@ function render(): void {
   const busy = snapshot.busy || pending || repositoryPending;
   const disabled = !native || !connected || busy || updateLocksService();
   const passed = environmentPassed();
-  const error = redact(localError || snapshot.last_error || '');
+  const error = redact(settingsReturnError || settingsReadyError || localError || snapshot.last_error || '');
+  if (settingsView) element<HTMLButtonElement>('settings-back').disabled = settingsReturnPending;
   if (settingsView) renderSettings(disabled, passed, error);
   else renderStartup(disabled, passed, busy, error);
   if (buttons.check) buttons.check.disabled = disabled;
@@ -281,7 +289,9 @@ function renderNotifications(): void {
   const labels = { disabled: '未启用', connecting: '连接中', listening: '正在检查', error: '通知异常' };
   notificationsEnabled.checked = state.enabled;
   notificationsEnabled.disabled = !native || notificationPending || notificationsDisposed;
-  testNotificationButton.disabled = notificationsEnabled.disabled || !state.enabled;
+  notificationsWhenFocused.checked = state.notify_when_focused;
+  notificationsWhenFocused.disabled = notificationsEnabled.disabled || !state.enabled;
+  testNotificationButton.disabled = notificationsWhenFocused.disabled;
   testNotificationButton.textContent = notificationPending ? '处理中…' : '测试通知';
   const message = element('notification-message');
   message.dataset.error = String(Boolean(notificationError) || state.phase === 'error');
@@ -306,7 +316,7 @@ async function subscribeNotifications(): Promise<boolean> {
   return true;
 }
 
-async function performNotification(command: 'get_notification_snapshot' | 'set_notifications_enabled' | 'test_notification', enabled?: boolean): Promise<void> {
+async function performNotification(command: 'get_notification_snapshot' | 'set_notifications_enabled' | 'test_notification', enabled?: boolean, notifyWhenFocused?: boolean): Promise<void> {
   if (!native || notificationsDisposed || notificationPending || (command === 'test_notification' && testNotificationButton.disabled)) {
     renderNotifications();
     return;
@@ -319,7 +329,7 @@ async function performNotification(command: 'get_notification_snapshot' | 'set_n
   const revision = notificationRevision;
   try {
     if (!await subscribeNotifications() || notificationsDisposed) return;
-    const result = await invoke<NotificationSnapshot>(command, command === 'set_notifications_enabled' ? { enabled } : undefined);
+    const result = await invoke<NotificationSnapshot>(command, command === 'set_notifications_enabled' ? { enabled, ...(notifyWhenFocused === undefined ? {} : { notifyWhenFocused }) } : undefined);
     if (!notificationsDisposed && notificationRevision === revision) {
       notificationSnapshot = result;
       if (command === 'test_notification' && result.phase !== 'error') notificationNotice = result.message + ' · 测试通知已提交，不保证显示横幅；Windows 勿扰模式可能屏蔽。';
@@ -381,6 +391,39 @@ async function openSettings(): Promise<void> {
   try { await invoke('open_settings', { section: 'environment' }); }
   catch (error) { localError = '无法打开设置：' + String(error); }
   finally { settingsRequestPending = false; render(); }
+}
+async function readySettingsPage(initialization: Promise<void>[]): Promise<void> {
+  if (!native || !settingsView) return;
+  try {
+    // The parent reveals this view only after every settings listener has been registered.
+    await Promise.all(initialization);
+    if (settingsDisposed) return;
+    const revision = settingsSectionRevision;
+    const section = await invoke<string>('settings_page_ready');
+    if (!settingsDisposed && settingsSectionRevision === revision) selectSettings(section);
+  } catch {
+    if (!settingsDisposed) {
+      settingsReadyError = '设置页面准备失败，请重试打开设置。';
+      render();
+    }
+  }
+}
+async function returnFromSettings(): Promise<void> {
+  if (!settingsView || settingsDisposed || settingsReturnPending) return;
+  // Preview has no retained native view: use a fixed local startup route, never history or URL input.
+  if (!native) { window.location.search = ''; return; }
+  settingsReturnPending = true;
+  settingsReturnError = '';
+  render();
+  try {
+    // Rust alone chooses which retained parent view to reveal; no URL or window label crosses IPC.
+    await invoke<void>('return_from_settings');
+  } catch {
+    if (!settingsDisposed) settingsReturnError = '返回未完成，请重试。';
+  } finally {
+    settingsReturnPending = false;
+    if (!settingsDisposed) render();
+  }
 }
 async function perform(action: Action): Promise<void> {
   const button = buttons[action];
@@ -449,7 +492,10 @@ async function initialize(): Promise<void> {
     localError = '无法订阅日志窗口请求：' + String(error);
   }
   try {
-    unlistenShowSettings = await listen<string>('launcher-show-settings', event => selectSettings(event.payload, true));
+    unlistenShowSettings = await listen<string>('launcher-show-settings', event => {
+      settingsSectionRevision += 1;
+      selectSettings(event.payload, true);
+    });
   } catch (error) {
     localError = '无法订阅设置窗口请求：' + String(error);
   }
@@ -504,9 +550,14 @@ async function initializeUpdates(): Promise<void> {
 
 if (settingsView) {
   selectSettings(settingsSection);
+  element('settings-back').addEventListener('click', () => { void returnFromSettings(); });
   repositoryInput.addEventListener('input', () => { repositoryDirty = true; render(); });
   saveRepositoryButton.addEventListener('click', () => { void saveRepository(); });
   notificationsEnabled.addEventListener('change', () => { void performNotification('set_notifications_enabled', notificationsEnabled.checked); });
+  notificationsWhenFocused.addEventListener('change', () => {
+    if (notificationsWhenFocused.disabled) { renderNotifications(); return; }
+    void performNotification('set_notifications_enabled', notificationSnapshot.enabled, notificationsWhenFocused.checked);
+  });
   testNotificationButton.addEventListener('click', () => { void performNotification('test_notification'); });
   checkUpdateButton.addEventListener('click', () => { void performUpdate('check_update'); });
   installUpdateButton.addEventListener('click', () => { void performUpdate('install_update'); });
@@ -514,10 +565,14 @@ if (settingsView) {
 } else element('open-settings').addEventListener('click', () => { void openSettings(); });
 for (const action of actions) buttons[action]?.addEventListener('click', () => { void perform(action); });
 window.addEventListener('beforeunload', () => {
+  settingsDisposed = true;
   notificationsDisposed = true; unlistenNotifications?.(); unlistenNotifications = undefined;
   unlisten?.(); unlistenShowLogs?.(); unlistenShowSettings?.(); unlistenUpdates?.(); unlistenShowUpdates?.();
 }, { once: true });
 render();
-void initialize();
-void initializeUpdates();
-if (settingsView) void performNotification('get_notification_snapshot');
+const initialization = initialize();
+const updatesInitialization = initializeUpdates();
+if (settingsView) {
+  const notificationsInitialization = performNotification('get_notification_snapshot');
+  void readySettingsPage([initialization, updatesInitialization, notificationsInitialization]);
+}

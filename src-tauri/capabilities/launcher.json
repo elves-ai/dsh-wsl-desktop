@@ -5,7 +5,8 @@
   "local": true,
   "webviews": [
     "launcher",
-    "settings"
+    "launcher-settings",
+    "dsh-settings"
   ],
   "permissions": [
     "core:event:allow-listen",
