@@ -11,7 +11,7 @@ const source = stripTypeScriptTypes(rawSource.replace(/^import .*;\r?\n/gm, ''))
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const state = (extra = {}) => ({ maximized: false, focused: true, title: 'DeepSeek Harness', ...extra });
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
-const menuIds = ['menu-file', 'menu-settings', 'menu-help'];
+const menuIds = ['app-menu'];
 const controlIds = ['window-minimize', 'window-maximize', 'window-close'];
 
 async function mount(native, options = {}) {
@@ -31,14 +31,15 @@ async function mount(native, options = {}) {
     if (tag.startsWith('/')) { stack.pop(); continue; }
     const attributes = Object.fromEntries([...tag.matchAll(/([\w-]+)="([^"]*)"/g)].map(item => [item[1], item[2]]));
     const element = {
-      id: attributes.id, attributes, parent: stack.at(-1), handlers: new Map(), disabled: false, textContent: '',
+      id: attributes.id, attributes, parent: stack.at(-1), children: [], handlers: new Map(), disabled: false, textContent: '',
       set innerHTML(_) { throw new Error('Native state must never be interpreted as HTML'); },
       setAttribute(name, value) { this.attributes[name] = value; },
       addEventListener(name, callback) { this.handlers.set(name, callback); },
-      getBoundingClientRect() { return { left: options.positions?.[this.id] ?? ({ 'menu-file': 36, 'menu-settings': 82, 'menu-help': 128 }[this.id] || 0) }; },
+      getBoundingClientRect() { return { left: options.positions?.[this.id] ?? (this.id === 'app-menu' ? 8 : 0) }; },
       focus() { document.activeElement = this; },
       blur() { if (document.activeElement === this) document.activeElement = null; },
     };
+    element.parent?.children.push(element);
     if (element.id) nodes.set(element.id, element);
     if (!/^(?:meta|link|input|br|img)\b/.test(tag) && !tag.endsWith('/')) stack.push(element);
   }
@@ -66,7 +67,7 @@ async function mount(native, options = {}) {
   await flush();
   const node = id => { assert.ok(nodes.has(id), 'Missing real HTML node: ' + id); return nodes.get(id); };
   const dispatch = (id, type, extra = {}) => {
-    const target = node(id);
+    const target = typeof id === 'string' ? node(id) : id;
     const event = { target, button: 0, detail: 1, prevented: false, preventDefault() { this.prevented = true; }, ...extra };
     for (let current = target; current; current = current.parent) current.handlers.get(type)?.(event);
     return event;
@@ -81,11 +82,24 @@ async function mount(native, options = {}) {
   };
 }
 
+test('titlebar has one accessible application-menu icon button and no legacy menu buttons', async () => {
+  const app = await mount(true);
+  const attributes = app.node('app-menu').attributes;
+  for (const [name, value] of Object.entries({ class: 'app-icon', type: 'button', 'aria-label': '应用菜单', 'aria-haspopup': 'menu', 'aria-keyshortcuts': 'Alt+M', title: '应用菜单 (Alt+M)' })) assert.equal(attributes[name], value, name);
+  assert.notEqual(attributes['aria-hidden'], 'true');
+  const button = html.match(/<button\b[^>]*\bid="app-menu"[^>]*>([\s\S]*?)<\/button>/);
+  assert.ok(button, 'the icon must itself be the menu button');
+  assert.match(button[1], /<img src="\/app-icon\.png" width="16" height="16" alt="" \/>/);
+  assert.equal((html.match(/id="app-menu"/g) || []).length, 1);
+  assert.doesNotMatch(html, /id="menu-(?:file|settings|help)"|aria-keyshortcuts="Alt\+[FSH]"/);
+  assert.doesNotMatch(rawSource, /menu-(?:file|settings|help)/);
+});
+
 test('browser preview disables controls and never invokes or subscribes, even for synthetic events', async () => {
   const app = await mount(false);
   for (const id of [...menuIds, ...controlIds]) { assert.equal(app.node(id).disabled, true); await app.click(id); }
   app.dispatch('drag-area', 'mousedown'); app.dispatch('window-title', 'mousedown', { detail: 2 }); app.dispatch('window-title', 'dblclick');
-  for (const key of ['f', 'S', 'h']) app.key(key, { altKey: true });
+  for (const key of ['m', 'M', 'f', 'S', 'h']) app.key(key, { altKey: true });
   await flush(); app.unload();
   assert.deepEqual(app.calls, []); assert.deepEqual(app.listenCalls, []);
   assert.match(app.node('window-title').textContent, /浏览器预览/);
@@ -93,14 +107,30 @@ test('browser preview disables controls and never invokes or subscribes, even fo
   assert.match(app.node('titlebar-status').textContent, /桌面应用/);
 });
 
-test('all three menus route to native popup using their live CSS left coordinate only', async () => {
-  const app = await mount(true, { positions: { 'menu-file': 37.5, 'menu-settings': 84, 'menu-help': 131.25 } });
-  for (const id of menuIds) await app.click(id);
+test('application icon routes to native popup using only its live CSS left coordinate', async () => {
+  const positions = { 'app-menu': 7.5 };
+  const app = await mount(true, { positions });
+  await app.click('app-menu');
+  positions['app-menu'] = 19.25;
+  await app.click('app-menu');
   assert.deepEqual(app.calls.filter(([name]) => name === 'show_titlebar_menu'), [
-    ['show_titlebar_menu', { menu: 'file', x: 37.5 }],
-    ['show_titlebar_menu', { menu: 'settings', x: 84 }],
-    ['show_titlebar_menu', { menu: 'help', x: 131.25 }],
+    ['show_titlebar_menu', { x: 7.5 }],
+    ['show_titlebar_menu', { x: 19.25 }],
   ]);
+});
+
+test('clicking the wrapped icon bubbles to the menu and never starts window dragging', async () => {
+  const app = await mount(true);
+  const icon = app.node('app-menu').children.find(child => child.attributes.src === '/app-icon.png');
+  assert.ok(icon);
+  app.dispatch(icon, 'mousedown');
+  app.dispatch(icon, 'mousedown', { detail: 2 });
+  app.dispatch(icon, 'dblclick');
+  await flush();
+  assert.deepEqual(app.calls, [['titlebar_action', { action: 'state' }]]);
+  app.dispatch(icon, 'click'); await flush();
+  assert.deepEqual(app.calls.at(-1), ['show_titlebar_menu', { x: 8 }]);
+  assert.equal(app.calls.length, 2);
 });
 
 test('subscribes before initial state, then safely updates title, focus, restore icon and accessible label', async () => {
@@ -151,17 +181,17 @@ test('pending menu blocks repeated clicks and shortcuts, failure stays static an
     if (name !== 'show_titlebar_menu') return fallback();
     return ++attempt === 1 ? pending.promise : undefined;
   } });
-  app.dispatch('menu-file', 'click');
+  app.dispatch('app-menu', 'click');
   for (const id of menuIds) { assert.equal(app.node(id).disabled, true); app.dispatch(id, 'click'); }
-  app.key('h', { altKey: true });
+  app.key('M', { altKey: true });
   assert.equal(attempt, 1);
   pending.reject(new Error('secret native diagnostics <script>bad</script>')); await flush();
   assert.equal(app.node('titlebar-status').textContent, '菜单打开失败，请重试。');
   assert.equal(app.node('drag-area').attributes.title, '菜单打开失败，请重试。');
   for (const id of menuIds) assert.equal(app.node(id).disabled, false);
-  await app.click('menu-file'); assert.equal(attempt, 2);
+  await app.click('app-menu'); assert.equal(attempt, 2);
   assert.equal(app.node('titlebar-status').textContent, '');
-  await app.click('menu-file', { detail: 2 }); assert.equal(attempt, 2);
+  await app.click('app-menu', { detail: 2 }); assert.equal(attempt, 2);
 });
 
 test('pending window action prevents duplicate invocation and errors allow retry', async () => {
@@ -178,16 +208,19 @@ test('pending window action prevents duplicate invocation and errors allow retry
   assert.equal(app.node('window-maximize').attributes['aria-label'], '还原');
 });
 
-test('Alt+F/S/H opens menus, native button keyboard clicks work, Escape blurs focus', async () => {
+test('only case-insensitive Alt+M opens the menu, native keyboard clicks work, Escape blurs focus', async () => {
   const app = await mount(true);
-  for (const key of ['f', 'S', 'h']) { assert.equal(app.key(key, { altKey: true }).prevented, true); await flush(); }
-  assert.deepEqual(app.calls.filter(([name]) => name === 'show_titlebar_menu').map(([, args]) => args.menu), ['file', 'settings', 'help']);
+  for (const key of ['m', 'M']) { assert.equal(app.key(key, { altKey: true }).prevented, true); await flush(); }
+  assert.deepEqual(app.calls.filter(([name]) => name === 'show_titlebar_menu'), [
+    ['show_titlebar_menu', { x: 8 }], ['show_titlebar_menu', { x: 8 }],
+  ]);
   const count = app.calls.length;
-  for (const modifiers of [{}, { altKey: true, repeat: true }, { altKey: true, ctrlKey: true }, { altKey: true, metaKey: true }]) app.key('f', modifiers);
+  for (const key of ['f', 'F', 's', 'S', 'h', 'H']) assert.equal(app.key(key, { altKey: true }).prevented, false);
+  for (const modifiers of [{}, { altKey: true, repeat: true }, { altKey: true, ctrlKey: true }, { altKey: true, metaKey: true }]) assert.equal(app.key('m', modifiers).prevented, false);
   assert.equal(app.calls.length, count);
-  await app.click('menu-file', { detail: 0 });
-  assert.equal(app.calls.at(-1)[1].menu, 'file');
-  app.node('menu-help').focus(); app.key('Escape'); assert.equal(app.active(), null);
+  await app.click('app-menu', { detail: 0 });
+  assert.deepEqual(app.calls.at(-1), ['show_titlebar_menu', { x: 8 }]);
+  app.node('app-menu').focus(); app.key('Escape'); assert.equal(app.active(), null);
 });
 
 test('unload cleans subscription once and no subsequent actions or events update the view', async () => {
@@ -199,7 +232,7 @@ test('unload cleans subscription once and no subsequent actions or events update
   assert.equal(app.subscriptions.size, 0);
   const count = app.calls.length;
   for (const id of [...menuIds, ...controlIds]) await app.click(id);
-  app.dispatch('drag-area', 'mousedown'); app.key('f', { altKey: true });
+  app.dispatch('drag-area', 'mousedown'); app.key('m', { altKey: true });
   callback({ payload: state({ title: 'late title' }) });
   assert.equal(app.calls.length, count); assert.equal(app.node('window-title').textContent, title);
 });
@@ -221,7 +254,7 @@ test('late state response cannot overwrite a newer event and pending completions
   assert.equal(app.node('window-maximize').attributes['aria-label'], '还原');
   const late = deferred();
   const second = await mount(true, { invoke(name, _args, { fallback }) { return name === 'show_titlebar_menu' ? late.promise : fallback(); } });
-  second.dispatch('menu-file', 'click'); second.unload();
+  second.dispatch('app-menu', 'click'); second.unload();
   late.reject(new Error('late error')); await flush();
   assert.equal(second.node('titlebar-status').textContent, '');
 });
@@ -234,6 +267,27 @@ test('subscription and initial state failures do not produce unhandled errors or
   const broken = await mount(true, { invoke() { throw new Error('private'); } });
   assert.equal(broken.node('titlebar-status').textContent, '窗口操作失败，请重试。');
   broken.unload(); assert.deepEqual(broken.unlistened, ['titlebar-state']);
+});
+
+test('all configuration sections and controls remain in the existing settings window', () => {
+  const frontend = readFileSync(new URL('../src/main.ts', import.meta.url), 'utf8');
+  assert.match(frontend, /const settingsSections = \['environment', 'notifications', 'updates', 'logs'\] as const/);
+  assert.doesNotMatch(frontend, /[“「]文件[”」]菜单/);
+  assert.match(frontend, /托盘右键菜单/);
+  const settingsTemplate = frontend.slice(frontend.indexOf('app.innerHTML = settingsView ?'), frontend.indexOf('<main class="startup"'));
+  for (const [section, controls] of Object.entries({
+    environment: ['repository-input', 'save-repository', 'config-location', 'check'],
+    notifications: ['notifications-enabled', 'test-notification'],
+    updates: ['check-update', 'install-update'],
+    logs: ['logs', 'log-output'],
+  })) {
+    const markup = settingsTemplate.match(new RegExp('<section id="settings-' + section + '"[^>]*>([\\s\\S]*?)</section>'));
+    assert.ok(markup, section + ' stays in the settings window');
+    for (const id of controls) {
+      assert.ok(markup[1].includes('id="' + id + '"'), id + ' stays in ' + section);
+      assert.ok(!html.includes('id="' + id + '"'), id + ' is not a titlebar control');
+    }
+  }
 });
 
 test('titlebar uses a compact icon and keeps native geometry aligned with CSS height', () => {
@@ -254,10 +308,10 @@ test('entry remains local, single-line 32px, with fixed 46px controls and ample 
   assert.match(css, /html, body[^}]*height: var\(--titlebar-height\)[^}]*overflow: hidden/);
   assert.match(css, /\.window-control\s*\{[^}]*width: 46px;[^}]*flex: 0 0 46px/);
   assert.match(css, /\.drag-area\s*\{[^}]*flex: 1 1 0;[^}]*min-width: 80px/);
-  assert.ok(600 - 36 - 3 * 46 - 3 * 46 >= 200);
+  assert.ok(600 - 36 - 3 * 46 >= 400);
   assert.match(css, /\.window-title\s*\{[^}]*min-width: 0;[^}]*overflow: hidden;[^}]*text-overflow: ellipsis/);
   assert.doesNotMatch(css, /\.window-title\s*\{[^}]*display: none/);
-  assert.equal((html.match(/<button /g) || []).length, 6);
+  assert.equal((html.match(/<button /g) || []).length, 4);
   assert.match(html, /aria-live="polite"/);
   assert.doesNotMatch(html, /https?:\/\/|<iframe|<dialog/);
   assert.doesNotMatch(rawSource, /innerHTML|@tauri-apps\/api\/(?:window|webview)/);

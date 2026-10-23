@@ -842,9 +842,9 @@ fn handle_menu_action(app: &tauri::AppHandle, id: &str) {
     match id {
         "open" => dispatch(app, "open"),
         "logs" => dispatch(app, "logs"),
-        "environment" | "notifications" => {
+        "settings" | "environment" | "notifications" => {
             let app = app.clone();
-            let section = id.to_owned();
+            let section = if id == "settings" { "environment" } else { id }.to_owned();
             thread::spawn(move || {
                 if let Err(error) = show_settings(&app, &section) {
                     app.state::<Arc<Controller>>().record(&app, &error);

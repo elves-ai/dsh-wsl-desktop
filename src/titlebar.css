@@ -22,7 +22,7 @@ body { user-select: none; }
 }
 .app-icon { display: grid; place-items: center; width: 36px; flex: 0 0 36px; color: #91aef3; }
 .app-icon img { display: block; width: 16px; height: 16px; }
-.menus, .window-controls { display: flex; flex: 0 0 auto; }
+.window-controls { display: flex; flex: 0 0 auto; }
 button {
   height: calc(var(--titlebar-height) - 1px);
   margin: 0;
@@ -34,7 +34,6 @@ button {
   font: inherit;
   cursor: default;
 }
-.menus button { width: 46px; flex: 0 0 46px; }
 button:hover:not(:disabled) { background: #363a43; }
 button:active:not(:disabled) { background: #424752; }
 button:focus-visible { outline: 1px solid #9cbcff; outline-offset: -3px; }

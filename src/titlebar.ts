@@ -4,7 +4,6 @@ import './titlebar.css';
 
 type TitlebarState = { maximized: boolean; focused: boolean; title: string };
 type WindowAction = 'state' | 'minimize' | 'maximize' | 'close' | 'drag';
-type Menu = 'file' | 'settings' | 'help';
 
 const native = isTauri();
 const titlebar = document.getElementById('titlebar')!;
@@ -12,8 +11,7 @@ const dragArea = document.getElementById('drag-area')!;
 const title = document.getElementById('window-title')!;
 const status = document.getElementById('titlebar-status')!;
 const maximize = document.getElementById('window-maximize')!;
-const menus: Menu[] = ['file', 'settings', 'help'];
-const menuButtons = menus.map(menu => document.getElementById('menu-' + menu) as HTMLButtonElement);
+const menuButton = document.getElementById('app-menu') as HTMLButtonElement;
 const actions: WindowAction[] = ['minimize', 'maximize', 'close'];
 const windowButtons = actions.map(action => document.getElementById('window-' + action) as HTMLButtonElement);
 let disposed = false;
@@ -58,27 +56,24 @@ async function windowAction(action: WindowAction) {
   }
 }
 
-async function showMenu(menu: Menu) {
+async function showMenu() {
   if (!native || disposed || menuPending) return;
   menuPending = true;
-  menuButtons.forEach(button => { button.disabled = true; });
+  menuButton.disabled = true;
   try {
-    const button = menuButtons[menus.indexOf(menu)];
-    await invoke<void>('show_titlebar_menu', { menu, x: button.getBoundingClientRect().left });
+    await invoke<void>('show_titlebar_menu', { x: menuButton.getBoundingClientRect().left });
     announce('');
   } catch {
     announce('菜单打开失败，请重试。');
   } finally {
     menuPending = false;
-    if (!disposed) menuButtons.forEach(button => { button.disabled = false; });
+    if (!disposed) menuButton.disabled = false;
   }
 }
 
-menus.forEach((menu, index) => {
-  menuButtons[index].disabled = !native;
-  menuButtons[index].addEventListener('click', event => {
-    if (event.detail <= 1) void showMenu(menu);
-  });
+menuButton.disabled = !native;
+menuButton.addEventListener('click', event => {
+  if (event.detail <= 1) void showMenu();
 });
 actions.forEach((action, index) => {
   windowButtons[index].disabled = !native;
@@ -100,10 +95,9 @@ document.addEventListener('keydown', event => {
     return;
   }
   if (!native || disposed || !event.altKey || event.ctrlKey || event.metaKey || event.repeat) return;
-  const menu = ({ f: 'file', s: 'settings', h: 'help' } as const)[event.key.toLowerCase() as 'f' | 's' | 'h'];
-  if (menu) {
+  if (event.key.toLowerCase() === 'm') {
     event.preventDefault();
-    void showMenu(menu);
+    void showMenu();
   }
 });
 

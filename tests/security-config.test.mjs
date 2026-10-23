@@ -17,12 +17,24 @@ test('only trusted local content and titlebar views receive narrowly scoped IPC 
   assert.deepEqual([...capability.permissions].sort(), ['allow-get-snapshot', 'allow-open-settings', 'allow-perform-action', 'allow-set-project-directory', 'allow-get-update-snapshot', 'allow-check-update', 'allow-install-update', 'allow-get-notification-snapshot', 'allow-set-notifications-enabled', 'allow-test-notification', 'core:event:allow-listen', 'core:event:allow-unlisten'].sort());
   assert.ok(config.app.security.csp.includes("object-src 'none'"));
 });
-test('titlebar popup menus preserve guarded actions without a second native menu row', () => {
+test('single titlebar application menu routes settings and leaves guarded service actions in the unchanged tray', () => {
   const desktop = read('src-tauri/src/desktop.rs');
   const titlebar = read('src-tauri/src/desktop_titlebar.rs');
-  for (const label of ['打开 DSH', '诊断日志…', '运行环境与项目目录…', '系统通知设置…', '检查启动器更新…']) assert.ok(titlebar.includes(label));
-  for (const menu of ['file', 'settings', 'help']) assert.ok(titlebar.includes('let ' + menu + ' = Menu::with_items'));
-  assert.ok(titlebar.includes('menu.popup_at(window, LogicalPosition::new(x, HEIGHT))'));
+  const menuFields = titlebar.match(/struct Menus\s*\{([^}]+)\}/)[1];
+  assert.equal((menuFields.match(/:\s*Menu</g) || []).length, 1, 'only one application menu');
+  assert.doesNotMatch(menuFields, /\b(?:file|help)\s*:/);
+  assert.equal((titlebar.match(/Menu::with_items\(/g) || []).length, 1);
+  assert.equal((titlebar.match(/PredefinedMenuItem::separator\(app\)/g) || []).length, 1);
+  const titlebarIds = [...titlebar.matchAll(/MenuItem::with_id\(\s*app,\s*"([^"]+)"/g)].map(match => match[1]);
+  assert.deepEqual(titlebarIds.sort(), ['logs', 'open', 'settings']);
+  for (const label of ['打开 DSH', '设置…', '诊断日志…']) assert.ok(titlebar.includes(label));
+  assert.doesNotMatch(titlebar, /"(?:start|stop|restart|quit|exit|environment|notifications|updates)"/);
+  assert.match(titlebar, /\.popup_at\(window, LogicalPosition::new\(x, HEIGHT\)\)/);
+  const tray = desktop.slice(desktop.indexOf('let open = MenuItem::with_id'), desktop.indexOf('TrayIconBuilder::with_id'));
+  const trayIds = [...tray.matchAll(/MenuItem::with_id\(\s*app,\s*"([^"]+)"/g)].map(match => match[1]);
+  assert.deepEqual(trayIds, ['open', 'logs', 'updates', 'start', 'stop', 'restart', 'quit', 'exit']);
+  assert.match(tray, /&open,\s*&control,\s*&update,\s*&start,\s*&stop,\s*&restart,\s*&quit,\s*&exit/);
+  assert.match(desktop, /TrayIconBuilder::with_id\("dsh-tray"\)[\s\S]*?\.menu\(&menu\)/);
   assert.equal((desktop.match(/\.on_menu_event\(/g) || []).length, 1, 'popup and tray must not dispatch twice');
   assert.ok(desktop.includes('handle_menu_action(app, event.id.as_ref())'));
   assert.equal((desktop.match(/\.decorations\(false\)/g) || []).length, 3);
@@ -32,7 +44,10 @@ test('titlebar popup menus preserve guarded actions without a second native menu
   for (const action of ['open', 'logs', 'start', 'stop', 'restart', 'quit', 'exit']) assert.ok(handler.includes('"' + action + '" => dispatch(app, "' + action + '")'));
   assert.ok(handler.includes('updates::show_updates(&app)'));
   assert.ok(handler.includes('updates::check(&app, &state).await'));
-  assert.ok(handler.includes('show_settings(&app, &section)'));
+  const settingsHandler = handler.slice(handler.indexOf('"settings"'), handler.indexOf('"updates" =>'));
+  assert.match(settingsHandler, /"settings"\s*\|\s*"environment"\s*\|\s*"notifications"\s*=>/);
+  assert.match(settingsHandler, /let section = if id == "settings" \{ "environment" \} else \{ id \}\.to_owned\(\)/);
+  assert.ok(settingsHandler.includes('show_settings(&app, &section)'));
   assert.doesNotMatch(handler, /show_launcher|launcher-show-settings/);
   assert.doesNotMatch(handler, /install_update|set_notifications_enabled|set_project_directory|backend\./);
 });
@@ -279,12 +294,12 @@ test('settings is a separate reusable trusted webview with isolated titlebar and
   assert.ok(desktop.includes('            open_settings,'));
 });
 
-test('File and tray service controls remain native, guarded and distinct from settings navigation', () => {
+test('tray-only service controls remain native, guarded and distinct from settings navigation', () => {
   const desktop = read('src-tauri/src/desktop.rs'); const titlebar = read('src-tauri/src/desktop_titlebar.rs');
-  const file = titlebar.slice(titlebar.indexOf('let file = Menu::with_items'), titlebar.indexOf('let environment ='));
   const tray = desktop.slice(desktop.indexOf('let menu = Menu::with_items'), desktop.indexOf('TrayIconBuilder::with_id'));
   for (const action of ['open', 'start', 'stop', 'restart', 'quit', 'exit']) {
-    assert.ok(file.includes('&' + action), action); assert.ok(tray.includes('&' + action), action);
+    assert.ok(tray.includes('&' + action), action);
+    if (action !== 'open') assert.ok(!titlebar.includes('"' + action + '"'), action + ' is tray-only');
   }
   const perform = desktop.slice(desktop.indexOf('fn perform('), desktop.indexOf('fn dispatch('));
   assert.ok(perform.includes('["stop", "restart", "exit"].contains(&action) && !confirm(action)'));

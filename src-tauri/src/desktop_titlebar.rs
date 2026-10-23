@@ -11,51 +11,17 @@ use url::Url;
 const HEIGHT: f64 = 32.0;
 
 pub(super) struct Menus {
-    file: Menu<tauri::Wry>,
-    settings: Menu<tauri::Wry>,
-    help: Menu<tauri::Wry>,
+    application: Menu<tauri::Wry>,
 }
 impl Menus {
     pub(super) fn new(app: &tauri::AppHandle) -> tauri::Result<Self> {
         let open = MenuItem::with_id(app, "open", "打开 DSH", true, None::<&str>)?;
-        let start = MenuItem::with_id(app, "start", "启动服务", true, None::<&str>)?;
-        let stop = MenuItem::with_id(app, "stop", "停止服务…", true, None::<&str>)?;
-        let restart = MenuItem::with_id(app, "restart", "重启服务…", true, None::<&str>)?;
         let separator = PredefinedMenuItem::separator(app)?;
-        let exit_separator = PredefinedMenuItem::separator(app)?;
-        let quit = MenuItem::with_id(app, "quit", "仅退出启动器（保留服务）", true, None::<&str>)?;
-        let exit = MenuItem::with_id(app, "exit", "停止服务并退出…", true, None::<&str>)?;
-        let file = Menu::with_items(
-            app,
-            &[
-                &open,
-                &separator,
-                &start,
-                &stop,
-                &restart,
-                &exit_separator,
-                &quit,
-                &exit,
-            ],
-        )?;
-        let environment = MenuItem::with_id(
-            app,
-            "environment",
-            "运行环境与项目目录…",
-            true,
-            None::<&str>,
-        )?;
-        let notifications =
-            MenuItem::with_id(app, "notifications", "系统通知设置…", true, None::<&str>)?;
-        let update = MenuItem::with_id(app, "updates", "检查启动器更新…", true, None::<&str>)?;
-        let settings = Menu::with_items(app, &[&environment, &notifications, &update])?;
+        let settings = MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
         let logs = MenuItem::with_id(app, "logs", "诊断日志…", true, None::<&str>)?;
-        let help = Menu::with_items(app, &[&logs])?;
-        Ok(Self {
-            file,
-            settings,
-            help,
-        })
+        // Service lifecycle and exit actions belong exclusively to the tray menu.
+        let application = Menu::with_items(app, &[&open, &separator, &settings, &logs])?;
+        Ok(Self { application })
     }
 }
 
@@ -133,19 +99,10 @@ pub(super) async fn titlebar_action(view: Webview, action: Action) -> Result<Sta
     state(&window).map_err(|_| "无法读取窗口状态。".into())
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub(super) enum MenuName {
-    File,
-    Settings,
-    Help,
-}
-
 #[tauri::command]
 pub(super) async fn show_titlebar_menu(
     view: Webview,
     menus: tauri::State<'_, Menus>,
-    menu: MenuName,
     x: f64,
 ) -> Result<(), String> {
     let window = assert_titlebar(&view)?;
@@ -154,13 +111,10 @@ pub(super) async fn show_titlebar_menu(
     if !x.is_finite() || x < 0.0 || x >= width {
         return Err("菜单位置无效。".into());
     }
-    let menu = match menu {
-        MenuName::File => &menus.file,
-        MenuName::Settings => &menus.settings,
-        MenuName::Help => &menus.help,
-    };
     // Native popup is not clipped by the titlebar webview and keeps native keyboard navigation.
-    menu.popup_at(window, LogicalPosition::new(x, HEIGHT))
+    menus
+        .application
+        .popup_at(window, LogicalPosition::new(x, HEIGHT))
         .map_err(|_| "无法打开菜单，请重试。".into())
 }
 

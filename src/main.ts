@@ -71,7 +71,7 @@ app.innerHTML = settingsView ? `
     <section id="settings-environment" aria-label="环境与目录">
       <div class="setting-group"><h2>DSH 项目目录</h2><p id="repository-help">填写 WSL 内的绝对路径，不是 Windows 路径。</p><label class="visually-hidden" for="repository-input">DSH 项目目录</label><input id="repository-input" type="text" placeholder="/home/用户名/deepseek-harness" autocomplete="off" spellcheck="false" maxlength="4096" aria-describedby="repository-help repository-notice" disabled><p class="setting-help" id="repository-notice" role="status" aria-live="polite">正在读取配置。</p><button class="button primary" id="save-repository" type="button" disabled>保存并重新检测</button></div>
       <div class="setting-group"><div class="group-heading"><h2>运行环境</h2><span id="status-label" class="muted">读取中</span></div><dl class="connection-info"><div><dt>服务地址</dt><dd><code id="origin">尚未连接</code></dd></div><div><dt>进程归属</dt><dd id="ownership">等待检查</dd></div><div><dt>启动配置</dt><dd id="config-location">尚未读取</dd></div></dl><p class="setting-help" id="ownership-hint">仅管理由启动器托管的服务。</p><button class="button secondary" id="check" type="button" disabled>重新检测并进入 DSH</button></div>
-      <p class="setting-help">不自动安装软件、克隆项目或安装依赖。修改目录前，请通过“文件”菜单停止服务。</p>
+      <p class="setting-help">不自动安装软件、克隆项目或安装依赖。修改目录前，请通过托盘右键菜单停止服务。</p>
     </section>
     <section id="settings-notifications" aria-label="系统通知" hidden><div class="setting-group"><div class="toggle-row"><div><h2>后台任务通知</h2><p>DSH 不在前台时，提醒任务结束、失败，以及需要你选择、回答或确认计划。</p></div><label class="switch"><input id="notifications-enabled" type="checkbox" aria-label="启用系统通知" disabled><span></span></label></div><p id="notification-message" class="setting-help" role="status" aria-live="polite">正在读取通知设置。</p><button class="button secondary" id="test-notification" type="button" disabled>发送测试通知</button></div><p class="setting-help">默认关闭。通知不显示任务正文；本轮结束不代表整个长任务完成。退出启动器后不再提醒。</p><p class="setting-help">若未看到横幅，请检查 Windows 通知权限及勿扰模式。</p></section>
     <section id="settings-updates" aria-label="软件更新" hidden><div class="setting-group"><div class="group-heading"><h2>DSH WSL Desktop</h2><span id="update-current-version" class="muted">正在读取版本</span></div><p id="update-new-version" hidden></p><p id="update-message" role="status" aria-live="polite" tabindex="-1">正在读取更新状态。</p><pre id="update-notes" aria-label="更新说明" hidden></pre><div id="update-progress-row" hidden><progress id="update-progress" aria-label="更新下载进度"></progress><span id="update-progress-label"></span></div><div class="setting-actions"><button class="button secondary" id="check-update" type="button" disabled>检查更新</button><button class="button primary" id="install-update" type="button" hidden disabled>下载并安装</button></div></div><p class="setting-help">仅更新 Windows 启动器，不会更新或停止 WSL 中的 DSH。安装前需要你确认。</p></section>
@@ -234,11 +234,11 @@ function renderSettings(disabled: boolean, passed: boolean, error: string): void
   const path = repositoryInput.value.trim();
   const valid = path.startsWith('/') && !path.startsWith('//') && path.length <= 4096 && !/[\u0000-\u001f\u007f]/.test(path);
   saveRepositoryButton.disabled = repositoryInput.disabled || !valid || !repositoryDirty;
-  element('repository-notice').textContent = repositoryPending ? '正在保存并重新检测…' : running ? '修改目录前，请先通过“文件”菜单停止服务。' : !canConfigure ? '请先准备好 WSL、启动器配置和 Python，再设置项目目录。' : repositoryDirty && !valid ? '请输入有效的 WSL 绝对路径，不能包含控制字符。' : '仅保存到现有服务配置；不会克隆项目或安装依赖。';
+  element('repository-notice').textContent = repositoryPending ? '正在保存并重新检测…' : running ? '修改目录前，请先通过托盘右键菜单停止服务。' : !canConfigure ? '请先准备好 WSL、启动器配置和 Python，再设置项目目录。' : repositoryDirty && !valid ? '请输入有效的 WSL 绝对路径，不能包含控制字符。' : '仅保存到现有服务配置；不会克隆项目或安装依赖。';
   element('status-label').textContent = snapshot.environment_checking ? '检测中' : passed ? '检查通过' : '需要检查';
   element('origin').textContent = safeOrigin(snapshot.origin);
   element('ownership').textContent = snapshot.managed ? '由启动器管理' : snapshot.state === 'ready' ? '未验证归属' : '未托管';
-  element('ownership-hint').textContent = snapshot.state === 'ready' && !snapshot.managed ? '尚未验证该服务是否由启动器管理，不会自动停止或重启。' : '服务操作位于“文件”菜单；停止或重启前会再次确认。';
+  element('ownership-hint').textContent = snapshot.state === 'ready' && !snapshot.managed ? '尚未验证该服务是否由启动器管理，不会自动停止或重启。' : '服务操作位于托盘右键菜单；停止或重启前会再次确认。';
   element('config-location').textContent = redact(snapshot.config_path || '尚未读取');
   const output = element('log-output');
   const atBottom = output.scrollHeight - output.scrollTop - output.clientHeight < 30;

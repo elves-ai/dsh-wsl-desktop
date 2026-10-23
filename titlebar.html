@@ -8,14 +8,9 @@
   </head>
   <body>
     <header id="titlebar" class="titlebar" aria-label="窗口标题栏" data-focused="true">
-      <span class="app-icon" aria-hidden="true">
+      <button id="app-menu" class="app-icon" type="button" aria-label="应用菜单" aria-haspopup="menu" aria-keyshortcuts="Alt+M" title="应用菜单 (Alt+M)">
         <img src="/app-icon.png" width="16" height="16" alt="" />
-      </span>
-      <nav class="menus" aria-label="应用菜单">
-        <button id="menu-file" type="button" aria-haspopup="menu" aria-keyshortcuts="Alt+F" title="文件 (Alt+F)">文件</button>
-        <button id="menu-settings" type="button" aria-haspopup="menu" aria-keyshortcuts="Alt+S" title="设置 (Alt+S)">设置</button>
-        <button id="menu-help" type="button" aria-haspopup="menu" aria-keyshortcuts="Alt+H" title="帮助 (Alt+H)">帮助</button>
-      </nav>
+      </button>
       <div id="drag-area" class="drag-area" title="拖动窗口；双击最大化或还原">
         <span id="window-title" class="window-title">DeepSeek Harness</span>
       </div>
