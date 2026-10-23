@@ -38,7 +38,20 @@ impl PowerSettings {
         let file = match File::open(directory.join("power.json")) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Self::default())
+                // Windows also reports PATH_NOT_FOUND when a parent component is
+                // a regular file. Only genuinely missing directories use defaults.
+                let mut ancestor = Some(directory);
+                while let Some(path) = ancestor {
+                    match fs::metadata(path) {
+                        Ok(metadata) if metadata.is_dir() => return Ok(Self::default()),
+                        Ok(_) => return Err("电源设置目录无效；防休眠保持关闭。".into()),
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                            ancestor = path.parent();
+                        }
+                        Err(_) => return Err("无法读取电源设置目录；防休眠保持关闭。".into()),
+                    }
+                }
+                return Ok(Self::default());
             }
             Err(_) => return Err("无法读取电源设置；防休眠保持关闭。".into()),
         };
@@ -609,6 +622,10 @@ mod tests {
         fs::write(&file, b"untouched").unwrap();
         assert!(PowerSettings::default().save(&file).is_err());
         assert!(PowerSettings::load(&file).is_err());
+        assert!(PowerSettings::load(&file.join("missing-child")).is_err());
+        let missing_directory = directory.0.join("missing-directory").join("child");
+        assert!(PowerSettings::load(&missing_directory).unwrap().enabled);
+        assert!(!missing_directory.exists());
         assert_eq!(fs::read(file).unwrap(), b"untouched");
     }
 
