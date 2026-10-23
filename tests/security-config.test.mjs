@@ -14,7 +14,7 @@ test('only trusted local content and titlebar views receive narrowly scoped IPC 
   assert.equal(titlebar.local, true); assert.equal(titlebar.remote, undefined);
   assert.deepEqual([...titlebar.permissions].sort(), ['core:event:allow-listen', 'core:event:allow-unlisten', 'allow-titlebar-action', 'allow-open-titlebar-settings', 'allow-open-titlebar-updates', 'allow-get-titlebar-update-state'].sort());
   assert.equal(capability.local, true); assert.equal(capability.remote, undefined);
-  assert.deepEqual([...capability.permissions].sort(), ['allow-get-snapshot', 'allow-open-settings', 'allow-perform-action', 'allow-set-project-directory', 'allow-get-update-snapshot', 'allow-check-update', 'allow-install-update', 'allow-get-notification-snapshot', 'allow-set-notifications-enabled', 'allow-test-notification', 'core:event:allow-listen', 'core:event:allow-unlisten'].sort());
+  assert.deepEqual([...capability.permissions].sort(), ['allow-get-snapshot', 'allow-open-settings', 'allow-perform-action', 'allow-set-project-directory', 'allow-get-update-snapshot', 'allow-check-update', 'allow-install-update', 'allow-get-notification-snapshot', 'allow-set-notifications-enabled', 'allow-test-notification', 'allow-get-power-snapshot', 'allow-set-power-enabled', 'core:event:allow-listen', 'core:event:allow-unlisten'].sort());
   const navigation = JSON.parse(read('src-tauri/capabilities/settings-navigation.json'));
   assert.deepEqual(navigation.webviews, ['launcher-settings', 'dsh-settings']);
   assert.equal(navigation.local, true); assert.equal(navigation.remote, undefined); assert.equal(navigation.windows, undefined);
@@ -305,6 +305,41 @@ test('notification commands stay local, fixed-purpose and independent of DSH IPC
   assert.ok(source.includes('foreground(app)'));
   assert.ok(!source.includes('initialization_script'));
   assert.ok(!source.includes('get_webview_window("dsh").emit'));
+});
+
+test('power commands are local fixed-purpose settings with no remote power-control IPC', () => {
+  const source = read('src-tauri/src/desktop_power.rs');
+  const capability = JSON.parse(read('src-tauri/capabilities/launcher.json'));
+  for (const command of ['get_power_snapshot', 'set_power_enabled']) {
+    const declaration = source.slice(source.indexOf('fn ' + command + '('));
+    const body = declaration.slice(declaration.indexOf(') ->'));
+    assert.ok(body.slice(body.indexOf('{') + 1).trimStart().startsWith('assert_local(&window)?;'));
+    const params = declaration.slice(0, declaration.indexOf(') ->'));
+    assert.doesNotMatch(params, /(?:url|path|cookie|token|session_id|flags|command):/);
+    assert.ok(read('src-tauri/build.rs').includes('"' + command + '"'));
+    assert.ok(read('src-tauri/src/desktop.rs').includes('power::' + command));
+    assert.ok(capability.permissions.includes('allow-' + command.replaceAll('_', '-')));
+  }
+  assert.ok(read('src-tauri/src/desktop.rs').includes('"notifications" | "power" | "updates"'));
+  assert.ok(read('src-tauri/src/desktop_settings.rs').includes('"power" => "power"'));
+});
+
+test('power monitoring is independent, list-only and keeps thread-scoped requests off the UI thread', () => {
+  const source = read('src-tauri/src/desktop_power.rs');
+  const worker = source.slice(source.indexOf('pub(super) fn start('), source.indexOf('#[cfg(test)]'));
+  assert.match(worker, /thread::spawn[\s\S]*PowerGuard::new\(NativeInhibitor::default\(\)\)/);
+  assert.ok(worker.includes('running_tasks(&rpc.list()?)'));
+  assert.ok(worker.includes('notifications::client(&app, &backend.config.origin())?'));
+  assert.doesNotMatch(source, /NotificationSettings|notify_when_focused|rpc[.]page|[.]eval\(|initialization_script/);
+  assert.ok(source.includes('data.epoch != epoch'));
+  assert.ok(source.includes('required && data.snapshot.enabled'));
+  assert.ok(worker.includes('controller.exiting.load'));
+  assert.ok(worker.includes('drop(guard)'));
+  assert.ok(source.includes('state.wake.notify_all()'));
+  const core = read('src-tauri/src/power.rs');
+  assert.match(core, /SetThreadExecutionState/);
+  assert.match(core, /ES_SYSTEM_REQUIRED/);
+  assert.doesNotMatch(core, /ES_DISPLAY_REQUIRED|ES_AWAYMODE_REQUIRED|PowerSetActiveScheme|SetSuspendState/);
 });
 
 test('startup checks gate service launch and missing environments are never overwritten by monitor probes', () => {

@@ -14,6 +14,8 @@ fn main() {
                 "get_notification_snapshot",
                 "set_notifications_enabled",
                 "test_notification",
+                "get_power_snapshot",
+                "set_power_enabled",
                 "titlebar_action",
                 "open_titlebar_settings",
                 "open_titlebar_updates",

@@ -11,16 +11,18 @@ const environment = (extra = {}) => ({ checks: checkIds.map(id => ({ id, label: 
 const base = (extra = {}) => ({ state: 'ready', phase: '已就绪', message: '正常', busy: false, managed: true, origin: 'http://127.0.0.1:3080', last_error: null, logs: [], environment: environment(), environment_checking: false, config_path: 'C:/test/config.json', ...extra });
 const update = (extra = {}) => ({ current_version: '0.1.0', phase: 'idle', version: null, notes: null, downloaded: 0, total: null, message: '可检查更新', busy: false, ...extra });
 const notification = (extra = {}) => ({ enabled: false, notify_when_focused: false, phase: 'disabled', message: '未启用系统通知。', ...extra });
+const power = (extra = {}) => ({ enabled: true, active: false, phase: 'idle', message: '等待运行中的任务。', ...extra });
 const listening = (extra = {}) => notification({ enabled: true, phase: 'listening', message: '通知检查正常', ...extra });
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 async function mount(native, initial = base(), options = {}) {
   let savedNotification = options.initialNotification || notification();
+  let savedPower = options.initialPower || power();
   const nodes = new Map(); const subscriptions = new Map(); const calls = []; const windowHandlers = new Map(); const listenCalls = []; const unlistened = [];
   const node = id => {
     if (!nodes.has(id)) nodes.set(id, { id, textContent: '', dataset: {}, hidden: false, disabled: false, checked: false, open: false, scrollTop: 0, scrollHeight: 0, clientHeight: 0, handlers: {}, attributes: {}, set innerHTML(_) { throw new Error('Native data must not use HTML'); }, addEventListener(name, fn) { this.handlers[name] = fn; }, setAttribute(name, value) { this.attributes[name] = value; }, removeAttribute(name) { delete this.attributes[name]; if (name === 'value') delete this.value; }, focus() { this.focused = true; }, scrollIntoView() { this.scrolled = true; } });
     return nodes.get(id);
   };
-  const root = { set innerHTML(template) { for (const match of template.matchAll(/<[^>]+\bid="([^"]+)"[^>]*>/g)) { const item = node(match[1]); item.hidden = /\bhidden(?:\s|>)/.test(match[0]); item.disabled = /\bdisabled(?:\s|>)/.test(match[0]); } } };
+  const root = { template: '', set innerHTML(template) { this.template = template; for (const match of template.matchAll(/<[^>]+\bid="([^"]+)"[^>]*>/g)) { const item = node(match[1]); item.hidden = /\bhidden(?:\s|>)/.test(match[0]); item.disabled = /\bdisabled(?:\s|>)/.test(match[0]); } } };
   const location = { href: options.location || (options.mode === 'startup' ? 'http://127.0.0.1:1420/index.html' : 'http://127.0.0.1:1420/index.html?view=settings&section=environment') };
   const context = vm.createContext({
     appIconUrl: 'app-icon.png',
@@ -32,6 +34,11 @@ async function mount(native, initial = base(), options = {}) {
       const fallback = () => {
         if (name === 'get_snapshot' || name === 'perform_action' || name === 'set_project_directory') return initial;
         if (['get_update_snapshot', 'check_update', 'install_update'].includes(name)) return options.initialUpdate || update();
+        if (name === 'get_power_snapshot') return savedPower;
+        if (name === 'set_power_enabled') {
+          savedPower = power({ enabled: args.enabled, phase: args.enabled ? 'idle' : 'disabled', message: args.enabled ? '等待运行中的任务。' : '未启用任务期间防休眠。' });
+          return savedPower;
+        }
         if (name === 'get_notification_snapshot' || name === 'test_notification') return savedNotification;
         if (name === 'set_notifications_enabled') {
           const extra = { notify_when_focused: args.notifyWhenFocused ?? savedNotification.notify_when_focused };
@@ -46,23 +53,27 @@ async function mount(native, initial = base(), options = {}) {
     },
   });
   vm.runInContext(source, context); await flush();
-  return { node(id) { assert.ok(nodes.has(id), 'Missing DOM node: ' + id); return nodes.get(id); }, has: id => nodes.has(id), location, calls, subscriptions, listenCalls, unlistened, async change(id, checked) { const item = nodes.get(id); if (!item) return; item.checked = checked; item.handlers.change?.(); await flush(); }, notification(snapshot) { subscriptions.get('launcher-notification-state')?.({ payload: snapshot }); }, unload() { windowHandlers.get('beforeunload')?.(); }, event(snapshot) { subscriptions.get('launcher-state')?.({ payload: snapshot }); }, update(snapshot) { subscriptions.get('launcher-update-state')?.({ payload: snapshot }); }, async click(id) { nodes.get(id)?.handlers.click?.(); await flush(); } };
+  return { template: root.template, power(snapshot) { subscriptions.get('launcher-power-state')?.({ payload: snapshot }); }, node(id) { assert.ok(nodes.has(id), 'Missing DOM node: ' + id); return nodes.get(id); }, has: id => nodes.has(id), location, calls, subscriptions, listenCalls, unlistened, async change(id, checked) { const item = nodes.get(id); if (!item) return; item.checked = checked; item.handlers.change?.(); await flush(); }, notification(snapshot) { subscriptions.get('launcher-notification-state')?.({ payload: snapshot }); }, unload() { windowHandlers.get('beforeunload')?.(); }, event(snapshot) { subscriptions.get('launcher-state')?.({ payload: snapshot }); }, update(snapshot) { subscriptions.get('launcher-update-state')?.({ payload: snapshot }); }, async click(id) { nodes.get(id)?.handlers.click?.(); await flush(); } };
 }
 
 test('browser previews never invoke native commands or subscribe in either view', async () => {
   for (const mode of ['startup', 'settings']) {
     const app = await mount(false, base(), { mode });
-    for (const id of ['check', 'save-repository', 'open', 'logs', 'check-update', 'install-update', 'notifications-enabled', 'notifications-when-focused', 'test-notification']) {
+    for (const id of ['check', 'save-repository', 'open', 'logs', 'check-update', 'install-update', 'notifications-enabled', 'notifications-when-focused', 'test-notification', 'power-enabled', 'power-refresh']) {
       if (app.has(id)) assert.equal(app.node(id).disabled, true);
       await app.click(id);
     }
     await app.change('notifications-enabled', true);
     await app.change('notifications-when-focused', true);
-    for (const section of ['environment', 'notifications', 'updates', 'logs']) await app.click('nav-' + section);
+    await app.change('power-enabled', false);
+    for (const section of ['environment', 'notifications', 'power', 'updates', 'logs']) await app.click('nav-' + section);
     assert.equal(app.calls.length, 0); assert.equal(app.listenCalls.length, 0); assert.equal(app.subscriptions.size, 0);
     if (mode === 'settings') {
       assert.equal(app.node('notifications-enabled').checked, false);
       assert.match(app.node('notification-message').textContent, /预览.*不会请求网页通知权限/);
+      assert.equal(app.node('power-enabled').checked, true);
+      assert.match(app.node('power-message').textContent, /预览.*不连接电源管理服务/);
+      assert.match(app.node('power-active').textContent, /未提供实际休眠保护/);
       assert.equal(app.node('settings-preview').hidden, false);
     } else assert.equal(app.node('preview-note').hidden, false);
   }
@@ -98,7 +109,7 @@ test('waiting for browser authentication stays active then advances without a ma
 test('startup has no settings dashboard or standalone service controls', async () => {
   const app = await mount(true, base({ managed: false }), { mode: 'startup' });
   assert.equal(app.has('startup-shell'), true);
-  for (const id of ['settings-shell', 'settings-back', 'service-card', 'start', 'stop', 'restart', 'quit', 'exit', 'repository-input', 'save-repository', 'origin', 'config-location', 'notifications-enabled', 'notification-message', 'check-update', 'install-update', 'update-notes', 'logs', 'log-output', 'nav-environment']) {
+  for (const id of ['settings-shell', 'settings-back', 'service-card', 'start', 'stop', 'restart', 'quit', 'exit', 'repository-input', 'save-repository', 'origin', 'config-location', 'notifications-enabled', 'notification-message', 'power-enabled', 'power-refresh', 'power-active', 'power-message', 'nav-power', 'check-update', 'install-update', 'update-notes', 'logs', 'log-output', 'nav-environment']) {
     assert.equal(app.has(id), false, id); await app.click(id);
   }
   assert.equal(app.calls.filter(([name]) => name === 'perform_action').length, 0);
@@ -131,8 +142,9 @@ test('startup subscribes before querying and silently checks updates once withou
     return fallback();
   } });
   assert.equal(app.calls.filter(([name]) => name === 'check_update').length, 1);
-  assert.equal(app.calls.filter(([name]) => ['install_update', 'get_notification_snapshot', 'perform_action', 'open_settings'].includes(name)).length, 0);
+  assert.equal(app.calls.filter(([name]) => ['install_update', 'get_notification_snapshot', 'get_power_snapshot', 'set_power_enabled', 'perform_action', 'open_settings'].includes(name)).length, 0);
   assert.equal(app.listenCalls.includes('launcher-notification-state'), false);
+  assert.equal(app.listenCalls.includes('launcher-power-state'), false);
   assert.equal(app.has('check-update'), false); assert.equal(app.has('install-update'), false);
   app.update(update({ phase: 'available', version: '0.2.0' }));
   app.event(base()); await flush();
@@ -502,6 +514,271 @@ test('unload cleans notification listeners even when registration resolves late'
 });
 
 
+test('power defaults enabled, subscribes before read, and provides the protection boundaries', async () => {
+  const app = await mount(true, base(), { invoke(name, args, { subscriptions, fallback }) {
+    if (name === 'get_power_snapshot') { assert.ok(subscriptions.has('launcher-power-state')); assert.equal(args, undefined); }
+    return fallback();
+  } });
+  assert.equal(app.node('power-enabled').checked, true);
+  assert.equal(app.node('power-enabled').disabled, false);
+  assert.equal(app.node('power-active').dataset.active, 'false');
+  assert.match(app.node('power-active').textContent, /当前未在/);
+  assert.match(app.node('power-message').textContent, /等待任务.*等待运行中的任务/);
+  assert.equal(app.calls.filter(([name]) => name === 'get_power_snapshot').length, 1);
+  assert.equal(app.calls.filter(([name]) => name === 'set_power_enabled').length, 0);
+  assert.match(app.template, /默认启用.*仅防止系统自动休眠.*屏幕仍可熄灭/);
+  assert.match(app.template, /托盘后继续保护.*退出启动器后不再保护.*不阻止手动睡眠或合盖休眠/);
+  const sections = [...app.template.matchAll(/id="nav-([^"]+)"/g)].map(match => match[1]);
+  assert.deepEqual(sections, ['environment', 'notifications', 'power', 'updates', 'logs']);
+  await app.click('nav-power');
+  assert.equal(app.node('settings-title').textContent, '电源管理');
+  assert.match(app.node('settings-description').textContent, /系统自动休眠保护/);
+});
+
+test('power restores a disabled setting and writes only enabled on explicit toggles', async () => {
+  const app = await mount(true, base(), { initialPower: power({ enabled: false, phase: 'disabled' }) });
+  assert.equal(app.node('power-enabled').checked, false);
+  await app.change('power-enabled', true);
+  await app.change('power-enabled', false);
+  const requests = app.calls.filter(([name]) => name === 'set_power_enabled');
+  assert.equal(requests.length, 2);
+  assert.deepEqual(JSON.parse(JSON.stringify(requests.map(([, args]) => args))), [{ enabled: true }, { enabled: false }]);
+  assert.equal(app.node('power-enabled').checked, false);
+  assert.equal(app.node('notifications-enabled').checked, false);
+  assert.equal(app.calls.filter(([name]) => name === 'set_notifications_enabled').length, 0);
+});
+
+test('power phases and actual active protection are distinct, plain text and redacted', async () => {
+  const app = await mount(true);
+  for (const [phase, label] of [['disabled', '未启用'], ['connecting', '连接中'], ['idle', '等待任务'], ['active', '保护中'], ['error', '电源管理异常']]) {
+    // An error may still retain an existing protection request: active is authoritative.
+    const active = phase === 'active' || phase === 'error';
+    app.power(power({ enabled: phase !== 'disabled', active, phase, message: '<img onerror=bad> token=private-power Bearer private-bearer' }));
+    assert.equal(app.node('power-message').dataset.phase, phase);
+    assert.equal(app.node('power-message').dataset.error, String(phase === 'error'));
+    assert.match(app.node('power-message').textContent, new RegExp(label));
+    assert.match(app.node('power-message').textContent, /<img onerror=bad>/);
+    assert.doesNotMatch(app.node('power-message').textContent, /private-power|private-bearer/);
+    assert.equal(app.node('power-active').dataset.active, String(active));
+    assert.equal(app.node('power-active').textContent, active ? '当前正在防止系统自动休眠' : '当前未在防止系统自动休眠');
+    assert.equal(app.node('power-enabled').disabled, false);
+  }
+});
+
+test('power saving failure rolls back either toggle direction and permits retry', async () => {
+  for (const enabled of [true, false]) {
+    let attempts = 0;
+    const app = await mount(true, base(), { initialPower: power({ enabled, phase: enabled ? 'idle' : 'disabled' }), invoke(name, _args, { fallback }) {
+      if (name === 'set_power_enabled' && attempts++ === 0) throw new Error('<script>save failed</script> token=private-power');
+      return fallback();
+    } });
+    await app.change('power-enabled', !enabled);
+    assert.equal(app.node('power-enabled').checked, enabled);
+    assert.equal(app.node('power-enabled').disabled, false);
+    assert.equal(app.node('power-message').dataset.error, 'true');
+    assert.match(app.node('power-message').textContent, /保存失败.*可重试.*<script>save failed/);
+    assert.doesNotMatch(app.node('power-message').textContent, /private-power/);
+    await app.change('power-enabled', !enabled);
+    assert.equal(app.node('power-enabled').checked, !enabled);
+    assert.equal(app.node('power-message').dataset.error, 'false');
+  }
+});
+
+test('power read must succeed before a toggle can write the default setting', async () => {
+  const initial = deferred();
+  const app = await mount(true, base(), { invoke(name, _args, { fallback }) { return name === 'get_power_snapshot' ? initial.promise : fallback(); } });
+  assert.equal(app.node('power-enabled').checked, true);
+  assert.equal(app.node('power-enabled').disabled, true);
+  assert.equal(app.node('power-active').dataset.active, 'unknown');
+  await app.change('power-enabled', false);
+  assert.equal(app.node('power-enabled').checked, true);
+  assert.equal(app.calls.filter(([name]) => name === 'set_power_enabled').length, 0);
+  initial.reject(new Error('read failed token=private-power')); await flush();
+  assert.equal(app.node('power-enabled').disabled, true);
+  assert.equal(app.node('power-message').dataset.error, 'true');
+  assert.match(app.node('power-message').textContent, /无法读取电源设置.*重试检测.*read failed/);
+  assert.doesNotMatch(app.node('power-message').textContent, /private-power/);
+  await app.change('power-enabled', false);
+  assert.equal(app.calls.filter(([name]) => name === 'set_power_enabled').length, 0);
+  // A later authoritative event recovers the setting without writing a guessed default.
+  app.power(power({ enabled: false, phase: 'disabled', message: 'recovered' }));
+  assert.equal(app.node('power-enabled').disabled, false);
+  assert.equal(app.node('power-enabled').checked, false);
+  assert.equal(app.node('power-message').dataset.error, 'false');
+});
+
+test('notification and power operations, errors and busy locks are independent', async () => {
+  const saving = deferred(); const notifying = deferred();
+  const app = await mount(true, base({ busy: true }), { invoke(name, _args, { fallback }) {
+    if (name === 'set_power_enabled') return saving.promise;
+    if (name === 'set_notifications_enabled') return notifying.promise;
+    return fallback();
+  } });
+  await app.change('power-enabled', false);
+  assert.equal(app.node('power-enabled').disabled, true);
+  assert.equal(app.node('notifications-enabled').disabled, false);
+  await app.change('power-enabled', true);
+  assert.equal(app.calls.filter(([name]) => name === 'set_power_enabled').length, 1);
+  await app.change('notifications-enabled', true);
+  assert.equal(app.node('notifications-enabled').disabled, true);
+  saving.resolve(power({ enabled: false, phase: 'disabled' })); await flush();
+  assert.equal(app.node('power-enabled').checked, false);
+  assert.equal(app.node('power-enabled').disabled, false);
+  notifying.reject(new Error('notification failure')); await flush();
+  assert.equal(app.node('notification-message').dataset.error, 'true');
+  assert.equal(app.node('power-message').dataset.error, 'false');
+  app.notification(listening());
+  assert.equal(app.node('power-enabled').checked, false);
+  app.power(power());
+  assert.equal(app.node('notifications-enabled').checked, true);
+});
+
+test('power events during registration and delayed reads beat initial responses and failures', async () => {
+  for (const rejectRead of [false, true]) {
+    const initial = deferred();
+    const app = await mount(true, base(), { listen(name, callback) {
+      if (name === 'launcher-power-state') callback({ payload: power({ enabled: false, phase: 'disabled', message: 'early power event' }) });
+    }, invoke(name, _args, { fallback }) { return name === 'get_power_snapshot' ? initial.promise : fallback(); } });
+    assert.equal(app.node('power-enabled').checked, false);
+    assert.match(app.node('power-message').textContent, /early power event/);
+    app.power(power({ active: true, phase: 'active', message: 'latest power event' }));
+    assert.match(app.node('power-message').textContent, /latest power event/);
+    if (rejectRead) initial.reject(new Error('stale power read failure')); else initial.resolve(power({ enabled: false, phase: 'disabled' }));
+    await flush();
+    assert.equal(app.node('power-enabled').checked, true);
+    assert.equal(app.node('power-enabled').disabled, false);
+    assert.equal(app.node('power-active').dataset.active, 'true');
+    assert.match(app.node('power-message').textContent, /latest power event/);
+    assert.equal(app.node('power-message').dataset.error, 'false');
+  }
+});
+
+test('power event received inside listen wins even without subsequent events', async () => {
+  const app = await mount(true, base(), { listen(name, callback) {
+    if (name === 'launcher-power-state') callback({ payload: power({ enabled: false, phase: 'disabled', message: 'registration event' }) });
+  } });
+  assert.equal(app.node('power-enabled').checked, false);
+  assert.match(app.node('power-message').textContent, /registration event/);
+});
+
+test('power events beat delayed setting replies and failures', async () => {
+  for (const rejectSave of [false, true]) {
+    const saving = deferred();
+    const app = await mount(true, base(), { invoke(name, _args, { fallback }) { return name === 'set_power_enabled' ? saving.promise : fallback(); } });
+    await app.change('power-enabled', false);
+    app.power(power({ active: true, phase: 'active', message: 'new protection event' }));
+    if (rejectSave) saving.reject(new Error('stale power save failure')); else saving.resolve(power({ enabled: false, phase: 'disabled' }));
+    await flush();
+    assert.equal(app.node('power-enabled').checked, true);
+    assert.equal(app.node('power-enabled').disabled, false);
+    assert.equal(app.node('power-active').dataset.active, 'true');
+    assert.match(app.node('power-message').textContent, /new protection event/);
+    assert.equal(app.node('power-message').dataset.error, 'false');
+  }
+});
+
+test('power listener failure blocks reads and writes but not notifications', async () => {
+  const app = await mount(true, base(), { listen(name) { if (name === 'launcher-power-state') throw new Error('listen failed token=private-power'); } });
+  assert.equal(app.calls.filter(([name]) => name === 'get_power_snapshot').length, 0);
+  assert.equal(app.node('power-enabled').disabled, true);
+  assert.match(app.node('power-message').textContent, /无法监听电源状态.*重试检测.*listen failed/);
+  assert.doesNotMatch(app.node('power-message').textContent, /private-power/);
+  await app.change('power-enabled', false);
+  assert.equal(app.calls.filter(([name]) => name === 'set_power_enabled').length, 0);
+  await app.change('notifications-enabled', true);
+  assert.equal(app.node('notifications-enabled').checked, true);
+  assert.equal(app.node('power-enabled').disabled, true);
+  app.unload();
+  assert.equal(app.subscriptions.size, 0);
+});
+
+test('power retry resubscribes after listener failure and restores the saved setting', async () => {
+  let attempts = 0;
+  const app = await mount(true, base(), { initialPower: power({ enabled: false, phase: 'disabled', message: 'saved setting recovered' }), listen(name) {
+    if (name === 'launcher-power-state' && attempts++ === 0) throw new Error('listen failed');
+  } });
+  assert.equal(app.node('power-enabled').disabled, true);
+  assert.equal(app.node('power-refresh').disabled, false);
+  await app.click('power-refresh');
+  assert.equal(attempts, 2);
+  assert.ok(app.subscriptions.has('launcher-power-state'));
+  assert.equal(app.node('power-enabled').disabled, false);
+  assert.equal(app.node('power-enabled').checked, false);
+  assert.equal(app.node('power-message').dataset.error, 'false');
+  assert.match(app.node('power-message').textContent, /saved setting recovered/);
+  assert.equal(app.calls.filter(([name]) => name === 'get_power_snapshot').length, 1);
+  assert.equal(app.calls.filter(([name]) => name === 'set_power_enabled').length, 0);
+  app.unload();
+  assert.equal(app.unlistened.filter(name => name === 'launcher-power-state').length, 1);
+});
+
+test('power retry rereads after initial read failure without duplicating its listener', async () => {
+  let attempts = 0; const retry = deferred();
+  const app = await mount(true, base(), { invoke(name, _args, { fallback }) {
+    if (name === 'get_power_snapshot') {
+      if (attempts++ === 0) throw new Error('read failed');
+      return retry.promise;
+    }
+    return fallback();
+  } });
+  assert.equal(app.node('power-enabled').disabled, true);
+  assert.equal(app.node('power-refresh').disabled, false);
+  await app.click('power-refresh');
+  assert.equal(app.node('power-refresh').disabled, true);
+  assert.equal(app.node('power-enabled').disabled, true);
+  await app.click('power-refresh');
+  await app.change('power-enabled', false);
+  assert.equal(attempts, 2);
+  assert.equal(app.calls.filter(([name]) => name === 'set_power_enabled').length, 0);
+  retry.resolve(power({ enabled: false, phase: 'disabled', message: 'read recovered' })); await flush();
+  assert.equal(app.node('power-refresh').disabled, false);
+  assert.equal(app.node('power-enabled').disabled, false);
+  assert.equal(app.node('power-enabled').checked, false);
+  assert.equal(app.node('power-message').dataset.error, 'false');
+  assert.match(app.node('power-message').textContent, /read recovered/);
+  assert.equal(app.listenCalls.filter(name => name === 'launcher-power-state').length, 1);
+  app.unload();
+  await app.click('power-refresh');
+  assert.equal(app.node('power-refresh').disabled, true);
+  assert.equal(attempts, 2);
+});
+
+test('power unload cleans registered and late listeners and ignores callbacks after disposal', async () => {
+  const registration = deferred(); let lateCallback;
+  const app = await mount(true, base(), { listen(name, callback) {
+    if (name === 'launcher-power-state') { lateCallback = callback; return registration.promise; }
+  } });
+  app.unload(); registration.resolve(); await flush();
+  assert.equal(app.subscriptions.has('launcher-power-state'), false);
+  assert.equal(app.unlistened.filter(name => name === 'launcher-power-state').length, 1);
+  assert.equal(app.calls.filter(([name]) => name === 'get_power_snapshot').length, 0);
+  const message = app.node('power-message').textContent;
+  lateCallback({ payload: power({ active: true, phase: 'active', message: 'unloaded event' }) });
+  await app.change('power-enabled', false);
+  assert.equal(app.node('power-message').textContent, message);
+  assert.equal(app.calls.filter(([name]) => name === 'set_power_enabled').length, 0);
+  const registered = await mount(true);
+  registered.unload();
+  assert.equal(registered.subscriptions.size, 0);
+  assert.equal(registered.unlistened.filter(name => name === 'launcher-power-state').length, 1);
+});
+
+test('power replies and errors do not render after unload', async () => {
+  for (const command of ['get_power_snapshot', 'set_power_enabled']) for (const failure of [false, true]) {
+    const pending = deferred();
+    const app = await mount(true, base(), { invoke(name, _args, { fallback }) { return name === command ? pending.promise : fallback(); } });
+    if (command === 'set_power_enabled') await app.change('power-enabled', false);
+    app.unload();
+    const message = app.node('power-message').textContent;
+    const checked = app.node('power-enabled').checked;
+    if (failure) pending.reject(new Error('unloaded power error')); else pending.resolve(power({ enabled: false, phase: 'disabled', message: 'unloaded reply' }));
+    await flush();
+    assert.equal(app.node('power-message').textContent, message);
+    assert.equal(app.node('power-enabled').checked, checked);
+    assert.equal(app.unlistened.filter(name => name === 'launcher-power-state').length, 1);
+  }
+});
+
 test('pending startup shows three stages and cannot launch service work', async () => {
   const checks = environment().checks.map(item => ({ ...item, status: 'pending' }));
   const app = await mount(true, base({ state: 'unknown', busy: true, environment_checking: true, environment: environment({ checks }) }), { mode: 'startup' });
@@ -648,9 +925,9 @@ test('settings has only check and logs service actions and navigation never invo
   assert.equal(app.has('settings-shell'), true);
   for (const id of ['startup-shell', 'service-card', 'open', 'open-settings', 'start', 'stop', 'restart', 'quit', 'exit', 'environment-panel', 'updates-panel', 'show-environment']) assert.equal(app.has(id), false, id);
   const calls = [...app.calls];
-  for (const selected of ['environment', 'notifications', 'updates', 'logs', 'environment']) {
+  for (const selected of ['environment', 'notifications', 'power', 'updates', 'logs', 'environment']) {
     await app.click('nav-' + selected);
-    for (const section of ['environment', 'notifications', 'updates', 'logs']) {
+    for (const section of ['environment', 'notifications', 'power', 'updates', 'logs']) {
       assert.equal(app.node('settings-' + section).hidden, section !== selected);
       assert.equal(app.node('nav-' + section).attributes['aria-current'], section === selected ? 'page' : 'false');
     }
@@ -662,7 +939,7 @@ test('settings has only check and logs service actions and navigation never invo
 });
 
 test('settings URLs select fixed tabs and invalid sections fall back to environment', async () => {
-  for (const requested of ['environment', 'notifications', 'updates', 'logs', 'invalid']) {
+  for (const requested of ['environment', 'notifications', 'power', 'updates', 'logs', 'invalid']) {
     const app = await mount(true, base(), { location: 'http://127.0.0.1:1420/index.html?view=settings&section=' + requested });
     assert.equal(app.node('settings-' + (requested === 'invalid' ? 'environment' : requested)).hidden, false);
     assert.equal(app.calls.filter(([name]) => name === 'check_update').length, 0);
@@ -673,10 +950,10 @@ test('menu events route settings tabs without IPC even when the environment fail
   const app = await mount(true, base({ state: 'error', last_error: 'WSL unavailable', environment: environment({ checks: [] }) }), { initialNotification: listening() });
   const calls = [...app.calls];
   const show = app.subscriptions.get('launcher-show-settings'); assert.equal(typeof show, 'function');
-  for (const selected of ['notifications', 'environment', 'updates', 'logs', 'notifications']) {
+  for (const selected of ['notifications', 'power', 'environment', 'updates', 'logs', 'notifications']) {
     show({ payload: selected }); await flush();
     assert.equal(app.node('settings-' + selected).hidden, false); assert.equal(app.node('settings-title').focused, true);
-    for (const section of ['environment', 'notifications', 'updates', 'logs']) assert.equal(app.node('settings-' + section).hidden, section !== selected);
+    for (const section of ['environment', 'notifications', 'power', 'updates', 'logs']) assert.equal(app.node('settings-' + section).hidden, section !== selected);
     assert.equal(app.node('notifications-enabled').checked, true); assert.equal(app.node('notifications-enabled').disabled, false);
     assert.deepEqual(app.calls, calls);
   }
@@ -763,7 +1040,7 @@ test('newer service events beat delayed successful directory saves', async () =>
 test('unload releases settings and update navigation listeners', async () => {
   const app = await mount(true); const calls = [...app.calls]; app.unload(); await flush();
   assert.equal(app.subscriptions.size, 0);
-  for (const event of ['launcher-state', 'launcher-show-settings', 'launcher-show-logs', 'launcher-update-state', 'launcher-show-updates', 'launcher-notification-state']) assert.equal(app.unlistened.filter(name => name === event).length, 1);
+  for (const event of ['launcher-state', 'launcher-show-settings', 'launcher-show-logs', 'launcher-update-state', 'launcher-show-updates', 'launcher-notification-state', 'launcher-power-state']) assert.equal(app.unlistened.filter(name => name === event).length, 1);
   assert.deepEqual(app.calls, calls);
 });
 
@@ -900,7 +1177,7 @@ test('settings ready handshake runs only natively after all initialization subsc
   const app = await mount(true, base(), { readySection: 'notifications', listen(name) { return name === 'launcher-show-settings' ? registration.promise : undefined; }, invoke(name, args, { subscriptions, fallback }) {
     if (name === 'settings_page_ready') {
       assert.equal(args, undefined);
-      for (const event of ['launcher-state', 'launcher-show-settings', 'launcher-show-logs', 'launcher-update-state', 'launcher-show-updates', 'launcher-notification-state']) assert.ok(subscriptions.has(event), event);
+      for (const event of ['launcher-state', 'launcher-show-settings', 'launcher-show-logs', 'launcher-update-state', 'launcher-show-updates', 'launcher-notification-state', 'launcher-power-state']) assert.ok(subscriptions.has(event), event);
     }
     return fallback();
   } });
@@ -912,6 +1189,20 @@ test('settings ready handshake runs only natively after all initialization subsc
     const other = await mount(native, base(), { mode });
     assert.equal(other.calls.filter(([name]) => name === 'settings_page_ready').length, 0);
   }
+});
+
+test('settings readiness waits for delayed power initialization and selects the power category', async () => {
+  const registration = deferred(); const snapshot = deferred();
+  const app = await mount(true, base(), { readySection: 'power', listen(name) { return name === 'launcher-power-state' ? registration.promise : undefined; }, invoke(name, _args, { fallback }) { return name === 'get_power_snapshot' ? snapshot.promise : fallback(); } });
+  assert.equal(app.calls.filter(([name]) => name === 'settings_page_ready').length, 0);
+  assert.equal(app.calls.filter(([name]) => name === 'get_power_snapshot').length, 0);
+  registration.resolve(); await flush();
+  assert.equal(app.calls.filter(([name]) => name === 'get_power_snapshot').length, 1);
+  assert.equal(app.calls.filter(([name]) => name === 'settings_page_ready').length, 0);
+  snapshot.resolve(power()); await flush();
+  assert.equal(app.calls.filter(([name]) => name === 'settings_page_ready').length, 1);
+  assert.equal(app.node('settings-power').hidden, false);
+  assert.equal(app.node('settings-title').textContent, '电源管理');
 });
 
 test('newer settings navigation beats a pending readiness reply', async () => {

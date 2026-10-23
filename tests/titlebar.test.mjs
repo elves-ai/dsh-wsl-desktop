@@ -460,13 +460,14 @@ test('late update navigation completion cannot re-enable or mutate unloaded cont
 
 test('all configuration sections and controls remain on the in-window settings page, not the native titlebar', () => {
   const frontend = readFileSync(new URL('../src/main.ts', import.meta.url), 'utf8');
-  assert.match(frontend, /const settingsSections = \['environment', 'notifications', 'updates', 'logs'\] as const/);
+  assert.match(frontend, /const settingsSections = \['environment', 'notifications', 'power', 'updates', 'logs'\] as const/);
   assert.doesNotMatch(frontend, /[“「]文件[”」]菜单/);
   assert.match(frontend, /托盘右键菜单/);
   const settingsTemplate = frontend.slice(frontend.indexOf('app.innerHTML = settingsView ?'), frontend.indexOf('<main class="startup"'));
   for (const [section, controls] of Object.entries({
     environment: ['repository-input', 'save-repository', 'config-location', 'check'],
     notifications: ['notifications-enabled', 'test-notification'],
+    power: ['power-enabled', 'power-active', 'power-message', 'power-refresh'],
     updates: ['check-update', 'install-update'],
     logs: ['logs', 'log-output'],
   })) {

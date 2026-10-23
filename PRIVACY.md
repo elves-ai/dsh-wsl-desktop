@@ -34,6 +34,12 @@ The session API may return conversation data in the inspected history page. The 
 
 Only the non-secret enabled preference is stored in a separate local notifications.json file. Initial connections and reconnections establish a fresh baseline rather than replaying old completed results. Still-pending questions can produce a reminder; deduplication across network reconnections prevents repeating an already-consumed reminder within the current enabled period. The read-only inference never answers a question, submits a plan decision, or joins the interaction-answerer stream.
 
+## Task-scoped power management
+
+Sleep prevention is enabled by default and can be disabled under Settings → 电源管理 (Power management). Independently of notifications, this worker uses the same authority-bound HttpOnly cookie and bounded, proxy-free, non-redirecting local RPC transport to read only session/list approximately every three seconds after service readiness. It uses live running flags, including subagents, to control a temporary Windows system sleep request. It does not request conversation-history pages, expose credentials to the settings page, or persist session-list responses. Only the enabled preference is saved in a separate local power.json file; generic status transitions and errors can appear in the launcher activity log.
+
+Hiding the workspace to the tray does not stop monitoring. Disabling notifications stops notification checks only, not this independent power worker. Disabling power management stops its session checks and releases the request; quitting the launcher ends both workers even if WSL keeps running. Temporary query errors keep an existing request only for a bounded grace period of approximately 30 seconds after the last valid running observation. No system power plan is changed.
+
 ## Update checks and downloads
 
 Updater-enabled versions check this project’s latest stable GitHub Release once at launcher startup and when requested. These requests expose the client IP address and ordinary HTTP/TLS metadata to GitHub and its download infrastructure. The launcher does not attach DSH tokens, conversations, launcher configuration, or activity logs to these requests. It uses system network/proxy settings and Windows TLS trust; an environment-controlled proxy may also observe connection metadata.

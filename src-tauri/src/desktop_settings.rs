@@ -94,6 +94,7 @@ pub(super) fn show_in(window: &Window, section: &str) -> Result<(), String> {
     let state = &mut pages[index(window.label())];
     state.section = match section {
         "notifications" => "notifications",
+        "power" => "power",
         "updates" => "updates",
         "logs" => "logs",
         _ => "environment",

@@ -31,7 +31,7 @@ base64 = "0.22"
 # Windows system TLS/certificate store; updater packages are direct NSIS EXEs, not legacy ZIPs.
 tauri-plugin-updater = { version = "2.14", default-features = false, features = ["native-tls", "system-proxy"] }
 open = "5"
-windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
+windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_System_Power"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

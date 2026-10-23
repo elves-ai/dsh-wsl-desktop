@@ -1,4 +1,4 @@
-//! Bounded, credential-safe access to the two read-only notification RPCs.
+//! Bounded, credential-safe access to read-only session RPCs for notifications and power.
 
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderValue, CONTENT_TYPE, COOKIE};

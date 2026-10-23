@@ -20,6 +20,8 @@
     "allow-install-update",
     "allow-get-notification-snapshot",
     "allow-set-notifications-enabled",
-    "allow-test-notification"
+    "allow-test-notification",
+    "allow-get-power-snapshot",
+    "allow-set-power-enabled"
   ]
 }

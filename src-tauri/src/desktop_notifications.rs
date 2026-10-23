@@ -233,9 +233,10 @@ fn now_ms() -> u64 {
         .min(u64::MAX as u128) as u64
 }
 
+/// Shared read-only session client for notifications and the independent power worker.
 /// Read only the HttpOnly auth cookie whose audience is this configured authority.
 /// Browser cookies are otherwise shared between localhost ports. Never log it.
-fn client(app: &tauri::AppHandle, origin: &str) -> Result<RpcClient, String> {
+pub(super) fn client(app: &tauri::AppHandle, origin: &str) -> Result<RpcClient, String> {
     let url = Url::parse(origin).map_err(|_| "本机服务地址无效。".to_owned())?;
     let window = app
         .get_webview("dsh")

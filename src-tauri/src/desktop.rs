@@ -29,6 +29,8 @@ use url::Url;
 
 #[path = "desktop_notifications.rs"]
 mod notifications;
+#[path = "desktop_power.rs"]
+mod power;
 #[path = "desktop_settings.rs"]
 mod settings_page;
 #[path = "desktop_titlebar.rs"]
@@ -180,7 +182,7 @@ impl Controller {
 fn settings_section(section: &str) -> bool {
     matches!(
         section,
-        "environment" | "notifications" | "updates" | "logs"
+        "environment" | "notifications" | "power" | "updates" | "logs"
     )
 }
 
@@ -841,6 +843,8 @@ pub fn run() {
             notifications::get_notification_snapshot,
             notifications::set_notifications_enabled,
             notifications::test_notification,
+            power::get_power_snapshot,
+            power::set_power_enabled,
             titlebar::titlebar_action,
             titlebar::open_titlebar_settings,
             titlebar::open_titlebar_updates,
@@ -892,6 +896,9 @@ pub fn run() {
             let notification_state = Arc::new(notifications::Notifications::new(directory.clone()));
             app.manage(notification_state.clone());
             notifications::start(app.handle().clone(), controller.clone(), notification_state);
+            let power_state = Arc::new(power::Power::new(directory.clone()));
+            app.manage(power_state.clone());
+            power::start(app.handle().clone(), controller.clone(), power_state);
             app.manage(Arc::new(updates::Updates::new(
                 &app.package_info().version.to_string(),
             )));
@@ -1042,7 +1049,7 @@ mod content_security_tests {
                 &Url::parse(&format!("{origin}/index.html")).unwrap(),
                 "launcher"
             ));
-            for section in ["environment", "notifications", "updates", "logs"] {
+            for section in ["environment", "notifications", "power", "updates", "logs"] {
                 let url = Url::parse(&format!(
                     "{origin}/index.html?view=settings&section={section}"
                 ))
