@@ -4,7 +4,7 @@ DSH WSL Desktop is a Windows desktop launcher for an existing DeepSeek Harness i
 
 ## Desktop pet attribution
 
-Pet code and animations originate from PC2005-cloud’s [dsh-pet](<https://github.com/PC2005-cloud/dsh-pet>). Code is MIT; animation assets allow open-source use but **prohibit commercial use**. Derivative/modified/reskinned works must include this original-author GitHub URL everywhere they are introduced, displayed, or distributed. See [upstream notices](<third-party/dsh-pet/UPSTREAM.md>). The v0.1.13 release introduces the pet, shared DSH conversation panel and interactive question/approval bubbles. The v0.1.12 tag failed Windows checkout integrity tests and did not publish assets; it remains for audit. Older published versions do not contain these features. CI verification does not replace Windows native end-to-end qualification; see the version-specific release notes.
+Pet code and animations originate from PC2005-cloud’s [dsh-pet](<https://github.com/PC2005-cloud/dsh-pet>). Code is MIT; animation assets allow open-source use but **prohibit commercial use**. Derivative/modified/reskinned works must include this original-author GitHub URL everywhere they are introduced, displayed, or distributed. See [upstream notices](<third-party/dsh-pet/UPSTREAM.md>). The v0.1.14 release introduces the pet, shared DSH conversation panel and interactive question/approval bubbles. The v0.1.12/v0.1.13 tags failed Windows integrity/concurrent-save tests and did not publish assets; they remain for audit. Older published versions do not contain these features. CI verification does not replace Windows native end-to-end qualification; see the version-specific release notes.
 
 ## Windows x64 releases
 

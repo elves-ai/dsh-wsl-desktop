@@ -121,8 +121,12 @@ impl PreferencesStore {
                 .and_then(|_| file.sync_all())
                 .map_err(|_| "无法写入桌宠偏好；原设置未替换。".to_string())?;
             drop(file);
-            atomic_replace(&temporary.path, &self.path)
-                .map_err(|_| "无法替换桌宠偏好；原设置未替换。".to_string())?;
+            atomic_replace(&temporary.path, &self.path).map_err(|error| {
+                match error.raw_os_error() {
+                    Some(code) => format!("无法替换桌宠偏好；原设置未替换（系统错误 {code}）。"),
+                    None => "无法替换桌宠偏好；原设置未替换。".to_string(),
+                }
+            })?;
             // No fallible operations after the commit: an Err must never mean
             // that the new preferences were already published on disk.
             #[cfg(unix)]
@@ -221,8 +225,34 @@ fn atomic_replace(from: &Path, to: &Path) -> io::Result<()> {
     fs::rename(from, to)
 }
 
+// A reader or antivirus can briefly hold the Windows destination without delete
+// sharing. Retry only these pre-commit failures; never delete/truncate the old file.
+#[cfg(any(windows, test))]
+fn retry_windows_replace(
+    mut replace: impl FnMut() -> io::Result<()>,
+    mut wait: impl FnMut(),
+) -> io::Result<()> {
+    for attempt in 0..100 {
+        match replace() {
+            Err(error) if matches!(error.raw_os_error(), Some(5 | 32 | 33)) && attempt < 99 => {
+                wait()
+            }
+            result => return result,
+        }
+    }
+    unreachable!("bounded replacement loop always returns")
+}
+
 #[cfg(windows)]
 fn atomic_replace(from: &Path, to: &Path) -> io::Result<()> {
+    retry_windows_replace(
+        || windows_replace_once(from, to),
+        || std::thread::sleep(std::time::Duration::from_millis(10)),
+    )
+}
+
+#[cfg(windows)]
+fn windows_replace_once(from: &Path, to: &Path) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
     #[link(name = "kernel32")]
     extern "system" {
@@ -273,6 +303,135 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn windows_replacement_retries_only_bounded_transient_failures() {
+        for code in [5, 32, 33] {
+            let mut calls = 0;
+            let mut waits = 0;
+            retry_windows_replace(
+                || {
+                    calls += 1;
+                    if calls < 3 {
+                        Err(io::Error::from_raw_os_error(code))
+                    } else {
+                        Ok(())
+                    }
+                },
+                || waits += 1,
+            )
+            .unwrap();
+            assert_eq!((calls, waits), (3, 2));
+            let mut attempts = 0;
+            let mut delays = 0;
+            let error = retry_windows_replace(
+                || {
+                    attempts += 1;
+                    Err(io::Error::from_raw_os_error(code))
+                },
+                || delays += 1,
+            )
+            .unwrap_err();
+            assert_eq!((attempts, delays), (100, 99));
+            assert_eq!(error.raw_os_error(), Some(code));
+        }
+        for code in [2, 3, 6, 87] {
+            let mut calls = 0;
+            let error = retry_windows_replace(
+                || {
+                    calls += 1;
+                    Err(io::Error::from_raw_os_error(code))
+                },
+                || panic!("permanent failure must not wait"),
+            )
+            .unwrap_err();
+            assert_eq!(calls, 1);
+            assert_eq!(error.raw_os_error(), Some(code));
+        }
+        let mut calls = 0;
+        let mut waits = 0;
+        let fatal = retry_windows_replace(
+            || {
+                calls += 1;
+                Err(io::Error::from_raw_os_error(if calls == 1 {
+                    32
+                } else {
+                    87
+                }))
+            },
+            || waits += 1,
+        )
+        .unwrap_err();
+        assert_eq!((calls, waits), (2, 1));
+        assert_eq!(fatal.raw_os_error(), Some(87));
+        let mut calls = 0;
+        let final_error = retry_windows_replace(
+            || {
+                calls += 1;
+                Err(io::Error::from_raw_os_error(if calls < 100 {
+                    32
+                } else {
+                    33
+                }))
+            },
+            || {},
+        )
+        .unwrap_err();
+        assert_eq!(calls, 100);
+        assert_eq!(final_error.raw_os_error(), Some(33));
+        let no_code = retry_windows_replace(
+            || Err(io::Error::other("no raw code")),
+            || panic!("unclassified error must not wait"),
+        )
+        .unwrap_err();
+        assert_eq!(no_code.to_string(), "no raw code");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_replace_keeps_old_bytes_until_a_conflicting_reader_releases() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let directory = TestDirectory::new();
+        let store = directory.store();
+        let first = PetPreferences::default();
+        store.save(&first).unwrap();
+        let original = fs::read(&store.path).unwrap();
+        let second = PetPreferences {
+            startup_visible: true,
+            roaming_enabled: false,
+            bubble_notifications: false,
+        };
+        let replacement = serde_json::to_vec_pretty(&second).unwrap();
+        let (temporary, mut output) = create_temporary(&directory.0).unwrap();
+        output.write_all(&replacement).unwrap();
+        output.sync_all().unwrap();
+        drop(output);
+        let mut held = Some(
+            OpenOptions::new()
+                .read(true)
+                .share_mode(0x1 | 0x2)
+                .open(&store.path)
+                .unwrap(),
+        );
+        let mut blocked = 0;
+        retry_windows_replace(
+            || windows_replace_once(&temporary.path, &store.path),
+            || {
+                blocked += 1;
+                assert_eq!(fs::read(&store.path).unwrap(), original);
+                assert!(temporary.path.exists());
+                // Release only after the real Win32 call reported a sharing conflict.
+                drop(held.take());
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            },
+        )
+        .unwrap();
+        assert!(blocked > 0);
+        assert!(held.is_none());
+        assert!(!temporary.path.exists());
+        assert_eq!(fs::read(&store.path).unwrap(), replacement);
+        assert_eq!(store.load().unwrap(), second);
     }
 
     #[test]
@@ -518,6 +677,8 @@ mod tests {
             bubble_notifications: false,
         };
         store.save(&first).unwrap();
+        let first_bytes = serde_json::to_vec_pretty(&first).unwrap();
+        let second_bytes = serde_json::to_vec_pretty(&second).unwrap();
         let start = Arc::new(Barrier::new(2));
         let done = Arc::new(AtomicBool::new(false));
         let reader_start = Arc::clone(&start);
@@ -530,6 +691,7 @@ mod tests {
                 // Direct read, not load: a missing intermediate file must not
                 // accidentally pass by being interpreted as defaults.
                 let bytes = fs::read(&path).unwrap();
+                assert!(bytes == first_bytes || bytes == second_bytes);
                 let value: PetPreferences = serde_json::from_slice(&bytes).unwrap();
                 assert!(value == first || value == second);
                 reads += 1;
