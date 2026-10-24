@@ -5,6 +5,8 @@ import { renderMarkdown } from './assistant-markdown';
 import { PetRenderer } from './pet/renderer';
 import { PetNotifications } from './pet/notifications';
 import { PetInteractions } from './pet/interactions';
+import { layoutPetBubbles } from './pet/bubble-positioner';
+import { PetMenuController } from './pet/menu';
 import './pet/interactions.css';
 import './pet/notifications.css';
 import { PetMotion, type Geometry as PetGeometry } from './pet/motion';
@@ -21,7 +23,7 @@ const root = document.querySelector<HTMLElement>('#assistant-root')!;
 const face = '<span class="fish-mark" aria-hidden="true">🐟</span>';
 const credit = '<a class="pet-credit" href="https://github.com/PC2005-cloud/dsh-pet" target="_blank" rel="noopener noreferrer" data-upstream="true">dsh-pet · PC2005-cloud ↗</a><span class="asset-license">动画素材禁止商用</span>';
 root.innerHTML = view === 'pet' ?
-  '<section class="pet-shell" aria-label="鲸鱼娘桌面助手"><div id="preview" class="preview" hidden>浏览器预览 · 移动仅桌面应用可用</div><div id="pet-status" class="pet-status" role="status"></div><div class="pet-stage"><div id="pet-media" class="pet-media"></div><button id="pet" class="pet-hit" aria-label="打开鲸鱼娘对话（拖动可抛掷，快速连按再拖可弹弓，右键动作）"></button></div><nav class="pet-tools" aria-label="助手操作"><button data-action="toggle_chat">聊聊</button><button data-pet-command="menu">动作</button><button data-action="open_dsh">打开 DSH</button><button data-action="hide">隐藏</button></nav><section id="pet-menu" class="pet-menu" aria-label="宠物动作" hidden><label for="pet-animation">上游动作库</label><select id="pet-animation" aria-label="选择宠物动作"></select><button id="pet-topmost" type="button" role="switch" aria-label="窗口置顶" data-pet-command="topmost">读取置顶状态…</button><button data-action="pet_settings">宠物设置</button><button data-pet-command="close-menu">关闭动作</button><p>单击回应并展开对话；拖动甩出；快速连按再拖动为弹弓。</p></section><div id="pet-bubble" hidden></div><div id="pet-interaction" hidden></div><div class="pet-attribution">' + credit + '</div><p id="notice" class="pet-notice" role="alert" hidden></p></section>' :
+  '<section class="pet-shell" aria-label="鲸鱼娘桌面助手"><div id="preview" class="preview" hidden>浏览器预览 · 移动仅桌面应用可用</div><div class="pet-stage"><div id="pet-media" class="pet-media"></div><button id="pet" class="pet-hit" aria-label="打开鲸鱼娘对话（拖动可抛掷，快速连按再拖可弹弓，右键菜单）" aria-controls="pet-menu" aria-expanded="false"></button></div><section id="pet-menu" class="pet-menu" aria-label="桌宠菜单" hidden><header class="pet-menu-header"><span>桌宠</span><button type="button" class="pet-menu-close" data-pet-command="close-menu" aria-label="关闭菜单">×</button></header><button type="button" data-action="toggle_chat">聊聊</button><button type="button" data-action="open_dsh">打开 DSH</button><label class="pet-menu-animation" for="pet-animation"><span>播放动作</span><select id="pet-animation" aria-label="选择宠物动作"></select></label><button id="pet-topmost" type="button" role="switch" aria-label="窗口置顶" data-pet-command="topmost">读取置顶状态…</button><button type="button" data-action="pet_settings">宠物设置</button><button type="button" data-action="hide">隐藏宠物</button><div class="pet-menu-credit">' + credit + '</div></section><div id="pet-bubble" hidden></div><div id="pet-interaction" hidden></div><p id="notice" class="pet-notice" role="alert" hidden></p></section>' :
   `<section class="chat-shell" aria-label="鲸鱼娘对话">
 <header class="chat-header"><div class="brand"><span class="mini-buddy" aria-hidden="true">${face}</span>
 <div><h1>鲸鱼娘 <span>DSH 助手</span></h1><p id="status" role="status"></p></div></div>
@@ -63,6 +65,7 @@ let petRenderer: PetRenderer | undefined;
 let petMotion: PetMotion | undefined;
 let petNotifications: PetNotifications | undefined;
 let petInteractions: PetInteractions | undefined;
+let petMenu: PetMenuController | undefined;
 let interactionRevision = -1;
 let interactionPending = false;
 let interactionIds = new Set<string>();
@@ -152,11 +155,14 @@ let hitFrame = 0;
 let lastHitSignature = '';
 let resizeObserver: ResizeObserver | undefined;
 function scheduleHitRegions() {
-  if (!native || view !== 'pet' || disposed || hitFrame) return;
+  if (view !== 'pet' || disposed || hitFrame) return;
   hitFrame = requestAnimationFrame(() => {
     hitFrame = 0;
     if (disposed) return;
-    const regions = [...root.querySelectorAll<HTMLElement>('#pet, .pet-tools button, #pet-menu, #pet-bubble, #pet-interaction, .pet-credit, #notice')]
+    if (pet) layoutPetBubbles(root, pet, petOverlayInsets);
+    positionPetMenu();
+    if (!native) return;
+    const regions = [...root.querySelectorAll<HTMLElement>('#pet, #pet-menu, #pet-bubble, #pet-interaction, #notice')]
       .filter(node => node.getClientRects().length > 0)
       .map(node => { const r = node.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; });
     const signature = JSON.stringify(regions);
@@ -178,7 +184,7 @@ function render() {
   petRenderer?.updateState(effectiveState);
   const label = native ? statusLabel(effectiveState) : '浏览器预览';
   root.dataset.phase = effectiveState.running ? 'running' : effectiveState.waiting ? 'waiting' : effectiveState.connected ? 'ready' : 'offline';
-  for (const id of ['status', 'pet-status']) { const item = el(id); if (item) item.textContent = label; }
+  const status = el('status'); if (status) status.textContent = label;
   const preview = el('preview'); if (preview) preview.hidden = native;
   const notice = el('notice'); if (notice) { notice.textContent = localError; notice.hidden = !localError; }
   const setup = el('setup'); if (setup) setup.hidden = state.enabled || (native && state.phase === 'loading');
@@ -235,22 +241,19 @@ function render() {
 root.addEventListener('click', event => {
   const target = event.target as Element;
   const source = target.closest<HTMLElement>('[data-upstream]');
-  if (source?.dataset.upstream) { if (native) { event.preventDefault(); void action('pet_source'); } return; }
+  if (source?.dataset.upstream) { petMenu?.close(); if (native) { event.preventDefault(); void action('pet_source'); } return; }
   const command = target.closest<HTMLElement>('[data-pet-command]')?.dataset.petCommand;
   if (command) {
     event.preventDefault();
-    const menu = el('pet-menu');
-    if (command === 'topmost') { void togglePetTopmost(); return; }
-    if (menu) {
-      menu.hidden = command === 'close-menu' || !menu.hidden;
-      if (!menu.hidden) { petMotion?.stop(); void refreshPetTopmost(); }
-    }
-    syncPetNotificationOverlay();
+    if (command === 'topmost') { petMenu?.close(); void togglePetTopmost(); return; }
+    if (command === 'close-menu') petMenu?.close();
+    else petMenu?.toggle();
     return;
   }
   const button = (event.target as Element).closest<HTMLButtonElement>('[data-action]');
   if (!button || button.disabled) return;
   const name = button.dataset.action!;
+  petMenu?.close();
   if (name === 'hide') petMotion?.stop();
   void exclusive(name);
 }, { signal: cleanup.signal });
@@ -404,6 +407,17 @@ function mountPet() {
     pet.style.width = ((HIT_BOX.x1 - HIT_BOX.x0) / 640 * 100) + '%';
     pet.style.height = ((HIT_BOX.y1 - HIT_BOX.y0) / 360 * 100) + '%';
   }
+  const menu = el('pet-menu');
+  if (menu) petMenu = new PetMenuController(menu, {
+    getGeometry: native ? () => requestPetGeometry('get_pet_geometry') : undefined,
+    onChange: open => {
+      if (disposed) return;
+      pet?.setAttribute('aria-expanded', String(open));
+      if (open) { petMotion?.stop(); positionPetMenu(); void refreshPetTopmost(); }
+      syncPetNotificationOverlay();
+    },
+  });
+  menu?.addEventListener('contextmenu', event => { event.preventDefault(); petMenu?.close(); }, { signal: cleanup.signal });
   const bubble = el('pet-bubble');
   if (bubble) {
     petNotifications = new PetNotifications(bubble, {
@@ -445,12 +459,12 @@ function mountPet() {
   });
   const select = el<HTMLSelectElement>('pet-animation');
   if (select) {
-    select.add(new Option('选择一个动作播放…', ''));
+    select.add(new Option('选择动作…', ''));
     for (const item of petRenderer.listActions()) select.add(new Option(item.group + ' · ' + item.name, item.name));
     select.addEventListener('change', () => {
       petMotion?.stop();
       if (select.value) petRenderer?.trigger(select.value);
-      const menu = el('pet-menu'); if (menu) menu.hidden = true;
+      petMenu?.close();
       select.value = ''; syncPetNotificationOverlay();
     }, { signal: cleanup.signal });
   }
@@ -504,7 +518,7 @@ function applyPetVisibility(value: unknown) {
   petVisibilityRevision = incoming.revision!;
   petVisible = incoming.visible;
   updatePetNotificationActivity();
-  if (!petVisible) petMotion?.stop();
+  if (!petVisible) { petMenu?.close(); petMotion?.stop(); }
 }
 function applyPetBubblePreferences(value: unknown) {
   if (!value || typeof value !== 'object') return;
@@ -530,11 +544,55 @@ function applyPetPreferences(value: unknown) {
     if (!incoming.roaming_enabled) petMotion?.stopRoam();
   }
 }
+// Native geometry uses physical pixels; overlay layout and hit regions use CSS pixels.
+let petGeometryRequest = 0;
+let petOverlayInsets: { left: number; right: number } | undefined;
+async function requestPetGeometry(command: 'get_pet_geometry' | 'move_pet' | 'drag_pet', args?: { x: number; y: number } | { grabX: number; grabY: number }): Promise<PetGeometry> {
+  const request = ++petGeometryRequest;
+  const geometry = await invoke<PetGeometry>(command, args);
+  if (!disposed && request === petGeometryRequest) updatePetOverlayBounds(geometry);
+  return geometry;
+}
+function updatePetOverlayBounds(geometry: PetGeometry) {
+  const { position, size, scale, areas } = geometry;
+  if (!position || !size || !Number.isFinite(position.x) || !Number.isFinite(position.y) ||
+      !Number.isFinite(size.width) || !Number.isFinite(size.height) || size.width <= 0 || size.height <= 0 ||
+      !Number.isFinite(scale) || scale <= 0 || !Array.isArray(areas)) return;
+  // Use the real work area containing most of the window, never the expanded motion bounds.
+  let overlap = 0;
+  let area: PetGeometry['areas'][number] | undefined;
+  for (const candidate of areas) {
+    if (!candidate || ![candidate.x, candidate.y, candidate.width, candidate.height].every(Number.isFinite) || candidate.width <= 0 || candidate.height <= 0) continue;
+    const width = Math.max(0, Math.min(position.x + size.width, candidate.x + candidate.width) - Math.max(position.x, candidate.x));
+    const height = Math.max(0, Math.min(position.y + size.height, candidate.y + candidate.height) - Math.max(position.y, candidate.y));
+    if (width * height > overlap) { overlap = width * height; area = candidate; }
+  }
+  if (!area) return;
+  const left = Math.max(0, area.x - position.x) / scale;
+  const right = Math.max(0, position.x + size.width - area.x - area.width) / scale;
+  if (petOverlayInsets?.left === left && petOverlayInsets.right === right) return;
+  petOverlayInsets = { left, right };
+  root.style.setProperty('--pet-visible-left', left + 'px');
+  root.style.setProperty('--pet-visible-right', right + 'px');
+  // Position-only changes do not trigger ResizeObserver. Report the shifted controls too.
+  scheduleHitRegions();
+}
+function positionPetMenu() {
+  const host = root.querySelector<HTMLElement>('.pet-shell');
+  if (!host || !petMenu) return;
+  const shell = host.getBoundingClientRect(), viewport = root.getBoundingClientRect();
+  const left = Math.max(shell.left, viewport.left + (petOverlayInsets?.left ?? 0)) + 6;
+  const right = Math.min(shell.right, viewport.right - (petOverlayInsets?.right ?? 0)) - 6;
+  const top = Math.max(shell.top, viewport.top) + 6;
+  const bottom = Math.min(shell.bottom, viewport.bottom) - 6;
+  petMenu.position({ x: left, y: top, width: right - left, height: bottom - top }, { x: shell.left, y: shell.top });
+}
 function mountPetMotion() {
   if (!native || view !== 'pet' || disposed || petMotion) return;
   petMotion = new PetMotion({
-    getGeometry: () => invoke<PetGeometry>('get_pet_geometry'),
-    move: (x, y) => invoke<PetGeometry>('move_pet', { x, y }),
+    getGeometry: () => requestPetGeometry('get_pet_geometry'),
+    move: (x, y) => requestPetGeometry('move_pet', { x, y }),
+    drag: (grabX, grabY) => requestPetGeometry('drag_pet', { grabX, grabY }),
     setActive: async active => { await invoke('assistant_action', { request: { action: 'motion_active', active } }); },
     physics,
     onDragStart: () => petRenderer?.dragStart(),
@@ -571,9 +629,8 @@ for (const name of ['pointercancel', 'lostpointercapture']) pet?.addEventListene
   pointer = undefined;
 }, { signal: cleanup.signal });
 pet?.addEventListener('contextmenu', event => {
-  event.preventDefault(); petMotion?.stop();
-  const menu = el('pet-menu'); if (menu) { menu.hidden = !menu.hidden; if (!menu.hidden) void refreshPetTopmost(); }
-  syncPetNotificationOverlay();
+  event.preventDefault();
+  petMenu?.toggle(event.clientX, event.clientY);
 }, { signal: cleanup.signal });
 pet?.addEventListener('click', event => {
   if (event.detail !== 0 && suppressClick) { suppressClick = false; event.preventDefault(); return; }
@@ -592,18 +649,21 @@ function dispose() {
   unlistenPetInteractions?.(); unlistenPetInteractions = undefined;
   petInteractions?.dispose();
   if (native && view === 'pet') void invoke('set_pet_interaction_surface', { active: false }).catch(() => {});
-  petMotion?.dispose(); petRenderer?.dispose();
+  petMenu?.dispose(); petMotion?.dispose(); petRenderer?.dispose();
 }
 window.addEventListener('pagehide', dispose, { once: true });
 window.addEventListener('beforeunload', dispose, { once: true });
 if (import.meta.hot) import.meta.hot.dispose(dispose);
-if (native && view === 'pet') {
+if (view === 'pet') {
   resizeObserver = new ResizeObserver(scheduleHitRegions);
   resizeObserver.observe(root);
-  root.querySelectorAll('#pet, .pet-tools, #notice, #pet-menu, #pet-bubble, #pet-interaction, .pet-attribution').forEach(node => resizeObserver!.observe(node));
+  root.querySelectorAll('#pet, #notice, #pet-menu, #pet-bubble, #pet-interaction').forEach(node => resizeObserver!.observe(node));
   window.addEventListener('resize', scheduleHitRegions, { signal: cleanup.signal });
 }
-mountPet(); loadDraft(); render();
+mountPet();
+// Observe natural content as well as the positioned boxes (which may have a fixed fitted height).
+root.querySelectorAll('.pet-notification-open, .pet-interactions-summary').forEach(node => resizeObserver?.observe(node));
+loadDraft(); render();
 async function ensureSubscription() {
   if (unlisten || disposed) return;
   const stop = await listen<unknown>('assistant-state', event => accept(event.payload));

@@ -9,6 +9,7 @@
   "permissions": [
     "allow-get-pet-geometry",
     "allow-move-pet",
+    "allow-drag-pet",
     "allow-get-pet-preferences",
     "allow-set-pet-topmost"
   ]

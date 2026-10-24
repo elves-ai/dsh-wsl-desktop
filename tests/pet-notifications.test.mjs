@@ -303,7 +303,7 @@ test('host callback exceptions cannot corrupt lifecycle and events never start u
 
 test('CSS keeps compact speech bubble bounds and z8 below menu z10; visual verification is separate', () => {
   assert.match(css, /position:\s*absolute/); assert.match(css, /top:\s*7px/);
-  assert.match(css, /left:\s*18px/); assert.match(css, /right:\s*18px/);
+  assert.match(css, /left:\s*calc\(18px \+ var\(--pet-visible-left, 0px\)\)/); assert.match(css, /right:\s*calc\(18px \+ var\(--pet-visible-right, 0px\)\)/);
   assert.match(css, /max-height:\s*110px/); assert.match(css, /z-index:\s*8/);
   assert.match(css, /\.pet-notifications::after\s*\{/);
   assert.match(css, /-webkit-line-clamp:\s*3/);

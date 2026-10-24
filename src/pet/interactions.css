@@ -1,9 +1,9 @@
-/* Fixed to the 360 × 320 pet viewport; no window expansion required. */
+/* Initial fallback; the host measures and fits expanded/collapsed cards to the visible viewport. */
 .pet-interactions {
   position: absolute;
   top: 4px;
-  left: 6px;
-  right: 6px;
+  left: calc(6px + var(--pet-visible-left, 0px));
+  right: calc(6px + var(--pet-visible-right, 0px));
   bottom: 60px;
   z-index: 9;
   font: 12px/1.45 system-ui, sans-serif;

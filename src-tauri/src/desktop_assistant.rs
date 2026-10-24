@@ -668,6 +668,21 @@ fn place(window: &Window, app: &tauri::AppHandle, directory: &std::path::Path, p
         area.position.x + area.size.width.saturating_sub(size.width + 24) as i32,
         area.position.y + area.size.height.saturating_sub(size.height + 24) as i32,
     ));
+    if pet {
+        // Saved top-left may legitimately sit outside the monitor: only transparent
+        // video padding is off screen. Use the same character bounds as live dragging.
+        if let Ok(position) = super::pet::constrain_pet_position(
+            window,
+            crate::pet_geometry::Point {
+                x: x as f64,
+                y: y as f64,
+            },
+        ) {
+            let _ =
+                window.set_position(PhysicalPosition::new(position.x as i32, position.y as i32));
+        }
+        return;
+    }
     if let Some((anchor, position)) = anchor {
         let pet_size = anchor
             .outer_size()
@@ -784,6 +799,15 @@ fn toggle_chat(app: &tauri::AppHandle, state: &Assistant) -> Result<(), String> 
 pub(super) fn on_window_event(window: &Window, event: &WindowEvent) {
     if ![PET, CHAT].contains(&window.label()) {
         return;
+    }
+    if window.label() == PET
+        && matches!(
+            event,
+            WindowEvent::ScaleFactorChanged { .. } | WindowEvent::Resized(_)
+        )
+    {
+        // Invalidate before any UI dispatch/spawn; monitor cache locks never span Tauri calls.
+        super::pet::invalidate_work_areas();
     }
     if let WindowEvent::Moved(position) = event {
         if window.label() == PET {

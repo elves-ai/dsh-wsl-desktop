@@ -6,6 +6,8 @@ import ts from 'typescript';
 const source = await readFile(new URL('../src/assistant.ts', import.meta.url), 'utf8');
 const modelSource = await readFile(new URL('../src/assistant-model.ts', import.meta.url), 'utf8');
 const markdownSource = await readFile(new URL('../src/assistant-markdown.ts', import.meta.url), 'utf8');
+const menuSource = await readFile(new URL('../src/pet/menu.ts', import.meta.url), 'utf8');
+const { PetMenuController } = await import('data:text/javascript;base64,' + Buffer.from(ts.transpileModule(menuSource, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText).toString('base64'));
 const markdown = await import('data:text/javascript;base64,' + Buffer.from(ts.transpileModule(markdownSource, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText).toString('base64'));
 const model = await import('data:text/javascript;base64,' + Buffer.from(ts.transpileModule(modelSource, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
@@ -16,7 +18,7 @@ const script = ts.transpileModule(source.replace(/^import .*;$/gm, '').replace('
 const tick = () => new Promise(resolve => setImmediate(resolve));
 function deferred() { let resolve; let reject; const promise = new Promise((a,b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; }
 class Node {
-  constructor(id = '') { this.id = id; this.value = ''; this.textContent = ''; this.hidden = false; this.disabled = false; this.children = []; this.handlers = new Map(); this.scrollHeight = 0; this.scrollTop = 0; this.clientHeight = 300; this.dataset = {}; this.checked = true; this.style = {}; this.attributes = new Map(); }
+  constructor(id = '') { this.id = id; this.value = ''; this.textContent = ''; this.hidden = false; this.disabled = false; this.children = []; this.handlers = new Map(); this.scrollHeight = 0; this.scrollTop = 0; this.clientHeight = 300; this.dataset = {}; this.checked = true; this.style = { setProperty(k, v) { this[k] = v; } }; this.attributes = new Map(); }
   addEventListener(type, fn, options = {}) {
     if (!this.handlers.has(type)) this.handlers.set(type, []);
     this.handlers.get(type).push(fn);
@@ -28,25 +30,34 @@ class Node {
   add(node) { this.children.push(node); }
   closest() { return this; }
   querySelectorAll() { return []; }
+  querySelector() { return null; }
+  contains(node) { return node === this || this.children.some(child => child.contains?.(node)); }
+  removeEventListener(type, fn) { this.handlers.set(type, (this.handlers.get(type) ?? []).filter(handler => handler !== fn)); }
   setAttribute(k,v) { this.attributes.set(k,String(v)); }
   getAttribute(k) { return this.attributes.get(k); }
   removeAttribute(k) { this.attributes.delete(k); }
   setPointerCapture() {}
   getClientRects() { return [{}]; }
-  getBoundingClientRect() { return { x: 10, y: 20, width: 100, height: 100 }; }
+  getBoundingClientRect() { return { x: 10, y: 20, left: 10, top: 20, right: 110, bottom: 120, width: 100, height: 100 }; }
 }
-function setup({ native = true, view = 'chat', listenGate, getSnapshot, getPreferences, getInbox, openNotification, getInteractions, submitInteraction, openInteraction, setTopmost, actionResult } = {}) {
+function setup({ native = true, view = 'chat', listenGate, getSnapshot, getPreferences, getInbox, openNotification, getInteractions, submitInteraction, openInteraction, setTopmost, actionResult, getGeometry, movePet, dragPet } = {}) {
   const nodes = new Map();
-  const ids = ['assistant-root', 'preview', 'pet-status', 'pet', 'pet-media', 'pet-animation', 'pet-menu', 'pet-bubble', 'pet-interaction', 'pet-topmost', 'pet-fixed', 'notice', 'status', 'setup', 'conversation', 'sessions', 'new-session', 'session-bar', 'composer-footnote', 'reconfigure', 'runtime-message', 'draft-hint', 'retry', 'send', 'cancel', 'enable', 'workspace', 'consent', 'enable-form', 'send-form', 'draft'];
+  const ids = ['assistant-root', 'preview', 'pet', 'pet-media', 'pet-animation', 'pet-menu', 'pet-bubble', 'pet-interaction', 'pet-topmost', 'pet-fixed', 'notice', 'status', 'setup', 'conversation', 'sessions', 'new-session', 'session-bar', 'composer-footnote', 'reconfigure', 'runtime-message', 'draft-hint', 'retry', 'send', 'cancel', 'enable', 'workspace', 'consent', 'enable-form', 'send-form', 'draft'];
   ids.forEach(id => nodes.set(id, new Node(id)));
   nodes.get('pet-menu').hidden = true;
   const root = nodes.get('assistant-root');
-  const calls = []; const events = []; const petEvents = []; const storage = new Map();
+  const calls = []; const events = []; const petEvents = []; const storage = new Map(); const frames = new Map(); let frameId = 0;
   const listeners = new Map(); let stopped = 0;
   let topmost = true; let petRevision = 0;
   const window = new Node(); window.confirm = () => false;
+  const document = Object.assign(new Node(), { defaultView:window, body:{dataset:{}}, querySelector:()=>root, getElementById:id=>nodes.get(id), createDocumentFragment:()=>new Node(), createElement:()=>new Node() });
+  for (const node of nodes.values()) node.ownerDocument = document;
+  const menuTimers = new Map(); let menuTimerId = 0;
   const invoke = async (name, args) => {
     calls.push({ name, args });
+    if (name === 'get_pet_geometry') return getGeometry ? getGeometry() : geometry();
+    if (name === 'move_pet') return movePet ? movePet(args) : geometry();
+    if (name === 'drag_pet') return dragPet ? dragPet(args) : geometry();
     if (name === 'get_pet_preferences') return getPreferences ? getPreferences() : {visible:true,always_on_top:topmost,roaming_enabled:true,bubble_notifications:true,message:'',revision:petRevision};
     if (name === 'set_pet_topmost') {
       if(setTopmost) return setTopmost(args.alwaysOnTop);
@@ -94,8 +105,12 @@ function setup({ native = true, view = 'chat', listenGate, getSnapshot, getPrefe
       trigger(name) { petEvents.push(['trigger',name]); return true; }
       dispose() { petEvents.push(['renderer-dispose']); }
     },
+    layoutPetBubbles: () => { petEvents.push(['bubble-layout']); },
+    PetMenuController: class extends PetMenuController {
+      constructor(menu, options) { super(menu, {...options, clock:{schedule:callback=>{menuTimers.set(++menuTimerId,callback);return menuTimerId;},cancel:id=>menuTimers.delete(id)}}); petEvents.push(['menu-mounted',this]); }
+    },
     PetMotion: class {
-      constructor(options) { this.options=options; petEvents.push(['motion-mounted']); }
+      constructor(options) { this.options=options; petEvents.push(['motion-mounted',options]); }
       begin(sling) { petEvents.push(['motion-begin',sling]); this.options.onDragStart(); }
       end() { petEvents.push(['motion-end']); this.options.onDragEnd(); }
       stop() { petEvents.push(['motion-stop']); }
@@ -104,16 +119,88 @@ function setup({ native = true, view = 'chat', listenGate, getSnapshot, getPrefe
     },
     listen: async (name, callback) => { events.push(name); listeners.set(name, callback); if (typeof listenGate === 'function') await listenGate(name); else if (listenGate) await listenGate.promise; return () => { stopped++; }; },
     location: { search: '?view=' + view }, URLSearchParams,
-    document: { body: { dataset: {} }, querySelector: () => root, getElementById: id => nodes.get(id), createDocumentFragment: () => new Node(), createElement: () => new Node() },
+    document,
     window, sessionStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
     AbortController, Option: class extends Node { constructor(text, value) { super(); this.textContent = text; this.value = value; } },
     crypto: { randomUUID: () => 'request-' + calls.length }, Intl, performance,
-    requestAnimationFrame: () => 1, cancelAnimationFrame() {}, ResizeObserver: class { observe() {} disconnect() {} }, console,
+    requestAnimationFrame: callback => { frames.set(++frameId, callback); return frameId; }, cancelAnimationFrame(id) { frames.delete(id); }, ResizeObserver: class { observe() {} disconnect() {} }, console,
   };
   vm.runInNewContext(script, context);
-  return { nodes, calls, events, petEvents, window, storage, emit: state => listeners.get('assistant-state')({ payload: state }), emitEvent: (name,value) => listeners.get(name)?.({ payload:value }), stopped: () => stopped };
+  return { nodes, calls, events, petEvents, window, document, menuTimers, storage, flushMenuTimer: () => { const callbacks=[...menuTimers.values()]; menuTimers.clear(); callbacks.forEach(callback=>callback()); }, flushFrames: () => { const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach(callback => callback()); return callbacks.length; }, emit: state => listeners.get('assistant-state')({ payload: state }), emitEvent: (name,value) => listeners.get(name)?.({ payload:value }), stopped: () => stopped };
 }
+function geometry(patch = {}) { return { position:{x:100,y:100}, size:{width:360,height:320}, scale:1, areas:[{x:0,y:0,width:1920,height:1080}], cursor:{x:200,y:200}, cursor_down:false, horizontal_inset:112.5, ...patch }; }
 function ready(revision = 1, patch = {}) { return { ...model.initialSnapshot(), enabled: true, connected: true, phase: 'ready', workspace_id: 'w', session_id: 's', sessions: [{ id: 's', title: 'hello' }], revision, ...patch }; }
+
+test('pet geometry wrappers keep overlays in real work areas using the returned physical scale', async () => {
+  let current = geometry({ position:{x:-112,y:100} });
+  const ui = setup({view:'pet', getGeometry:() => current, movePet:() => current}); await tick();
+  const motion = ui.petEvents.find(event => event[0] === 'motion-mounted')[1];
+  const style = ui.nodes.get('assistant-root').style;
+  assert.equal(await motion.getGeometry(), current);
+  assert.equal(style['--pet-visible-left'], '112px');
+  assert.equal(style['--pet-visible-right'], '0px');
+  current = geometry({position:{x:3345,y:100},size:{width:720,height:640},scale:2,areas:[{x:0,y:0,width:3840,height:2160}]});
+  assert.equal(await motion.move(9999, 100), current); // use native clamped response, not requested x
+  assert.equal(style['--pet-visible-left'], '0px');
+  assert.equal(style['--pet-visible-right'], '112.5px');
+  assert.equal(ui.calls.at(-1).name, 'move_pet');
+  current = geometry({position:{x:-2032,y:100},areas:[{x:-1920,y:0,width:1920,height:1080},{x:0,y:0,width:1920,height:1080}]});
+  await motion.getGeometry(); assert.equal(style['--pet-visible-left'], '112px');
+  current = geometry({position:{x:48,y:100},areas:[{x:160,y:0,width:1760,height:1080}]});
+  await motion.getGeometry(); assert.equal(style['--pet-visible-left'], '112px');
+  current = geometry(); await motion.getGeometry();
+  assert.equal(style['--pet-visible-left'], '0px'); assert.equal(style['--pet-visible-right'], '0px');
+});
+
+test('ordinary drag hook uses one scoped native command and adopts its actual clamped geometry for overlays', async () => {
+  const actual = geometry({position:{x:-112,y:100}}); let args;
+  const ui=setup({view:'pet',dragPet:value=>{args=value;return actual;}}); await tick();
+  const motion=ui.petEvents.find(event=>event[0]==='motion-mounted')[1];
+  const before=ui.calls.length;
+  assert.equal(await motion.drag(40,50),actual);
+  assert.deepEqual(JSON.parse(JSON.stringify(args)),{grabX:40,grabY:50});
+  assert.deepEqual(ui.calls.slice(before).map(call=>call.name),['drag_pet']);
+  assert.equal(ui.nodes.get('assistant-root').style['--pet-visible-left'],'112px');
+  assert.equal(ui.nodes.get('assistant-root').style['--pet-visible-right'],'0px');
+});
+
+test('pet overlay updates resync moved hit regions and reject stale/disposed geometry replies', async () => {
+  const stale = deferred(); const late = deferred(); let reads = 0;
+  const ui = setup({view:'pet', getGeometry:() => ++reads === 1 ? stale.promise : late.promise, movePet:() => geometry({position:{x:1672,y:100}})}); await tick();
+  const motion = ui.petEvents.find(event => event[0] === 'motion-mounted')[1];
+  const root = ui.nodes.get('assistant-root'); const button = new Node();
+  button.getBoundingClientRect = () => ({x:200 - parseFloat(root.style['--pet-visible-right'] || '0'),y:280,width:40,height:20});
+  root.querySelectorAll = () => [button];
+  ui.flushFrames();
+  const read = motion.getGeometry(); await motion.move(3000,100); ui.flushFrames();
+  assert.equal(ui.calls.filter(call => call.args?.request?.action === 'hit_regions').at(-1).args.request.regions[0].x, 88);
+  await motion.move(3000,100);
+  assert.equal(ui.flushFrames(), 0, 'unchanged insets must not schedule per-frame hit work');
+  stale.resolve(geometry({position:{x:-112,y:100}})); await read;
+  assert.equal(root.style['--pet-visible-left'], '0px');
+  assert.equal(root.style['--pet-visible-right'], '112px');
+  const afterDispose = motion.getGeometry(); ui.window.emit('pagehide');
+  late.resolve(geometry()); await afterDispose; ui.flushFrames();
+  assert.equal(root.style['--pet-visible-right'], '112px');
+});
+
+test('pet bubble layout runs in preview without native IPC and stops after disposal', async () => {
+  const ui = setup({native:false,view:'pet'}); await tick();
+  ui.flushFrames();
+  assert.ok(ui.petEvents.some(event => event[0] === 'bubble-layout'));
+  assert.equal(ui.calls.length, 0);
+  const layouts = ui.petEvents.filter(event => event[0] === 'bubble-layout').length;
+  ui.window.emit('pagehide'); ui.flushFrames();
+  assert.equal(ui.petEvents.filter(event => event[0] === 'bubble-layout').length, layouts);
+});
+
+test('pet preview retains default overlay layout without native geometry', async () => {
+  const ui = setup({native:false,view:'pet'}); await tick();
+  assert.equal(ui.nodes.get('assistant-root').style['--pet-visible-left'], undefined);
+  assert.equal(ui.nodes.get('assistant-root').style['--pet-visible-right'], undefined);
+  assert.equal(ui.petEvents.some(event => event[0] === 'motion-mounted'), false);
+  assert.equal(ui.calls.length, 0);
+});
 
 test('a deleted current session can recover through explicit history selection or new session', async () => {
   const ui = setup({ getSnapshot: () => ready(1, { connected: false, session_id: null, phase: 'error' }) }); await tick();
@@ -302,6 +389,52 @@ test('pet rejects reordered visibility events independently of roaming preferenc
   assert.equal(hooks.onMove('move',{},{}),true);
 });
 
+
+test('pet keeps bottom chrome absent and moves all existing actions and credit inside the compact menu', async () => {
+  const ui=setup({view:'pet'}); await tick(); const markup=ui.nodes.get('assistant-root').innerHTML;
+  assert.ok(!markup.includes('pet-status'));
+  assert.ok(!markup.includes('class="pet-tools"')); assert.ok(!markup.includes('class="pet-attribution"'));
+  const menu=markup.slice(markup.indexOf('<section id="pet-menu"'),markup.indexOf('<div id="pet-bubble"'));
+  for(const action of ['toggle_chat','open_dsh','pet_settings','hide']) assert.ok(menu.includes('data-action="'+action+'"'));
+  assert.ok(menu.includes('data-pet-command="close-menu"')); assert.ok(menu.includes('data-upstream="true"'));
+  assert.ok(menu.includes('动画素材禁止商用')); assert.ok(!menu.includes('<p>'));
+});
+
+test('pet menu closes on repeated right-click, explicit close, outside press, Escape and blur', async () => {
+  const ui=setup({view:'pet'}); await tick(); const pet=ui.nodes.get('pet'),menu=ui.nodes.get('pet-menu');
+  const open=()=>{pet.emit('contextmenu',{clientX:150,clientY:200}); assert.equal(menu.hidden,false);};
+  open(); assert.equal(pet.getAttribute('aria-expanded'),'true'); pet.emit('contextmenu'); assert.equal(menu.hidden,true);
+  open(); const close=new Node(); close.dataset.petCommand='close-menu'; ui.nodes.get('assistant-root').emit('click',{target:close}); assert.equal(menu.hidden,true);
+  open(); ui.document.emit('pointerdown',{button:0,target:new Node()}); assert.equal(menu.hidden,true);
+  open(); ui.document.emit('keydown',{key:'Escape'}); assert.equal(menu.hidden,true);
+  open(); ui.window.emit('blur'); assert.equal(menu.hidden,true);
+  assert.equal(pet.getAttribute('aria-expanded'),'false'); assert.equal(ui.menuTimers.size,0);
+  ui.window.emit('pagehide'); pet.emit('contextmenu'); assert.equal(menu.hidden,true);
+});
+
+for(const action of ['toggle_chat','open_dsh','pet_settings','hide']) test('pet menu action '+action+' closes before dispatch and restores bubble visibility', async()=>{
+  const ui=setup({view:'pet'}); await tick(); ui.nodes.get('pet').emit('contextmenu');
+  const button=new Node(); button.dataset.action=action;
+  ui.nodes.get('assistant-root').emit('click',{target:button}); await tick();
+  assert.equal(ui.nodes.get('pet-menu').hidden,true);
+  assert.equal(ui.calls.filter(call=>call.name==='assistant_action').at(-1).args.request.action,action);
+  assert.equal(ui.petEvents.filter(event=>event[0]==='bubble-obscured').at(-1)[1],false);
+});
+
+test('native visibility loss closes the pet menu and cancels its polling', async()=>{
+  const ui=setup({view:'pet'}); await tick(); ui.nodes.get('pet').emit('contextmenu');
+  ui.emitEvent('pet-visibility',{visible:false,revision:10});
+  assert.equal(ui.nodes.get('pet-menu').hidden,true); assert.equal(ui.menuTimers.size,0);
+});
+
+test('pet menu closes from native desktop input even without a DOM outside event', async()=>{
+  let g=geometry(); const ui=setup({view:'pet',getGeometry:()=>g}); await tick();
+  ui.nodes.get('pet').emit('contextmenu');
+  g=geometry({cursor_down:true,cursor:{x:900,y:900}}); ui.flushMenuTimer(); await tick();
+  assert.equal(ui.nodes.get('pet-menu').hidden,true); assert.equal(ui.menuTimers.size,0);
+  ui.nodes.get('pet').emit('contextmenu'); g=geometry({escape_down:true}); ui.flushMenuTimer(); await tick();
+  assert.equal(ui.nodes.get('pet-menu').hidden,true); assert.equal(ui.calls.some(call=>call.name==='move_pet'),false);
+});
 
 function clickTopmost(ui) {
   const button=ui.nodes.get('pet-topmost');button.dataset.petCommand='topmost';

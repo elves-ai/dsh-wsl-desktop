@@ -64,8 +64,75 @@ test('disposing before initial geometry settles cannot initialize or schedule mo
   assert.deepEqual(f.active, []); assert.deepEqual(f.events, []); assert.deepEqual(f.moves, []);
 });
 
-test('native cursor spring trajectory is upstream-exact and never rescales cursor pixels', async () => {
-  const f = fixture({ scale: 2 }); await flush(); f.pet.begin(); await flush();
+for (const scale of [1, 1.25, 2]) test('ordinary drag directly retains physical grab offset at DPI scale ' + scale, async () => {
+  const f = fixture({ scale }); await flush(); f.pet.begin(); await flush();
+  const frame = 1000 / 60;
+  for (const [x, y, nextScale] of [[170, 140, scale], [240, 190, 2], [-310, -160, 1.25], [400, 110, scale]]) {
+    f.g.cursor = { x, y }; f.g.scale = nextScale;
+    const count = f.moves.length;
+    await f.clock.advance(frame);
+    assert.equal(f.moves.length, count + 1);
+    near(f.moves.at(-1).x, x - 40); near(f.moves.at(-1).y, y - 50);
+  }
+  for (let i = 1; i < f.moves.length; i++) near(f.moves[i].t - f.moves[i - 1].t, frame);
+  f.pet.dispose(); await flush(); assert.deepEqual(f.active, [true, false]);
+});
+
+for (const [readMs, moveMs] of [[5, 7], [12, 24]]) test('frame deadline subtracts geometry/move IPC ' + readMs + '/' + moveMs + 'ms without catch-up backlog', async () => {
+  const f = fixture(); await flush(); f.pet.begin(); await flush();
+  const frame = 1000 / 60, starts = [];
+  const move = f.api.move;
+  f.api.getGeometry = async () => { starts.push(f.clock.time); f.clock.time += readMs; return structuredClone(f.g); };
+  f.api.move = async (x, y) => { f.clock.time += moveMs; return move(x, y); };
+  f.g.cursor.x = 500;
+  await f.clock.advance(frame);
+  for (let i = 0; i < 4; i++) {
+    assert.equal(f.clock.tasks.size, 1);
+    const next = [...f.clock.tasks.values()][0];
+    near(next.at - f.clock.time, Math.max(0, frame - readMs - moveMs));
+    if (next.at > f.clock.time) {
+      const count = f.moves.length;
+      await f.clock.advance(next.at - f.clock.time - .001);
+      assert.equal(f.moves.length, count);
+      await f.clock.advance(.001);
+    } else await f.clock.advance(0);
+    assert.equal(f.moves.length, i + 2);
+  }
+  for (let i = 1; i < starts.length; i++) near(starts[i] - starts[i - 1], Math.max(frame, readMs + moveMs));
+  f.pet.dispose(); await flush();
+});
+
+test('geometry and move IPC share one in-flight slot; stalled frames resume from latest cursor only', async () => {
+  const f = fixture(); await flush(); f.pet.begin(); await flush();
+  const geometry = deferred(), movement = deferred();
+  const getGeometry = f.api.getGeometry, move = f.api.move;
+  let reads = 0, inFlight = 0, maxFlight = 0;
+  f.api.getGeometry = async () => {
+    reads++; inFlight++; maxFlight = Math.max(maxFlight, inFlight);
+    if (reads === 1) await geometry.promise;
+    inFlight--; return getGeometry();
+  };
+  f.api.move = async (x, y) => {
+    inFlight++; maxFlight = Math.max(maxFlight, inFlight);
+    if (f.moves.length === 0) await movement.promise;
+    inFlight--; return move(x, y);
+  };
+  await f.clock.advance(1000 / 60);
+  for (let i = 0; i < 20; i++) await f.clock.advance();
+  assert.equal(reads, 1); assert.equal(f.moves.length, 0); assert.equal(f.clock.tasks.size, 0);
+  f.g.cursor.x = 500; geometry.resolve(); await flush();
+  for (let i = 0; i < 20; i++) await f.clock.advance();
+  assert.equal(reads, 1); assert.equal(f.clock.tasks.size, 0);
+  f.g.cursor.x = 900; movement.resolve(); await flush();
+  assert.equal(f.moves.length, 1); assert.equal(f.clock.tasks.size, 1);
+  await f.clock.advance(0);
+  assert.equal(reads, 2); assert.equal(f.moves.length, 2); near(f.moves.at(-1).x, 860);
+  assert.equal(maxFlight, 1); assert.equal(f.clock.tasks.size, 1);
+  f.pet.dispose(); await flush();
+});
+
+test('slingshot cursor spring trajectory is upstream-exact and never rescales cursor pixels', async () => {
+  const f = fixture({ scale: 2 }); await flush(); f.pet.begin(true); await flush();
   let state = { x: 100, y: 100, vx: 0, vy: 0 };
   for (const [x, y] of [[170, 140], [240, 190], [310, 160], [400, 110]]) {
     f.g.cursor = { x, y };
@@ -75,7 +142,6 @@ test('native cursor spring trajectory is upstream-exact and never rescales curso
     await f.clock.advance();
     near(f.moves.at(-1).x, state.x); near(f.moves.at(-1).y, state.y);
   }
-  assert.ok(f.moves.slice(1).every((m, i) => m.t - f.moves[i].t >= 30));
   assert.deepEqual(f.active, [true]); f.pet.dispose(); await flush();
   assert.deepEqual(f.active, [true, false]);
 });
@@ -109,10 +175,21 @@ test('resuming after a long native stall integrates only upstream MAX_STEP_DT, n
   near(f.moves[0].x, expected.x); near(f.moves[0].y, expected.y); f.pet.dispose();
 });
 
+test('ordinary dragging keeps its original grab after native clamp feedback', async () => {
+  const f = fixture({ scale: 2 });
+  f.api.move = async (x, y) => { f.moves.push({ x, y }); f.g.position = { x: 50, y: 60 }; return structuredClone(f.g); };
+  await flush(); f.pet.begin(); await flush();
+  f.g.cursor = { x: 700, y: 600 }; await f.clock.advance();
+  near(f.moves[0].x, 660); near(f.moves[0].y, 550);
+  f.g.cursor = { x: 200, y: 220 }; await f.clock.advance();
+  near(f.moves[1].x, 160); near(f.moves[1].y, 170);
+  f.pet.dispose(); await flush();
+});
+
 test('native full-window clamp feedback, not requested or 16:9 stage position, seeds next spring step', async () => {
   const f = fixture({ scale: 2 });
   f.api.move = async (x, y) => { f.moves.push({ x, y }); f.g.position = { x: 50, y: 60 }; return structuredClone(f.g); };
-  await flush(); f.pet.begin(); await flush(); f.g.cursor = { x: 700, y: 600 };
+  await flush(); f.pet.begin(true); await flush(); f.g.cursor = { x: 700, y: 600 };
   await f.clock.advance();
   const vx = physics.springStep(0, 100, 660, .03), vy = physics.springStep(0, 100, 550, .03);
   await f.clock.advance();
@@ -160,7 +237,7 @@ test('end during unresolved begin is remembered, no late drag resurrection', asy
   f.pet.dispose();
 });
 
-test('one serialized move per >=30ms, slow IPC cannot create an unbounded queue; dispose ignores late response', async () => {
+test('one serialized move in flight, slow IPC cannot create an unbounded queue; dispose ignores late response', async () => {
   const f = fixture(); const pending = deferred(); let inFlight = 0, maxFlight = 0;
   f.api.move = async (x, y) => { inFlight++; maxFlight = Math.max(maxFlight, inFlight); f.moves.push({ x, y, t: f.clock.time }); await pending.promise; inFlight--; return structuredClone(f.g); };
   await flush(); f.pet.begin(); await flush(); f.g.cursor.x = 500;
@@ -185,7 +262,7 @@ test('stop/new begin serializes generations and stale geometry cannot reset new 
   f.pet.begin(); await flush(); f.pet.stop(); f.g.position.x = 600; f.g.cursor.x = 640; f.pet.begin();
   old.resolve({ ...structuredClone(f.g), position: { x: -999, y: -999 } }); await flush();
   f.g.cursor.x = 740; await f.clock.advance();
-  near(f.moves[0].x, 600 + physics.springStep(0, 600, 700, .03) * .03);
+  near(f.moves[0].x, 700);
   assert.deepEqual(f.active, [true, false, true]); f.pet.dispose(); await flush();
   assert.deepEqual(f.active, [true, false, true, false]);
 });
@@ -223,6 +300,48 @@ test('roam stop is nonrecursive, stopped late RPC cannot resurrect; boundary/gap
   await f.clock.advance(); f.pet.stopRoam(); f.pet.stopRoam(); pending.resolve(structuredClone(f.g));
   await flush(); await f.clock.advance(1000); assert.equal(f.pet.isActive, false); assert.equal(f.clock.tasks.size, 0);
   assert.deepEqual(f.events, []); f.pet.dispose();
+});
+
+for (const inset of [NaN, Infinity, -1, 100, 101]) test('invalid horizontal inset is rejected: ' + inset, async () => {
+  const f = fixture({ horizontal_inset: inset }); await flush();
+  assert.equal(f.errors.length, 1); assert.match(f.errors[0].message, /Invalid native pet geometry/);
+  assert.equal(f.pet.isActive, false); assert.equal(f.clock.tasks.size, 0);
+  f.pet.dispose();
+});
+
+for (const scale of [1, 2]) for (const side of ['left', 'right']) test('physical inset permits ' + side + ' edge throw on negative mixed-DPI screen at scale ' + scale, async () => {
+  const width = 200 * scale, height = 300 * scale, inset = width * 200 / 640;
+  const bounds = { minX: -2000 - inset, minY: -500, maxX: -width + inset, maxY: 900 - height };
+  const x = side === 'left' ? bounds.minX : bounds.maxX;
+  const f = fixture({ position: { x, y: 100 }, cursor: { x: x + 40, y: 150 },
+    size: { width, height }, scale, horizontal_inset: inset,
+    areas: [{ x: -2000, y: -500, width: 2000, height: 1400 }, { x: 0, y: 0, width: 3000, height: 1800 }] });
+  await flush(); f.pet.begin(true); await flush();
+  const pull = side === 'left' ? 120 : -120;
+  f.g.cursor.x += pull; f.g.cursor_down = false; await f.clock.advance();
+  const velocity = physics.slingshotVelocity(physics.pullAngle(pull, 0), physics.slingshotPower(120, width));
+  const expected = integrate({ x, y: 100, ...velocity }, .03, bounds,
+    { ...physics.DEFAULT_PHYSICS, gravity: physics.DEFAULT_PHYSICS.gravity * scale });
+  await f.clock.advance();
+  near(f.moves[0].x, expected.x); near(f.moves[0].y, expected.y);
+  assert.ok(f.events.includes('bounce'));
+  f.pet.dispose(); await flush();
+});
+
+for (const scale of [1, 2]) for (const side of ['left', 'right']) test('roam reaches visual ' + side + ' edge without rescaling native inset at scale ' + scale, async () => {
+  const width = 200 * scale, inset = width * 200 / 640;
+  const edge = side === 'left' ? -2000 - inset : -width + inset;
+  const start = edge + (side === 'left' ? 100 : -100) * scale;
+  const f = fixture({ position: { x: start, y: 0 }, size: { width, height: 300 * scale },
+    horizontal_inset: inset, scale,
+    areas: [{ x: -2000, y: -500, width: 2000, height: 1400 }, { x: 0, y: 0, width: 3000, height: 1800 }] });
+  await flush();
+  const params = { minDist: 231, maxDist: 231 };
+  assert.equal(f.pet.startRoam('walk', params, side, 1), true);
+  await f.clock.advance(1000); near(f.moves[0].x, edge);
+  assert.equal(f.pet.isActive, false);
+  assert.equal(f.pet.startRoam('walk', params, side, 1), false);
+  f.pet.dispose(); await flush();
 });
 
 test('drag can cross to another monitor, then throw stays inside its actual full-window work area', async () => {

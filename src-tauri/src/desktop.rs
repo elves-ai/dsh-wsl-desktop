@@ -882,6 +882,7 @@ pub fn run() {
             assistant::assistant_action,
             pet::get_pet_geometry,
             pet::move_pet,
+            pet::drag_pet,
             pet_settings::get_pet_settings,
             pet_settings::set_pet_settings,
             pet_settings::set_pet_visibility,

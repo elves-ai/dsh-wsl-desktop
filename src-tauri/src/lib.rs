@@ -11,6 +11,7 @@ pub mod notification_transport;
 pub mod notifications;
 pub mod pet_geometry;
 pub mod pet_interactions;
+pub mod pet_native_policy;
 pub mod pet_notifications;
 pub mod pet_settings;
 pub mod power;

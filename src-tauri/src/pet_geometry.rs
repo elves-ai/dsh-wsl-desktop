@@ -44,11 +44,36 @@ pub fn valid_area(area: Area) -> bool {
         && coordinate(area.y + area.height)
 }
 
+/// Transparent horizontal padding around the character, matching the shared-core
+/// HIT_BOX (x=200..440 on a 640px stage). Native sizes are already physical pixels.
+pub fn pet_horizontal_inset(size: Size) -> f64 {
+    size.width * (200.0 / 640.0)
+}
+
+/// Keep the character on screen, not the transparent sides of its video stage.
+/// Vertical bounds still contain the full window (including controls and taskbar gap).
+pub fn clamp_pet_position(
+    requested: Point,
+    size: Size,
+    areas: &[Area],
+) -> Result<Point, &'static str> {
+    clamp_with_horizontal_inset(requested, size, areas, pet_horizontal_inset(size))
+}
+
 /// Find the nearest *individual* work area that can contain the whole window.
 /// The union bounding box is deliberately not used: it can contain monitor gaps.
 /// Returned positions are integral physical pixels, ready for Win32/Tauri.
 /// Oversized windows fail closed instead of being left partly off screen.
 pub fn clamp_position(requested: Point, size: Size, areas: &[Area]) -> Result<Point, &'static str> {
+    clamp_with_horizontal_inset(requested, size, areas, 0.0)
+}
+
+fn clamp_with_horizontal_inset(
+    requested: Point,
+    size: Size,
+    areas: &[Area],
+    inset: f64,
+) -> Result<Point, &'static str> {
     if !coordinate(requested.x) || !coordinate(requested.y) {
         return Err("助手位置必须是合理范围内的有限物理像素坐标。");
     }
@@ -57,12 +82,12 @@ pub fn clamp_position(requested: Point, size: Size, areas: &[Area]) -> Result<Po
     }
     let mut nearest: Option<(Point, f64)> = None;
     for &area in areas {
-        if !valid_area(area) || size.width > area.width || size.height > area.height {
+        if !valid_area(area) || size.width - 2.0 * inset > area.width || size.height > area.height {
             continue;
         }
-        let min_x = area.x.ceil();
+        let min_x = (area.x - inset).ceil();
         let min_y = area.y.ceil();
-        let max_x = (area.x + area.width - size.width).floor();
+        let max_x = (area.x + area.width - size.width + inset).floor();
         let max_y = (area.y + area.height - size.height).floor();
         if max_x < min_x || max_y < min_y {
             continue;
@@ -96,6 +121,149 @@ mod tests {
         width: 1920.0,
         height: 1040.0,
     };
+
+    #[test]
+    fn character_reaches_both_edges_at_all_common_dpi_sizes() {
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let size = Size {
+                width: 360.0 * scale,
+                height: 320.0 * scale,
+            };
+            let inset = pet_horizontal_inset(size);
+            let left = clamp_pet_position(
+                Point {
+                    x: -9999.0,
+                    y: -999.0,
+                },
+                size,
+                &[MAIN],
+            )
+            .unwrap();
+            let right = clamp_pet_position(
+                Point {
+                    x: 9999.0,
+                    y: 9999.0,
+                },
+                size,
+                &[MAIN],
+            )
+            .unwrap();
+            // Integer native positions keep the whole character visible within one pixel.
+            assert!((left.x + inset - MAIN.x).abs() < 1.0);
+            assert!((right.x + size.width - inset - MAIN.x - MAIN.width).abs() < 1.0);
+            assert_eq!(left.y, MAIN.y);
+            assert_eq!(right.y + size.height, MAIN.y + MAIN.height);
+            assert_eq!(left.x.fract(), 0.0);
+            assert_eq!(right.x.fract(), 0.0);
+            // A saved edge position is stable on restore, rather than moving inward.
+            assert_eq!(clamp_pet_position(left, size, &[MAIN]), Ok(left));
+            assert_eq!(clamp_pet_position(right, size, &[MAIN]), Ok(right));
+        }
+    }
+
+    #[test]
+    fn character_bounds_support_negative_screens_and_reject_monitor_gaps() {
+        let left = Area {
+            x: -1920.0,
+            y: -400.0,
+            ..MAIN
+        };
+        let right = Area {
+            x: 3000.0,
+            y: 500.0,
+            ..MAIN
+        };
+        let size = Size {
+            width: 360.0,
+            height: 320.0,
+        };
+        assert_eq!(
+            clamp_pet_position(
+                Point {
+                    x: -9999.0,
+                    y: -9999.0
+                },
+                size,
+                &[MAIN, left, right]
+            ),
+            Ok(Point {
+                x: -2032.0,
+                y: -400.0
+            })
+        );
+        let gap = clamp_pet_position(
+            Point {
+                x: 2400.0,
+                y: 600.0,
+            },
+            size,
+            &[MAIN, left, right],
+        )
+        .unwrap();
+        assert_eq!(
+            gap,
+            Point {
+                x: 2888.0,
+                y: 600.0
+            }
+        );
+        assert!(gap.x + pet_horizontal_inset(size) >= right.x);
+    }
+
+    #[test]
+    fn character_bounds_reclamp_actual_dpi_size_and_reject_invalid_geometry() {
+        let size = Size {
+            width: 360.0,
+            height: 320.0,
+        };
+        let edge = clamp_pet_position(
+            Point {
+                x: 9999.0,
+                y: 9999.0,
+            },
+            size,
+            &[MAIN],
+        )
+        .unwrap();
+        let resized = Size {
+            width: 720.0,
+            height: 640.0,
+        };
+        assert_eq!(
+            clamp_pet_position(edge, resized, &[MAIN]),
+            Ok(Point {
+                x: 1425.0,
+                y: 400.0
+            })
+        );
+        for bad in [f64::NAN, f64::INFINITY, -1.0, 0.0, 1_000_001.0] {
+            assert!(clamp_pet_position(
+                Point { x: 0.0, y: 0.0 },
+                Size { width: bad, ..size },
+                &[MAIN]
+            )
+            .is_err());
+        }
+        assert!(clamp_pet_position(
+            Point {
+                x: f64::NAN,
+                y: 0.0
+            },
+            size,
+            &[MAIN]
+        )
+        .is_err());
+        assert!(clamp_pet_position(Point { x: 0.0, y: 0.0 }, size, &[]).is_err());
+        assert!(clamp_pet_position(
+            Point { x: 0.0, y: 0.0 },
+            Size {
+                height: 1041.0,
+                ..size
+            },
+            &[MAIN]
+        )
+        .is_err());
+    }
 
     #[test]
     fn preserves_physical_pixels_and_rounds_once() {

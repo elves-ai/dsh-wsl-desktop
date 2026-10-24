@@ -1,9 +1,9 @@
-/* Fits the existing pet window; native dimensions must not grow for a bubble. */
+/* Initial fallback only; measured host placement fits the current visible work-area span. */
 .pet-notifications {
   position: absolute;
   top: 7px;
-  left: 18px;
-  right: 18px;
+  left: calc(18px + var(--pet-visible-left, 0px));
+  right: calc(18px + var(--pet-visible-right, 0px));
   z-index: 8; /* pet-menu stays above this at z-index: 10 */
   box-sizing: border-box;
   max-height: 110px;
@@ -21,7 +21,8 @@
   content: '';
   position: absolute;
   bottom: -6px;
-  left: 47px;
+  left: calc(var(--pet-bubble-arrow-x, 52px) - 5px);
+  pointer-events: none;
   width: 10px;
   height: 10px;
   background: #f4faff;
@@ -29,6 +30,11 @@
   border-bottom: 1px solid #c5dfef;
   transform: rotate(45deg);
 }
+/* The host measures the bubble and selects a side; its tail follows the pet anchor. */
+.pet-notifications[data-placement='below']::after { top: -6px; bottom: auto; transform: rotate(225deg); }
+.pet-notifications[data-placement='left']::after { left: auto; right: -6px; top: calc(var(--pet-bubble-arrow-y) - 5px); bottom: auto; transform: rotate(-45deg); }
+.pet-notifications[data-placement='right']::after { left: -6px; top: calc(var(--pet-bubble-arrow-y) - 5px); bottom: auto; transform: rotate(135deg); }
+.pet-notifications[data-placement='overlay']::after { display: none; }
 .pet-notification-open {
   display: block;
   width: 100%;

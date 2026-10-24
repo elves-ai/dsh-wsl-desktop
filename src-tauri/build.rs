@@ -6,6 +6,7 @@ fn main() {
                 "assistant_action",
                 "get_pet_geometry",
                 "move_pet",
+                "drag_pet",
                 "get_pet_settings",
                 "set_pet_settings",
                 "set_pet_visibility",

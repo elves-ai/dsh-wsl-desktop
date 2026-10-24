@@ -112,7 +112,7 @@ test('all untrusted strings are plain text; full details and plan are readable',
 });
 
 test('layout fits pet viewport with scrollable full text and no timeout or clamp', () => {
-  for (const rule of [/top: 4px/, /left: 6px/, /right: 6px/, /bottom: 60px/, /z-index: 9/, /12px/, /overflow: auto/, /min-height: 0/]) assert.match(css, rule);
+  for (const rule of [/top: 4px/, /left: calc\(6px \+ var\(--pet-visible-left, 0px\)\)/, /right: calc\(6px \+ var\(--pet-visible-right, 0px\)\)/, /bottom: 60px/, /z-index: 9/, /12px/, /overflow: auto/, /min-height: 0/]) assert.match(css, rule);
   assert.doesNotMatch(css, /ellipsis|line-clamp/);
   assert.doesNotMatch(source, /innerHTML|insertAdjacentHTML|setTimeout|setInterval/);
   assert.doesNotMatch(source, /allowed-session|allowed-always|sessionId/);

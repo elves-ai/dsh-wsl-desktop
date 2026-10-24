@@ -15,6 +15,8 @@ export interface Geometry {
   size: { width: number; height: number };
   cursor: { x: number; y: number };
   scale: number;
+  /** Physical transparent padding on each horizontal side of the native window. */
+  horizontal_inset?: number;
   areas: Rect[];
   cursor_down: boolean;
 }
@@ -30,6 +32,8 @@ export interface MotionClock {
 export interface PetMotionOptions {
   getGeometry: () => Promise<Geometry>;
   move: (x: number, y: number) => Promise<Geometry>;
+  /** Native cursor sample + direct drag in one IPC; optional for non-native adapters. */
+  drag?: (grabX: number, grabY: number) => Promise<Geometry>;
   /** true only while dragging: force native pointer passthrough off. */
   setActive: (active: boolean) => Promise<void> | void;
   onDragStart?: () => void;
@@ -39,7 +43,7 @@ export interface PetMotionOptions {
   physics?: PhysicsParams;
   clock?: MotionClock;
 }
-const INTERVAL_MS = 30;
+const INTERVAL_MS = 1000 / 60;
 const clock: MotionClock = {
   now: () => performance.now(),
   schedule: (callback, delay) => setTimeout(callback, delay),
@@ -67,7 +71,6 @@ export class PetMotion {
   private trail: DragSample[] = [];
   private state: ThrowState = { x: 0, y: 0, vx: 0, vy: 0 };
   private last = 0;
-  private lastMove = -Infinity;
   private roam?: { start: number; target: number; y: number; since: number; lead: number; end: number; travel: number; video?: Pick<HTMLVideoElement, 'currentTime' | 'duration'> };
 
   constructor(private readonly options: PetMotionOptions) {
@@ -148,7 +151,7 @@ export class PetMotion {
       cx: g.position.x - area.x + g.size.width / 2,
       cy: g.position.y - area.y + g.size.height / 2,
       W: area.width, H: area.height, dir: facing === 'right' ? 1 : -1,
-      minDist, maxDist, margin: params.margin ?? 0, halfW: g.size.width / 2,
+      minDist, maxDist, margin: params.margin ?? 0, halfW: g.size.width / 2 - (g.horizontal_inset ?? 0),
     });
     if (!plan) return false;
     this.mode = 'roam';
@@ -209,9 +212,10 @@ export class PetMotion {
     if (this.timer !== undefined) this.clock.cancel(this.timer);
     this.timer = undefined;
   }
-  private schedule(token: number): void {
+  private schedule(token: number, deadline = this.clock.now() + INTERVAL_MS): void {
     if (!this.valid(token) || this.mode === 'idle' || this.timer !== undefined) return;
-    const delay = Math.max(INTERVAL_MS, this.lastMove + INTERVAL_MS - this.clock.now());
+    // IPC consumes the frame budget. Schedule only after it settles, never queue missed frames.
+    const delay = Math.max(0, deadline - this.clock.now());
     this.timer = this.clock.schedule(() => {
       this.timer = undefined;
       this.enqueue(token, () => this.tick(token));
@@ -221,6 +225,8 @@ export class PetMotion {
     if (!g || ![g.position?.x, g.position?.y, g.size?.width, g.size?.height,
       g.cursor?.x, g.cursor?.y, g.scale].every(Number.isFinite) ||
       g.size.width <= 0 || g.size.height <= 0 || g.scale <= 0 || typeof g.cursor_down !== 'boolean' ||
+      (g.horizontal_inset !== undefined && (!Number.isFinite(g.horizontal_inset) ||
+        g.horizontal_inset < 0 || g.horizontal_inset >= g.size.width / 2)) ||
       !Array.isArray(g.areas) || !g.areas.every((a) => [a.x, a.y, a.width, a.height].every(Number.isFinite) && a.width > 0 && a.height > 0)) {
       throw new Error('Invalid native pet geometry');
     }
@@ -261,19 +267,30 @@ export class PetMotion {
     this.schedule(token);
   }
   private async tick(token: number): Promise<void> {
+    const deadline = this.clock.now() + INTERVAL_MS;
     if (this.mode === 'drag') {
-      const g = await this.options.getGeometry();
+      const fused = !this.sling && !this.released && !!this.options.drag;
+      const g = fused
+        ? await this.options.drag!(this.grab.x, this.grab.y)
+        : await this.options.getGeometry();
       if (!this.valid(token)) return;
       this.adopt(g);
       this.sample(g);
       if (this.released || !g.cursor_down) { await this.release(token); return; }
-      const now = this.clock.now();
-      const dt = Math.min(Math.max((now - this.last) / 1000, 0), MAX_STEP_DT);
-      this.last = now;
-      this.state.vx = springStep(this.state.vx, this.state.x, g.cursor.x - this.grab.x, dt, this.physics.throwPower);
-      this.state.vy = springStep(this.state.vy, this.state.y, g.cursor.y - this.grab.y, dt, this.physics.throwPower);
-      const x = this.state.x + this.state.vx * dt, y = this.state.y + this.state.vy * dt;
-      await this.move(token, x, y);
+      if (!fused) {
+        const now = this.clock.now();
+        const dt = Math.min(Math.max((now - this.last) / 1000, 0), MAX_STEP_DT);
+        this.last = now;
+        // Preserve the elastic slingshot and adapters without native fused dragging.
+        let x = g.cursor.x - this.grab.x, y = g.cursor.y - this.grab.y;
+        if (this.sling) {
+          this.state.vx = springStep(this.state.vx, this.state.x, x, dt, this.physics.throwPower);
+          this.state.vy = springStep(this.state.vy, this.state.y, y, dt, this.physics.throwPower);
+          x = this.state.x + this.state.vx * dt;
+          y = this.state.y + this.state.vy * dt;
+        }
+        await this.move(token, x, y);
+      }
       if (!this.valid(token)) return;
       if (this.released || !this.geometry!.cursor_down) {
         this.sample(this.geometry!);
@@ -284,8 +301,9 @@ export class PetMotion {
       const g = this.geometry!, a = this.area(g);
       if (!a) { this.stop(); return; }
       // Do not use upstream throwBoundsIn: its 16:9 stage height is NOT the native window height.
-      const bounds = { minX: a.x, minY: a.y,
-        maxX: Math.max(a.x, a.x + a.width - g.size.width),
+      const inset = g.horizontal_inset ?? 0;
+      const bounds = { minX: a.x - inset, minY: a.y,
+        maxX: Math.max(a.x - inset, a.x + a.width - g.size.width + inset),
         maxY: Math.max(a.y, a.y + a.height - g.size.height) };
       const now = this.clock.now();
       const dt = Math.min(Math.max((now - this.last) / 1000, 0), MAX_STEP_DT);
@@ -313,11 +331,10 @@ export class PetMotion {
       if (!this.valid(token)) return;
       if (progress === 1) { this.mode = 'idle'; this.roam = undefined; return; }
     }
-    this.schedule(token);
+    this.schedule(token, deadline);
   }
   private async move(token: number, x: number, y: number): Promise<void> {
     if (!this.valid(token)) return;
-    this.lastMove = this.clock.now();
     const g = await this.options.move(x, y);
     if (this.valid(token)) this.adopt(g);
   }
