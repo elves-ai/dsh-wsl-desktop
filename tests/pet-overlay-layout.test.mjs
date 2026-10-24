@@ -7,16 +7,19 @@ import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import vm from 'node:vm';
+import ts from 'typescript';
 
 const chrome = [process.env.CHROME_BIN, '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser'].find(path => path && existsSync(path));
 
-test('real browser keeps pet overlays and controls inside either visible edge without moving the stage', { skip: chrome ? false : 'Chrome/Chromium not installed', timeout: 30000 }, async () => {
+test('real browser keeps speech above, input below and controls inside either edge without scaling the stage', { skip: chrome ? false : 'Chrome/Chromium not installed', timeout: 30000 }, async () => {
   const source = await readFile(new URL('../src/assistant.ts', import.meta.url), 'utf8');
   const root = {};
   // Use the actual pet host markup, not a second hand-maintained copy.
   vm.runInNewContext(source.slice(source.indexOf('const face ='), source.indexOf('function el<')), {root, view:'pet'});
   const css = (await Promise.all(['assistant.css','pet/notifications.css','pet/interactions.css'].map(file => readFile(new URL('../src/' + file, import.meta.url), 'utf8')))).join('\n');
-  const html = '<!doctype html><meta charset="utf-8"><style>' + css + '</style><body data-view="pet"><main id="assistant-root" style="width:360px;height:320px">' + root.innerHTML + '</main><pre id="result"></pre><script>(' + (() => {
+  const placementSources = await Promise.all(['bubble-layout.ts','bubble-positioner.ts'].map(file => readFile(new URL('../src/pet/' + file, import.meta.url), 'utf8')));
+  const placementScript = placementSources.map(source => ts.transpileModule(source.replace(/^import .*;$/gm, '').replace(/^export /gm, ''), {compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.None}}).outputText).join('\n');
+  const html = '<!doctype html><meta charset="utf-8"><style>' + css + '</style><body data-view="pet"><main id="assistant-root" style="width:360px;height:320px">' + root.innerHTML + '</main><pre id="result"></pre><script>' + placementScript + '</script><script>(' + (() => {
       const failures = [];
       const root = document.getElementById('assistant-root');
       const stage = document.querySelector('.pet-stage');
@@ -38,9 +41,22 @@ test('real browser keeps pet overlays and controls inside either visible edge wi
       for (const [left,right] of cases) {
         root.style.setProperty('--pet-visible-left', left + 'px');
         root.style.setProperty('--pet-visible-right', right + 'px');
-        for (const panel of ['none','pet-menu','pet-bubble','pet-interaction','notice']) {
-          for (const id of ['pet-menu','pet-bubble','pet-interaction','notice']) document.getElementById(id).hidden = id !== panel;
-          const selectors = ' .pet-credit, .asset-license, #pet-menu, #pet-menu button, #pet-menu select, #notice, #pet-bubble, #pet-bubble button, #pet-interaction, #pet-interaction button, #pet-interaction textarea';
+        for (const panel of ['none','pet-menu','pet-bubble','pet-interaction','notice','pet-composer']) {
+          for (const id of ['pet-menu','pet-bubble','pet-interaction','notice','pet-composer']) document.getElementById(id).hidden = id !== panel;
+          document.getElementById('pet-dialogue').hidden = panel !== 'pet-composer';
+          document.getElementById('pet-speech').hidden = false;
+          document.getElementById('pet-speech-text').textContent = '我在呢，想说些什么？';
+          document.getElementById('pet-enable').hidden = true;
+          layoutPetBubbles(root,pet,{left,right});
+          if (panel === 'pet-composer') {
+            const input=document.getElementById('pet-composer').getBoundingClientRect();
+            const character=pet.getBoundingClientRect();
+            const speech=document.getElementById('pet-dialogue').getBoundingClientRect();
+            if(input.top < character.bottom + 4 || input.bottom > 320) failures.push(['input not below pet',left,right,input.top,character.bottom,input.bottom]);
+            if(speech.bottom > character.top + .1) failures.push(['speech not above head',left,right,speech.bottom,character.top]);
+            if(document.getElementById('pet-dialogue').contains(document.getElementById('pet-composer'))) failures.push(['input still grouped with speech']);
+          }
+          const selectors = ' .pet-credit, .asset-license, #pet-menu, #pet-menu button, #pet-menu select, #notice, #pet-bubble, #pet-bubble button, #pet-interaction, #pet-interaction button, #pet-interaction textarea, #pet-composer, #pet-composer textarea, #pet-composer button, #pet-dialogue';
           for (const node of root.querySelectorAll(selectors)) {
             if (!node.getClientRects().length) continue;
             const rect = node.getBoundingClientRect();

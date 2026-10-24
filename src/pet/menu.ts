@@ -14,6 +14,8 @@ export interface PetMenuOptions {
   onChange(open: boolean): void;
   getGeometry?: () => Promise<PetMenuGeometry>;
   clock?: PetMenuClock;
+  /** Keep adjacent speech actions stable while an inline composer is open. */
+  dismissBoundary?: HTMLElement;
 }
 type Point = { x: number; y: number };
 type Bounds = Point & { width: number; height: number };
@@ -112,10 +114,10 @@ export class PetMenuController {
 
   private readonly onPointerDown = (event: PointerEvent): void => {
     // A pet right-click must reach contextmenu/toggle, not close then immediately reopen.
-    if (event.button === 0 && !this.menu.contains(event.target as Node | null)) this.close();
+    if (event.button === 0 && !(this.options.dismissBoundary ?? this.menu).contains(event.target as Node | null)) this.close();
   };
   private readonly onKeyDown = (event: KeyboardEvent): void => {
-    if (event.key === 'Escape') this.close();
+    if (event.key === 'Escape' && !event.isComposing && event.keyCode !== 229) this.close();
   };
   private readonly onBlur = (event: Event): void => {
     if (!event.target || event.target === this.view) this.close();
@@ -151,7 +153,7 @@ export class PetMenuController {
           !finitePoint(geometry.cursor) || !Number.isFinite(geometry.scale) || geometry.scale <= 0) return;
       const x = (geometry.cursor.x - geometry.position.x) / geometry.scale;
       const y = (geometry.cursor.y - geometry.position.y) / geometry.scale;
-      const rect = this.menu.getBoundingClientRect();
+      const rect = (this.options.dismissBoundary ?? this.menu).getBoundingClientRect();
       if (![x, y, rect.left, rect.top, rect.width, rect.height].every(Number.isFinite) || rect.width <= 0 || rect.height <= 0) return;
       if (x < rect.left || x >= rect.left + rect.width || y < rect.top || y >= rect.top + rect.height) this.close();
     } catch { /* Native reads may fail transiently. DOM and explicit close remain available. */ }

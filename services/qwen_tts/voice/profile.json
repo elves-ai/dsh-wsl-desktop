@@ -1,0 +1,25 @@
+{
+  "voice_id": "pet-airhead-v1",
+  "selected_clip": "second_clip_style_performance",
+  "reference_audio": "reference.wav",
+  "reference_text": "欸？你回来啦……我才没有一直等你呢！嘿嘿，好像又说漏嘴了。今天也要一起加油哦！",
+  "sha256": "1d7b3268b755fd9ec261f885b3886c47a3f0cb3fc927de33bd9641127ce223f8",
+  "sample_rate": 24000,
+  "channels": 1,
+  "seconds": 8.4,
+  "source_audio": "artifacts/qwen3-performance-experiment/style-performance.wav",
+  "source_model": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+  "source_instruct": "A youthful cute female cartoon voice, soft and rounded with a naturally noticeable nasal tone and loose, slightly mushy articulation. Perform an unmistakably innocent anime airhead: openly puzzled, absent-minded and endearingly clueless rather than sly. The opening 欸？ is clearly surprised and questioning. The denial sounds proudly convinced, then she suddenly realizes she gave herself away; 嘿嘿 is a small, goofy chuckle with an obvious smiling voice. Use playful pitch turns, hesitant little pauses and a naive uncertain ending. Keep a youthful mid-high register and lively energy; the tone is soft, not sharp or piercing.",
+  "character_direction": [
+    "软糯",
+    "天然呆",
+    "嘴硬后容易露馅",
+    "一点小叛逆"
+  ],
+  "conditioning_strategy": "Use this selected clip as the whole voice reference. Do not mix back the original A speaker embedding.",
+  "weight_training": false,
+  "cross_text_consistency_validated": false,
+  "scope": "Portable fixed reference for pet-airhead-v1. Source model weights remain external and subject to their own license. This profile does not grant additional rights in model weights.",
+  "asset_source": "User-approved second clip generated in this conversation; copied byte-for-byte, not a third-party speaker recording. Original generation provenance and instructions are preserved above.",
+  "runtime_engine": "Qwen3-TTS-12Hz Base voice cloning only; no VoiceDesign runtime and no original A embedding."
+}

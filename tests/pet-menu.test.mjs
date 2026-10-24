@@ -53,6 +53,15 @@ test('outside left pointer closes, inside pointer and non-left clicks do not; li
   f.document.emit('pointerdown',{button:0,target:{}});assert.equal(f.menu.hidden,true);assert.deepEqual(f.changes,[true,false]);
   f.controller.dispose();
 });
+test('inline composer boundary keeps adjacent speech actions stable for DOM and native clicks',async()=>{
+  const action={},boundary={contains:target=>target===action,getBoundingClientRect:()=>box(10,10,200,220)};
+  let g=geometry({cursor_down:true,cursor:{x:100,y:20},position:{x:0,y:0},scale:1});
+  const f=fixture({dismissBoundary:boundary,getGeometry:async()=>g});f.controller.toggle();
+  f.document.emit('pointerdown',{button:0,target:action});assert.equal(f.menu.hidden,false);
+  await f.clock.advance();assert.equal(f.menu.hidden,false,'native clicks in speech do not close and move the composer');
+  g={...g,cursor:{x:500,y:500}};await f.clock.advance();assert.equal(f.menu.hidden,true);f.controller.dispose();
+});
+
 test('right pointerdown then contextmenu toggle closes instead of reopening',()=>{
   const f=fixture();f.controller.toggle();f.document.emit('pointerdown',{button:2,target:{}});
   f.controller.toggle(30,40);assert.equal(f.menu.hidden,true);assert.deepEqual(f.changes,[true,false]);f.controller.dispose();

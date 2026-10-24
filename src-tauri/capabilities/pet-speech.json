@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "pet-speech",
+  "description": "Bundled desktop pet only: fixed-loopback Qwen synthesis and per-request cancellation.",
+  "local": true,
+  "webviews": [
+    "assistant-pet"
+  ],
+  "permissions": [
+    "allow-assistant-speech-synthesize",
+    "allow-assistant-speech-cancel"
+  ]
+}

@@ -70,8 +70,8 @@ textarea::placeholder { color: #9dabbc; }
 /* dsh-pet video stage. Source/asset license: https://github.com/PC2005-cloud/dsh-pet */
 .mini-buddy { display: grid; place-items: center; width: 39px; height: 42px; flex-shrink: 0; }
 .fish-mark { font-size: 32px; line-height: 1; }
-.pet-shell { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 2px; width: min(100%, 360px); height: 100%; margin-inline: auto; padding: 0 0 4px; user-select: none; }
-/* Only overlays follow the visible screen span; never move/resize the video or pet hit box. */
+.pet-shell { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 2px; width: min(100%, 360px); height: 100%; margin-inline: auto; padding: 0 0 calc(4px + var(--pet-composer-space, 0px)); user-select: none; }
+/* Edge insets affect overlays only. Opening input reserves foot space without scaling the pet. */
 .pet-shell > .preview { position: relative; left: calc((var(--pet-visible-left, 0px) - var(--pet-visible-right, 0px)) / 2); max-width: calc(100% - var(--pet-visible-left, 0px) - var(--pet-visible-right, 0px)); overflow-wrap: anywhere; }
 .pet-stage { width: 100%; aspect-ratio: 16 / 9; flex-shrink: 0; position: relative; }
 .pet-media { width: 100%; height: 100%; position: relative; pointer-events: none; }
@@ -84,7 +84,7 @@ textarea::placeholder { color: #9dabbc; }
 .pet-credit { color: #587b9e; text-decoration: none; }
 .pet-credit:hover { text-decoration: underline; }
 .asset-license { color: #8793a0; font-size: 8px; }
-.pet-menu { position: absolute; z-index: 10; top: 6px; left: calc(6px + var(--pet-visible-left, 0px)); width: 172px; max-width: calc(100% - var(--pet-visible-left, 0px) - var(--pet-visible-right, 0px) - 12px); max-height: calc(100% - 12px); overflow: auto; padding: 4px; border: 1px solid #d5e1ef; border-radius: 9px; background: #f8fcfffa; box-shadow: 0 4px 16px #24496a2b; font-size: 12px; }
+.pet-menu { position: absolute; z-index: 10; top: 6px; left: calc(6px + var(--pet-visible-left, 0px)); width: 172px; max-width: calc(100% - var(--pet-visible-left, 0px) - var(--pet-visible-right, 0px) - 12px); max-height: min(300px, calc(100% - 12px)); overflow: auto; padding: 4px; border: 1px solid #d5e1ef; border-radius: 9px; background: #f8fcfffa; box-shadow: 0 4px 16px #24496a2b; font-size: 12px; }
 .pet-menu-header { display: flex; align-items: center; justify-content: space-between; padding-left: 7px; height: 24px; color: #7991aa; font-size: 10px; }
 .pet-menu-close { width: 24px; height: 24px; padding: 0; font-size: 18px; line-height: 24px; background: transparent; }
 .pet-menu > button { display: block; width: 100%; min-height: 27px; padding: 5px 8px; border-radius: 5px; background: transparent; text-align: left; font-size: 12px; }
@@ -102,3 +102,39 @@ textarea::placeholder { color: #9dabbc; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 @media (max-width: 360px) { .chat-header { padding: 12px; } .quiet { padding: 6px; font-size: 10px; } .setup { padding: 15px; } #draft-hint { font-size: 9px; } }
 @media (max-height: 530px) { .setup-icon { display: none; } .setup { padding-top: 5px; } .composer-area textarea { min-height: 32px; height: 42px; } }
+/* The pet speaks in one anchored bubble, never a desktop chat transcript. */
+.pet-dialogue { position: absolute; z-index: 9; top: 6px; left: calc(18px + var(--pet-visible-left, 0px)); right: calc(18px + var(--pet-visible-right, 0px)); display: flex; flex-direction: column; gap: 5px; max-height: 152px; pointer-events: auto; -webkit-app-region: no-drag; }
+.pet-speech { position: relative; display: flex; flex-direction: column; min-height: 0; border: 1px solid #c8deee; border-radius: 16px 16px 16px 5px; padding: 6px 10px 8px; background: linear-gradient(130deg, #fff 30%, #eef8ff); box-shadow: 0 3px 14px #193e5922; }
+.pet-speech-header { display: flex; flex: 0 0 20px; align-items: center; gap: 6px; color: #7391a8; font-size: 10px; }
+#pet-speech-label { margin-right: auto; }
+.pet-speech-header button { flex-shrink: 0; padding: 0 4px; min-width: 20px; height: 20px; background: transparent; font-size: 17px; }
+.pet-speech-header .pet-speech-stop { color: #a25d49; font-size: 10px; }
+.pet-speech-text { min-height: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; white-space: pre-wrap; overflow-wrap: anywhere; color: #28465e; line-height: 1.6; font-size: 12px; user-select: text; }
+.pet-speech-actions { flex-shrink: 0; display: flex; flex-wrap: wrap; gap: 4px; }
+.pet-speech-actions button { padding: 1px 0; background: transparent; color: #4c7fa8; font-size: 10px; text-align: left; }
+.pet-speech-actions button + button { margin-left: auto; }
+.pet-speech-actions:has(> [hidden]):not(:has(> :not([hidden]))) { display: none; }
+.pet-dialogue[data-expanded=true] .pet-speech-text { display: block; overflow: auto; -webkit-line-clamp: unset; scrollbar-width: thin; }
+.pet-dialogue[data-kind=thinking] .pet-speech { border-radius: 20px; background: #f5f9fffa; }
+.pet-dialogue[data-kind=thinking] #pet-speech-label::after { content: ' ···'; animation: pulse 1.5s ease-in-out infinite; }
+.pet-dialogue[data-kind=error] .pet-speech { border-color: #e8ccbd; background: #fff8f2; }
+.pet-dialogue::after { content: ''; position: absolute; bottom: -5px; left: calc(var(--pet-bubble-arrow-x, 52px) - 4px); width: 8px; height: 8px; border-right: 1px solid #c8deee; border-bottom: 1px solid #c8deee; background: #f5faff; transform: rotate(45deg); pointer-events: none; }
+.pet-dialogue[data-placement=below]::after { top: -5px; bottom: auto; transform: rotate(225deg); }
+.pet-dialogue[data-placement=left]::after { left: auto; right: -5px; top: calc(var(--pet-bubble-arrow-y) - 4px); bottom: auto; transform: rotate(-45deg); }
+.pet-dialogue[data-placement=right]::after { left: -5px; top: calc(var(--pet-bubble-arrow-y) - 4px); bottom: auto; transform: rotate(135deg); }
+.pet-dialogue[data-placement=overlay]::after { display: none; }
+.pet-composer { position: absolute; z-index: 9; left: calc(18px + var(--pet-visible-left, 0px)); right: calc(18px + var(--pet-visible-right, 0px)); bottom: 6px; min-width: 0; pointer-events: auto; -webkit-app-region: no-drag; }
+.pet-composer #send-form { padding: 5px 7px 4px; border-radius: 12px; background: #fffffff5; box-shadow: 0 3px 14px #193e5922; }
+.pet-compose-row { display: flex; align-items: center; gap: 5px; }
+.pet-composer #draft { flex: 1; min-width: 0; min-height: 28px; height: 28px; max-height: 55px; padding: 3px 0; font-size: 12px; scrollbar-width: thin; field-sizing: content; }
+.pet-composer #send { flex-shrink: 0; width: 28px; height: 28px; padding: 0; border-radius: 9px; font-size: 18px; }
+#pet-input-close { flex-shrink: 0; padding: 0; width: 20px; height: 24px; background: transparent; color: #7a91a5; font-size: 18px; }
+.pet-composer #draft-hint { margin: 2px 0 0; max-width: none; font-size: 9px; line-height: 1.4; color: #8296a7; }
+#pet-enable { width: 100%; background: #eaf4ff; color: #3f78b5; font-size: 12px; }
+.pet-dialogue[data-input-open=true] .pet-speech { padding-top: 3px; padding-bottom: 4px; }
+.pet-dialogue[data-input-open=true] .pet-speech-text { -webkit-line-clamp: 2; }
+#pet-auto-read[aria-checked=true] { background: #edf4fd; color: #276baf; }
+.pet-read-status { margin: 3px 0 0; flex-shrink: 0; max-height: 32px; overflow: auto; font-size: 10px; line-height: 1.5; color: #8b6c49; overflow-wrap: anywhere; user-select: text; }
+[data-speaking=true] .pet-media { animation: pet-speaking .55s ease-in-out infinite alternate; }
+[data-narrating=true] #pet-read { color: #276baf; font-weight: 600; }
+@keyframes pet-speaking { to { transform: translateY(-1.5px); } }

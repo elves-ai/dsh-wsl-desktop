@@ -1,6 +1,6 @@
 [package]
 name = "dsh-wsl-desktop"
-version = "0.1.15"
+version = "0.1.16"
 description = "Windows launcher for DeepSeek Harness in WSL"
 edition = "2021"
 rust-version = "1.85"
@@ -38,6 +38,9 @@ base64 = "0.22"
 tauri-plugin-updater = { version = "2.14", default-features = false, features = ["native-tls", "system-proxy"] }
 open = "5"
 windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_System_Power"] }
+
+[dev-dependencies]
+base64 = "0.22"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

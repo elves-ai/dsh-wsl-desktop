@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-speech-settings"
+description = "Enables the get_speech_settings command without any pre-configured scope."
+commands.allow = ["get_speech_settings"]
+
+[[permission]]
+identifier = "deny-get-speech-settings"
+description = "Denies the get_speech_settings command without any pre-configured scope."
+commands.deny = ["get_speech_settings"]

@@ -7,6 +7,9 @@ import { PetNotifications } from './pet/notifications';
 import { PetInteractions } from './pet/interactions';
 import { layoutPetBubbles } from './pet/bubble-positioner';
 import { PetMenuController } from './pet/menu';
+import { conversationCue, speechReadingTime, CompletedReplyTracker, type ConversationCue } from './pet/conversation';
+import { toSpeechText, type PetSpeechState } from './pet/speech';
+import { QwenSpeech, type QwenAudio } from './pet/qwen-speech';
 import './pet/interactions.css';
 import './pet/notifications.css';
 import { PetMotion, type Geometry as PetGeometry } from './pet/motion';
@@ -23,7 +26,9 @@ const root = document.querySelector<HTMLElement>('#assistant-root')!;
 const face = '<span class="fish-mark" aria-hidden="true">🐟</span>';
 const credit = '<a class="pet-credit" href="https://github.com/PC2005-cloud/dsh-pet" target="_blank" rel="noopener noreferrer" data-upstream="true">dsh-pet · PC2005-cloud ↗</a><span class="asset-license">动画素材禁止商用</span>';
 root.innerHTML = view === 'pet' ?
-  '<section class="pet-shell" aria-label="鲸鱼娘桌面助手"><div id="preview" class="preview" hidden>浏览器预览 · 移动仅桌面应用可用</div><div class="pet-stage"><div id="pet-media" class="pet-media"></div><button id="pet" class="pet-hit" aria-label="打开鲸鱼娘对话（拖动可抛掷，快速连按再拖可弹弓，右键菜单）" aria-controls="pet-menu" aria-expanded="false"></button></div><section id="pet-menu" class="pet-menu" aria-label="桌宠菜单" hidden><header class="pet-menu-header"><span>桌宠</span><button type="button" class="pet-menu-close" data-pet-command="close-menu" aria-label="关闭菜单">×</button></header><button type="button" data-action="toggle_chat">聊聊</button><button type="button" data-action="open_dsh">打开 DSH</button><label class="pet-menu-animation" for="pet-animation"><span>播放动作</span><select id="pet-animation" aria-label="选择宠物动作"></select></label><button id="pet-topmost" type="button" role="switch" aria-label="窗口置顶" data-pet-command="topmost">读取置顶状态…</button><button type="button" data-action="pet_settings">宠物设置</button><button type="button" data-action="hide">隐藏宠物</button><div class="pet-menu-credit">' + credit + '</div></section><div id="pet-bubble" hidden></div><div id="pet-interaction" hidden></div><p id="notice" class="pet-notice" role="alert" hidden></p></section>' :
+  '<section class="pet-shell" aria-label="鲸鱼娘桌面助手"><div id="preview" class="preview" hidden>浏览器预览 · 移动仅桌面应用可用</div><div class="pet-stage"><div id="pet-media" class="pet-media"></div><button id="pet" class="pet-hit" aria-label="跟鲸鱼娘说话（拖动可抛掷，快速连按再拖可弹弓，右键菜单）" aria-controls="pet-dialogue pet-composer pet-menu" aria-expanded="false"></button></div><section id="pet-menu" class="pet-menu" aria-label="桌宠菜单" hidden><header class="pet-menu-header"><span>桌宠</span><button type="button" class="pet-menu-close" data-pet-command="close-menu" aria-label="关闭菜单">×</button></header><button type="button" data-pet-command="talk">说句话</button><button type="button" data-pet-command="replay">重看上一句</button><button id="pet-auto-read" type="button" role="switch" aria-label="自动朗读回复" aria-checked="false" data-pet-command="auto-read" title="仅自动朗读新完成的短回复，使用本地千问音色">自动朗读：关</button><button type="button" data-action="toggle_chat">启用与历史</button><button type="button" data-action="open_dsh">打开 DSH</button><label class="pet-menu-animation" for="pet-animation"><span>播放动作</span><select id="pet-animation" aria-label="选择宠物动作"></select></label><button id="pet-topmost" type="button" role="switch" aria-label="窗口置顶" data-pet-command="topmost">读取置顶状态…</button><button type="button" data-action="pet_settings">宠物设置</button><button type="button" data-action="hide">隐藏宠物</button><div class="pet-menu-credit">' + credit + '</div></section>' +
+  '<section id="pet-dialogue" class="pet-dialogue" aria-label="与鲸鱼娘说话" hidden><section id="pet-speech" class="pet-speech" hidden><header class="pet-speech-header"><span id="pet-speech-label">鲸鱼娘</span><button id="cancel" type="button" data-action="cancel" class="pet-speech-stop" hidden>停止</button><button id="pet-speech-close" type="button" aria-label="收起这句话">×</button></header><div id="pet-speech-text" class="pet-speech-text" role="status" aria-live="polite" aria-atomic="true"></div><div class="pet-speech-actions"><button id="pet-speech-expand" type="button" aria-expanded="false" hidden>展开全文</button><button id="pet-read" type="button" aria-label="朗读回复" hidden>朗读</button><button id="retry" type="button" data-action="retry" hidden>重新连接 / 重试</button></div><p id="pet-read-status" class="pet-read-status" role="status" hidden></p></section></section>' +
+  '<section id="pet-composer" class="pet-composer" aria-label="给鲸鱼娘输入消息" hidden><button id="pet-enable" type="button" data-action="toggle_chat" hidden>启用助手</button><form id="send-form"><label class="sr-only" for="draft">跟鲸鱼娘说点什么</label><div class="pet-compose-row"><textarea id="draft" rows="1" placeholder="跟我说点什么…" maxlength="100000"></textarea><button id="send" type="submit" class="primary" aria-label="发送消息">↑</button><button id="pet-input-close" type="button" aria-label="收起输入，保留草稿">×</button></div><p id="draft-hint">Enter 发送 · Shift + Enter 换行</p></form></section><div id="pet-bubble" hidden></div><div id="pet-interaction" hidden></div><p id="notice" class="pet-notice" role="alert" hidden></p></section>' :
   `<section class="chat-shell" aria-label="鲸鱼娘对话">
 <header class="chat-header"><div class="brand"><span class="mini-buddy" aria-hidden="true">${face}</span>
 <div><h1>鲸鱼娘 <span>DSH 助手</span></h1><p id="status" role="status"></p></div></div>
@@ -66,6 +71,24 @@ let petMotion: PetMotion | undefined;
 let petNotifications: PetNotifications | undefined;
 let petInteractions: PetInteractions | undefined;
 let petMenu: PetMenuController | undefined;
+let petInput: PetMenuController | undefined;
+let petSpeech: QwenSpeech | undefined;
+let narrationState: PetSpeechState = { supported: false, phase: 'idle', error: '' };
+let autoRead = false;
+let narratingKey: string | undefined;
+let narrationNote = '';
+// A Qwen opt-in must not inherit the old lightweight system-TTS preference.
+const autoReadStorageKey = 'dsh-assistant:qwen-auto-read';
+const replyTracker = new CompletedReplyTracker();
+let petInputOpen = false;
+let petSpeechVisible = false;
+let petSpeechExpanded = false;
+let petSpeechHovered = false;
+let petSpeechSelected = false;
+let dismissedSpeechKey: string | undefined;
+let petCue: ConversationCue | undefined;
+let speechTimer: ReturnType<typeof setTimeout> | undefined;
+let inputGeneration = 0;
 let interactionRevision = -1;
 let interactionPending = false;
 let interactionIds = new Set<string>();
@@ -102,6 +125,7 @@ function saveDraft() { try { if (draft) { if (draft.value) sessionStorage.setIte
 function setNotice(text: string) { localError = text; render(); }
 function accept(payload: unknown) {
   if (disposed) return;
+  const previous = state;
   const next = mergeSnapshot(state, payload);
   if (next === state) return;
   const changedSession = next.session_id !== state.session_id || next.workspace_id !== state.workspace_id;
@@ -116,10 +140,11 @@ function accept(payload: unknown) {
   // A new authoritative user message is acknowledgement even if the IPC response is lost.
   if (sendInFlight && state.session_id === sendInFlight.session && state.messages.some(m => m.role === 'user' && m.request_id === sendInFlight!.requestId)) {
     sendInFlight.acknowledged = true;
-    if (draft?.value === sendInFlight.text) { draft.value = ''; saveDraft(); }
+    if (draft?.value === sendInFlight.text) { draft.value = ''; saveDraft(); petInput?.close(); }
     sendUncertain = false;
   }
   render();
+  acceptPetNarration(previous);
 }
 async function refresh() {
   if (!unlisten || disposed) return;
@@ -133,7 +158,7 @@ async function action(actionName: string, extra: Record<string, unknown> = {}): 
     const result = await invoke<unknown>('assistant_action', { request: { action: actionName, ...extra } });
     if (disposed) return false;
     if (result != null) accept(result);
-    if (!['drag', 'hide', 'motion_active', 'pet_source', 'pet_settings'].includes(actionName)) await refresh();
+    if (!['drag', 'hide', 'motion_active', 'pet_source', 'pet_settings', 'pet_input'].includes(actionName)) await refresh();
     return true;
   } catch (error) {
     if (!disposed) setNotice('操作未确认：' + errorText(error) + (actionName === 'send' ? '。草稿已保留，请先核对历史消息，避免重复发送。' : ''));
@@ -162,7 +187,7 @@ function scheduleHitRegions() {
     if (pet) layoutPetBubbles(root, pet, petOverlayInsets);
     positionPetMenu();
     if (!native) return;
-    const regions = [...root.querySelectorAll<HTMLElement>('#pet, #pet-menu, #pet-bubble, #pet-interaction, #notice')]
+    const regions = [...root.querySelectorAll<HTMLElement>('#pet, #pet-menu, #pet-bubble, #pet-interaction, #pet-dialogue, #pet-composer, #notice')]
       .filter(node => node.getClientRects().length > 0)
       .map(node => { const r = node.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; });
     const signature = JSON.stringify(regions);
@@ -174,6 +199,233 @@ function scheduleHitRegions() {
     });
   });
 }
+const AUTO_READ_LIMIT = 400;
+let autoReadSaveFailed = false;
+let speechPreferences: { revision: number; initialized: boolean; auto_read: boolean; volume: number } | undefined;
+let speechPreferencesPending = false;
+let unlistenSpeechPreferences: UnlistenFn | undefined;
+let unlistenSpeechStop: UnlistenFn | undefined;
+function applySpeechPreferences(value: unknown) {
+  if (disposed || !value || typeof value !== 'object') return;
+  const p = value as NonNullable<typeof speechPreferences>;
+  if (!Number.isSafeInteger(p.revision) || p.revision < 0 || typeof p.initialized !== 'boolean' || typeof p.auto_read !== 'boolean' || !Number.isInteger(p.volume) || p.volume < 0 || p.volume > 100 || speechPreferences && p.revision <= speechPreferences.revision) return;
+  const wasAutoRead = autoRead;
+  speechPreferences = p; autoRead = p.auto_read; petSpeech?.setVolume(p.volume);
+  // Volume-only updates while auto-read is off must not interrupt manual narration.
+  if (wasAutoRead && !autoRead) petSpeech?.stop();
+  if (p.initialized) try { window.localStorage.removeItem(autoReadStorageKey); } catch { /* Native is the only truth. */ }
+  renderPetNarration();
+}
+async function connectSpeechPreferences() {
+  if (!native || view !== 'pet' || disposed) return;
+  try {
+    const stopAudio = await listen<{ request_id: string }>('launcher-speech-stop', event => {
+      if (!disposed && typeof event.payload?.request_id === 'string') petSpeech?.stopRequest(event.payload.request_id);
+    });
+    if (disposed) { stopAudio(); return; } unlistenSpeechStop = stopAudio;
+    const stop = await listen('launcher-speech-preferences', event => applySpeechPreferences(event.payload));
+    if (disposed) { stop(); return; } unlistenSpeechPreferences = stop;
+    applySpeechPreferences(await invoke('get_speech_preferences'));
+    let legacy = false;
+    try { legacy = window.localStorage.getItem(autoReadStorageKey) === 'true'; } catch { /* No legacy opt-in. */ }
+    if (!disposed && legacy && speechPreferences && !speechPreferences.initialized) {
+      // Native migrate is conditional, so an explicit newer settings choice always wins.
+      applySpeechPreferences(await invoke('set_speech_preferences', { patch: { auto_read: true, volume: 100, migrate: true } }));
+    }
+  } catch { if (!disposed) { autoReadSaveFailed = true; renderPetNarration(); } }
+}
+function renderPetNarration() {
+  if (view !== 'pet' || disposed) return;
+  const active = narrationState.phase !== 'idle';
+  root.dataset.speaking = String(narrationState.phase === 'speaking');
+  root.dataset.narrating = String(active);
+  const toggle = el<HTMLButtonElement>('pet-auto-read');
+  if (toggle) {
+    toggle.disabled = !narrationState.supported || !speechPreferences || !unlistenSpeechPreferences || speechPreferencesPending;
+    toggle.setAttribute('aria-checked', String(autoRead));
+    toggle.textContent = !narrationState.supported ? '自动朗读（当前环境不可用）' : '自动朗读：' + (autoRead ? '开' : '关') + (autoReadSaveFailed ? '（保存失败，请重试）' : '');
+    toggle.title = '与语音设置共享本机偏好；仅自动朗读新完成的短回复。桌宠需单独允许音频播放。';
+  }
+  const button = el<HTMLButtonElement>('pet-read');
+  if (button) {
+    button.hidden = petCue?.kind !== 'reply' && !active;
+    button.disabled = !active && (!narrationState.supported || petCue?.busy || !toSpeechText(petCue?.text ?? ''));
+    button.textContent = active ? '停止朗读' : '朗读';
+    button.setAttribute('aria-label', active ? '停止朗读' : '朗读回复');
+    button.title = narrationState.supported ? '使用已选定的千问音色朗读正文，跳过代码和链接' : '本地千问朗读仅在桌面应用中可用';
+  }
+  const status = el('pet-read-status');
+  const message = narrationState.error || narrationNote || (narrationState.phase === 'loading' ? '正在生成本地语音，首次加载可能较慢，可随时停止…' : '');
+  if (status) { status.textContent = message; status.hidden = !message; }
+  if (active) {
+    const label = el('pet-speech-label');
+    if (label) label.textContent = narrationState.phase === 'speaking' ? '鲸鱼娘 · 说话中' : '鲸鱼娘 · 生成语音';
+  }
+  scheduleHitRegions();
+}
+function beginPetNarration(key: string, text: string) {
+  if (!petSpeech || disposed || !petVisible || interactionPending) return;
+  narratingKey = key; narrationNote = ''; petSpeechVisible = true; clearSpeechTimer();
+  petMotion?.stopRoam(); petSpeech.play(text); renderPetConversation();
+}
+function readPetReply() {
+  if (narrationState.phase !== 'idle') { petSpeech?.stop(); return; }
+  if (petCue?.kind !== 'reply' || petCue.busy) return;
+  const text = toSpeechText(petCue.text);
+  if (!text) { narrationNote = '这条回复没有可朗读的正文。'; renderPetNarration(); return; }
+  beginPetNarration(petCue.key, text);
+}
+function toggleAutoRead() {
+  if (!petSpeech?.state.supported || !speechPreferences || !unlistenSpeechPreferences || speechPreferencesPending || disposed) return;
+  const next = !speechPreferences.auto_read;
+  if (next) petSpeech.unlock(); else petSpeech.stop();
+  speechPreferencesPending = true; autoReadSaveFailed = false; renderPetNarration();
+  void invoke('set_speech_preferences', { patch: { auto_read: next } }).then(applySpeechPreferences).catch(() => {
+    if (!disposed) autoReadSaveFailed = true;
+  }).finally(() => { speechPreferencesPending = false; renderPetNarration(); });
+}
+function acceptPetNarration(previous: typeof state) {
+  if (view !== 'pet' || disposed) return;
+  const reply = replyTracker.observe(transportFailed ? { ...state, connected: false } : state);
+  const userId = (snapshot: typeof state) => [...snapshot.messages].reverse().find(message => message.role === 'user')?.id;
+  const changedSession = previous.session_id !== state.session_id || previous.workspace_id !== state.workspace_id;
+  if (narrationState.phase !== 'idle' && (changedSession || userId(previous) !== userId(state) || !state.enabled || !state.connected || state.running || state.waiting ||
+      ['sending', 'cancelling', 'error', 'failed', 'cancelled', 'interrupted'].includes(state.phase) || (reply && reply.key !== narratingKey))) petSpeech?.stop();
+  if (!reply) return;
+  narrationNote = '';
+  if (!native || !autoRead || !narrationState.supported || !petVisible || interactionPending || !el('pet-menu')?.hidden || localError || !petSpeechVisible || dismissedSpeechKey === reply.key) { renderPetNarration(); return; }
+  const text = toSpeechText(reply.text);
+  if (!text) return;
+  if (Array.from(text).length > AUTO_READ_LIMIT) { narrationNote = '回复较长，可点击「朗读」播放全文。'; renderPetNarration(); return; }
+  beginPetNarration(reply.key, text);
+}
+function mountPetNarration() {
+  if (view !== 'pet') return;
+  // Default stays off until the real revisioned native preferences arrive.
+  petSpeech = new QwenSpeech({ view: window, enabled: native,
+    synthesize: request => unlistenSpeechStop ? invoke<QwenAudio>('assistant_speech_synthesize', { request }) : Promise.reject(new Error('无法监听语音停止事件，请重新打开桌宠')),
+    cancel: requestId => invoke('assistant_speech_cancel', { requestId }),
+    onChange: next => {
+    if (disposed) return;
+    const wasActive = narrationState.phase !== 'idle';
+    narrationState = next;
+    if (next.phase !== 'idle') { clearSpeechTimer(); petMotion?.stopRoam(); }
+    else { narratingKey = undefined; }
+    renderPetNarration();
+    if (wasActive && next.phase === 'idle') { renderPetConversation(); armSpeechTimer(); }
+  } });
+  narrationState = petSpeech.state;
+  void connectSpeechPreferences();
+  el('pet-read')?.addEventListener('click', readPetReply, { signal: cleanup.signal });
+  renderPetNarration();
+}
+
+function clearSpeechTimer() {
+  if (speechTimer !== undefined) window.clearTimeout(speechTimer);
+  speechTimer = undefined;
+}
+function armSpeechTimer() {
+  clearSpeechTimer();
+  if (!petSpeechVisible || !petCue || petCue.busy || petCue.kind !== 'reply' || petInputOpen || petSpeechExpanded || petSpeechHovered || petSpeechSelected || narrationState.phase !== 'idle' || el('pet-dialogue')?.hidden) return;
+  const delay = speechReadingTime(petCue.text);
+  if (delay === null) return;
+  speechTimer = window.setTimeout(() => { speechTimer = undefined; petSpeechVisible = false; renderPetConversation(); }, delay);
+}
+let inputNativeTask = Promise.resolve();
+function requestPetInput(active: boolean) {
+  const generation = ++inputGeneration;
+  if (!native) { if (active) draft?.focus(); return; }
+  // Serialize focus changes: a delayed open must never undo a newer close.
+  inputNativeTask = inputNativeTask.then(async () => {
+    if (active && (disposed || generation !== inputGeneration || !petInputOpen)) return;
+    try {
+      await invoke('assistant_action', { request: { action: 'pet_input', active } });
+      if (active && !disposed && generation === inputGeneration && petInputOpen) {
+        draft?.focus();
+        if (localError.startsWith('暂时无法输入：')) setNotice('');
+      }
+    } catch (error) {
+      if (active && !disposed && generation === inputGeneration) {
+        petInput?.close(); setNotice('暂时无法输入：' + errorText(error));
+      }
+    }
+  });
+}
+async function openPetInput() {
+  if (disposed || view !== 'pet' || !petVisible || interactionPending) return;
+  petMenu?.close(); petMotion?.stop(); dismissedSpeechKey = undefined; petSpeechVisible = true;
+  if (!petInputOpen) petInput?.toggle(); else requestPetInput(true);
+  renderPetConversation();
+}
+function renderPetConversation() {
+  if (view !== 'pet' || disposed) return;
+  const effective = transportFailed ? { ...state, connected: false } : state;
+  const cue = localError ? { key: 'local:' + localError, kind: 'error' as const, text: localError, busy: false } : conversationCue(effective);
+  const changed = cue.key !== petCue?.key || cue.text !== petCue?.text || cue.busy !== petCue?.busy;
+  if (changed) {
+    if (cue.key !== petCue?.key) narrationNote = '';
+    // Loading saved history is not a new reply and must not interrupt the desktop.
+    const scope = [state.workspace_id, state.session_id].join(':');
+    if (scope !== petConversationSession) petConversationHydrated = false;
+    const baseline = !petCue || scope !== petConversationSession || (!petConversationHydrated && effective.connected);
+    if (baseline && !petInputOpen && !cue.busy && !localError) petSpeechVisible = false;
+    if ((!baseline || cue.busy || localError) && cue.key !== dismissedSpeechKey) petSpeechVisible = true;
+    if (effective.connected) petConversationHydrated = true;
+    if (cue.key !== petCue?.key) { petSpeechExpanded = false; petSpeechSelected = false; }
+    petCue = cue;
+    petConversationSession = [state.workspace_id, state.session_id].join(':');
+  }
+  const host = el('pet-dialogue'), speech = el('pet-speech'), text = el('pet-speech-text');
+  const visible = petVisible && !!el('pet-menu')?.hidden && !interactionPending && petSpeechVisible;
+  if (host) { host.hidden = !visible; host.dataset.expanded = String(petSpeechExpanded); host.dataset.inputOpen = String(petInputOpen); host.dataset.kind = cue.kind; }
+  if (speech) speech.hidden = !petSpeechVisible;
+  if (text && text.textContent !== cue.text) text.textContent = cue.text;
+  const label = el('pet-speech-label'); if (label) label.textContent = cue.kind === 'thinking' ? '鲸鱼娘 · 想一想' : cue.kind === 'error' ? '鲸鱼娘 · 没连上' : '鲸鱼娘';
+  const expand = el('pet-speech-expand');
+  if (expand) { expand.hidden = cue.kind !== 'reply'; expand.textContent = petSpeechExpanded ? '收起全文' : '展开全文'; expand.setAttribute('aria-expanded', String(petSpeechExpanded)); }
+  const enable = el('pet-enable'); if (enable) enable.hidden = state.enabled;
+  const hint = el('draft-hint'); if (hint && !native) hint.textContent = '浏览器预览 · 不会发送消息';
+  renderPetNarration();
+  syncPetNotificationOverlay();
+  if (changed) armSpeechTimer();
+}
+let petConversationSession: string | null = null;
+let petConversationHydrated = false;
+function mountPetConversation() {
+  const composer = el('pet-composer');
+  if (!composer) return;
+  petInput = new PetMenuController(composer, {
+    dismissBoundary: el('pet-dialogue') ?? composer,
+    getGeometry: native ? async () => {
+      const geometry = await requestPetGeometry('get_pet_geometry');
+      return composing ? { ...geometry, escape_down: false } : geometry;
+    } : undefined,
+    onChange: open => {
+      if (disposed) return;
+      petInputOpen = open;
+      if (open) { petSpeechVisible = true; petSpeechExpanded = false; petMotion?.stop(); clearSpeechTimer(); }
+      else { saveDraft(); draft?.blur(); }
+      requestPetInput(open); renderPetConversation();
+      if (!open) armSpeechTimer();
+    },
+  });
+  el('pet-input-close')?.addEventListener('click', () => petInput?.close(), { signal: cleanup.signal });
+  el('pet-speech-close')?.addEventListener('click', () => { petSpeech?.stop(); dismissedSpeechKey = petCue?.key; petSpeechVisible = false; clearSpeechTimer(); renderPetConversation(); }, { signal: cleanup.signal });
+  el('pet-speech-expand')?.addEventListener('click', () => { petSpeechExpanded = !petSpeechExpanded; renderPetConversation(); armSpeechTimer(); }, { signal: cleanup.signal });
+  const host = el('pet-dialogue');
+  host?.addEventListener('pointerenter', () => { petSpeechHovered = true; clearSpeechTimer(); }, { signal: cleanup.signal });
+  host?.addEventListener('pointerleave', () => { petSpeechHovered = false; armSpeechTimer(); }, { signal: cleanup.signal });
+  document.addEventListener('selectionchange', () => {
+    const selection = document.getSelection();
+    petSpeechSelected = !!selection && !selection.isCollapsed && !!el('pet-speech-text')?.contains(selection.anchorNode);
+    if (petSpeechSelected) clearSpeechTimer(); else armSpeechTimer();
+  }, { signal: cleanup.signal });
+  document.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || event.isComposing || composing) return;
+    petSpeech?.stop(); petInput?.close(); dismissedSpeechKey = petCue?.key; petSpeechVisible = false; clearSpeechTimer(); renderPetConversation();
+  }, { signal: cleanup.signal });
+}
+
 let lastMessageSignature = '';
 let lastSessionsSignature = '';
 function render() {
@@ -186,7 +438,7 @@ function render() {
   root.dataset.phase = effectiveState.running ? 'running' : effectiveState.waiting ? 'waiting' : effectiveState.connected ? 'ready' : 'offline';
   const status = el('status'); if (status) status.textContent = label;
   const preview = el('preview'); if (preview) preview.hidden = native;
-  const notice = el('notice'); if (notice) { notice.textContent = localError; notice.hidden = !localError; }
+  const notice = el('notice'); if (notice) { notice.textContent = localError; notice.hidden = !localError || view === 'pet'; }
   const setup = el('setup'); if (setup) setup.hidden = state.enabled || (native && state.phase === 'loading');
   const conversation = el('conversation'); if (conversation) conversation.hidden = !state.enabled;
   for (const id of ['session-bar', 'send-form', 'composer-footnote']) { const node = el(id); if (node) node.hidden = !state.enabled; }
@@ -234,6 +486,7 @@ function render() {
   const enable = el<HTMLButtonElement>('enable'); if (enable) enable.disabled = !native || pending || state.phase === 'loading';
   const newSession = el<HTMLButtonElement>('new-session'); if (newSession) newSession.disabled = !native || pending || !state.enabled || !state.workspace_id || state.running || state.waiting;
   const reconfigure = el<HTMLButtonElement>('reconfigure'); if (reconfigure) reconfigure.disabled = !native || pending || state.running || state.waiting;
+  renderPetConversation();
   root.querySelectorAll<HTMLButtonElement>('[data-action]').forEach(button => {
     if (!native) button.disabled = true;
   });
@@ -245,6 +498,9 @@ root.addEventListener('click', event => {
   const command = target.closest<HTMLElement>('[data-pet-command]')?.dataset.petCommand;
   if (command) {
     event.preventDefault();
+    if (command === 'auto-read') { toggleAutoRead(); return; }
+    if (command === 'talk') { petMenu?.close(); void openPetInput(); return; }
+    if (command === 'replay') { petMenu?.close(); dismissedSpeechKey = undefined; petSpeechVisible = true; renderPetConversation(); return; }
     if (command === 'topmost') { petMenu?.close(); void togglePetTopmost(); return; }
     if (command === 'close-menu') petMenu?.close();
     else petMenu?.toggle();
@@ -272,6 +528,7 @@ async function send() {
   if (!native || !draft || composing || transportFailed || !canSend(state, draft.value, pending)) return;
   const text = draft.value;
   if (sendUncertain && sendInFlight?.text === text && !window.confirm('上次发送结果还未确认。请先在历史记录或 DSH 中检查，确定要再次发送吗？')) return;
+  petSpeech?.stop();
   const requestId = crypto.randomUUID();
   sendInFlight = { text, requestId, session: state.session_id, acknowledged: false };
   pending = true; localError = ''; sendUncertain = false; saveDraft(); render();
@@ -302,7 +559,17 @@ function updatePetNotificationActivity() {
 }
 function syncPetNotificationOverlay() {
   const menuOpen = !el('pet-menu')?.hidden;
-  petNotifications?.setObscured(menuOpen || interactionPending);
+  const dialogue = el('pet-dialogue');
+  pet?.setAttribute('aria-expanded', String(petInputOpen || menuOpen));
+  const wasHidden = dialogue?.hidden;
+  const available = petVisible && !menuOpen && !interactionPending;
+  const speaking = available && petSpeechVisible;
+  const typing = available && petInputOpen;
+  if (dialogue) dialogue.hidden = !speaking;
+  const composer = el('pet-composer'); if (composer) composer.hidden = !typing;
+  if (!speaking) clearSpeechTimer();
+  else if (wasHidden) armSpeechTimer();
+  petNotifications?.setObscured(menuOpen || interactionPending || speaking || typing);
   petInteractions?.setObscured(menuOpen);
   if (native && petVisible && bubbleEnabled) { void connectPetNotificationFeed(); void connectPetInteractionFeed(); }
   scheduleHitRegions();
@@ -332,7 +599,7 @@ function acceptPetInteractions(value: unknown) {
   interactionIds = new Set(incoming.connected ? incoming.items.map(item => (item as {id:string}).id) : []);
   root.dataset.interactionPending = String(interactionPending);
   petInteractions?.update(value);
-  if (interactionPending) petMotion?.stop();
+  if (interactionPending) { petSpeech?.stop(); petMotion?.stop(); petInput?.close(); }
   requestInteractionSurface(petNotificationActive && interactionPending);
   syncPetNotificationOverlay();
 }
@@ -413,10 +680,12 @@ function mountPet() {
     onChange: open => {
       if (disposed) return;
       pet?.setAttribute('aria-expanded', String(open));
-      if (open) { petMotion?.stop(); positionPetMenu(); void refreshPetTopmost(); }
+      if (open) { petInput?.close(); petMotion?.stop(); positionPetMenu(); void refreshPetTopmost(); }
       syncPetNotificationOverlay();
     },
   });
+  mountPetConversation();
+  mountPetNarration();
   menu?.addEventListener('contextmenu', event => { event.preventDefault(); petMenu?.close(); }, { signal: cleanup.signal });
   const bubble = el('pet-bubble');
   if (bubble) {
@@ -453,7 +722,7 @@ function mountPet() {
   }
   petRenderer = new PetRenderer(media, {
     fixed: native,
-    onMove: (name, params, playback) => petVisible && !bubbleVisible && !interactionPending && !interactionExpanded && !!el('pet-menu')?.hidden ? (petMotion?.startRoam(name, params, playback.facing, params.durationSec, playback.video) ?? false) : false,
+    onMove: (name, params, playback) => petVisible && !bubbleVisible && !petInputOpen && !petSpeechVisible && !interactionPending && !interactionExpanded && !!el('pet-menu')?.hidden ? (petMotion?.startRoam(name, params, playback.facing, params.durationSec, playback.video) ?? false) : false,
     onMoveEnd: () => petMotion?.stopRoam(),
     onError: error => { if (!disposed) setNotice('宠物动画加载失败：' + error.message); },
   });
@@ -518,7 +787,7 @@ function applyPetVisibility(value: unknown) {
   petVisibilityRevision = incoming.revision!;
   petVisible = incoming.visible;
   updatePetNotificationActivity();
-  if (!petVisible) { petMenu?.close(); petMotion?.stop(); }
+  if (!petVisible) { petSpeech?.stop(); petMenu?.close(); petInput?.close(); petSpeechVisible = false; clearSpeechTimer(); petMotion?.stop(); renderPetConversation(); }
 }
 function applyPetBubblePreferences(value: unknown) {
   if (!value || typeof value !== 'object') return;
@@ -585,7 +854,7 @@ function positionPetMenu() {
   const right = Math.min(shell.right, viewport.right - (petOverlayInsets?.right ?? 0)) - 6;
   const top = Math.max(shell.top, viewport.top) + 6;
   const bottom = Math.min(shell.bottom, viewport.bottom) - 6;
-  petMenu.position({ x: left, y: top, width: right - left, height: bottom - top }, { x: shell.left, y: shell.top });
+  petMenu.position({ x: left, y: top, width: right - left, height: Math.min(300, bottom - top) }, { x: shell.left, y: shell.top });
 }
 function mountPetMotion() {
   if (!native || view !== 'pet' || disposed || petMotion) return;
@@ -636,11 +905,11 @@ pet?.addEventListener('click', event => {
   if (event.detail !== 0 && suppressClick) { suppressClick = false; event.preventDefault(); return; }
   petRenderer?.click();
   if (event.detail > 1) return;
-  void action(event.ctrlKey || event.metaKey ? 'open_dsh' : 'toggle_chat');
+  if (event.ctrlKey || event.metaKey) void action('open_dsh'); else void openPetInput();
 }, { signal: cleanup.signal });
 function dispose() {
   if (disposed) return;
-  saveDraft(); disposed = true; cleanup.abort(); unlisten?.(); unlisten = undefined;
+  saveDraft(); petInput?.close(); clearSpeechTimer(); disposed = true; cleanup.abort(); unlisten?.(); unlisten = undefined;
   resizeObserver?.disconnect(); cancelAnimationFrame(hitFrame);
   unlistenPetVisibility?.(); unlistenPetVisibility = undefined;
   unlistenPetPreferences?.(); unlistenPetPreferences = undefined;
@@ -649,7 +918,9 @@ function dispose() {
   unlistenPetInteractions?.(); unlistenPetInteractions = undefined;
   petInteractions?.dispose();
   if (native && view === 'pet') void invoke('set_pet_interaction_surface', { active: false }).catch(() => {});
-  petMenu?.dispose(); petMotion?.dispose(); petRenderer?.dispose();
+  unlistenSpeechPreferences?.(); unlistenSpeechPreferences = undefined;
+  unlistenSpeechStop?.(); unlistenSpeechStop = undefined;
+  petSpeech?.dispose(); petInput?.dispose(); petMenu?.dispose(); petMotion?.dispose(); petRenderer?.dispose();
 }
 window.addEventListener('pagehide', dispose, { once: true });
 window.addEventListener('beforeunload', dispose, { once: true });
@@ -657,7 +928,7 @@ if (import.meta.hot) import.meta.hot.dispose(dispose);
 if (view === 'pet') {
   resizeObserver = new ResizeObserver(scheduleHitRegions);
   resizeObserver.observe(root);
-  root.querySelectorAll('#pet, #notice, #pet-menu, #pet-bubble, #pet-interaction').forEach(node => resizeObserver!.observe(node));
+  root.querySelectorAll('#pet, #notice, #pet-menu, #pet-bubble, #pet-interaction, #pet-dialogue, #pet-composer, #pet-speech-text, #pet-read-status, #draft').forEach(node => resizeObserver!.observe(node));
   window.addEventListener('resize', scheduleHitRegions, { signal: cleanup.signal });
 }
 mountPet();

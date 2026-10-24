@@ -1,0 +1,12 @@
+{
+  "identifier": "speech-preferences",
+  "description": "Pet shared automatic narration and volume preferences only; no runtime paths or process controls.",
+  "local": true,
+  "webviews": [
+    "assistant-pet"
+  ],
+  "permissions": [
+    "allow-get-speech-preferences",
+    "allow-set-speech-preferences"
+  ]
+}

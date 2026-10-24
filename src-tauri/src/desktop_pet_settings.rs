@@ -187,6 +187,15 @@ impl PetControls {
             if visible {
                 assistant::reveal_pet(app)?;
             } else {
+                // Release typing before hiding, rather than waiting for broker wake.
+                // Both this policy update and hide are ordered on the native UI thread.
+                if let Some(interactions) =
+                    app.try_state::<Arc<super::pet_interactions::PetInteractions>>()
+                {
+                    interactions.prepare_hide(app)?;
+                }
+                // Cancel native synthesis even if a hidden WebView cannot process JS immediately.
+                super::speech::stop(app);
                 if let Some(window) = app.get_window("assistant-pet") {
                     window.hide().map_err(|_| "无法隐藏桌面宠物。")?;
                 }

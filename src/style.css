@@ -74,6 +74,17 @@ button, summary { -webkit-tap-highlight-color: transparent; }
 .startup-footer { display: flex; justify-content: space-between; gap: 20px; color: #647084; font-size: 10px; line-height: 1.6; }
 #phase { text-align: right; overflow-wrap: anywhere; }
 
+/* Speech stays in the existing settings page. */
+#settings-speech label:not(.switch) { display: block; margin: 14px 0 7px; color: #bfc9d9; font-size: 12px; }
+#settings-speech input[type="text"] { width: 100%; }
+#settings-speech input[type="range"] { width: min(100%, 350px); accent-color: var(--accent); }
+.speech-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
+.speech-paths { margin-top: 14px; }
+.speech-paths summary, #settings-speech > details > summary { cursor: pointer; color: #a6bfff; font-size: 12px; }
+#speech-diagnostics { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; color: var(--muted); }
+#speech-message[data-error="true"] { color: #e5b3b8; }
+#speech-progress { width: 100%; accent-color: var(--accent); }
+
 /* First-run setup stays separate from the transient startup view. */
 .setup-content { width: 100%; padding: 28px 0 32px; margin: auto; }
 .setup-content .startup-heading h1 { font-size: 24px; letter-spacing: -.5px; }

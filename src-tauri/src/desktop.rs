@@ -47,6 +47,10 @@ mod pet_settings;
 mod power;
 #[path = "desktop_settings.rs"]
 mod settings_page;
+#[path = "desktop_speech.rs"]
+mod speech;
+#[path = "desktop_speech_settings.rs"]
+mod speech_settings;
 #[path = "desktop_titlebar.rs"]
 mod titlebar;
 #[path = "desktop_toasts.rs"]
@@ -199,7 +203,7 @@ impl Controller {
 fn settings_section(section: &str) -> bool {
     matches!(
         section,
-        "environment" | "notifications" | "power" | "pet" | "updates" | "logs"
+        "environment" | "notifications" | "power" | "pet" | "speech" | "updates" | "logs"
     )
 }
 
@@ -880,6 +884,15 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             assistant::get_assistant_snapshot,
             assistant::assistant_action,
+            speech::assistant_speech_synthesize,
+            speech::assistant_speech_cancel,
+            speech_settings::get_speech_settings,
+            speech_settings::save_speech_config,
+            speech_settings::speech_action,
+            speech_settings::get_speech_preferences,
+            speech_settings::set_speech_preferences,
+            speech_settings::test_speech,
+            speech_settings::cancel_speech_test,
             pet::get_pet_geometry,
             pet::move_pet,
             pet::drag_pet,
@@ -967,6 +980,12 @@ pub fn run() {
             app.manage(controller.clone());
             let assistant_state = Arc::new(assistant::Assistant::new(directory.clone()));
             app.manage(assistant_state.clone());
+            app.manage(Arc::new(crate::assistant_speech::SpeechBridge::default()));
+            app.manage(Arc::new(speech_settings::SpeechControls::new(
+                app.handle().clone(),
+                controller.clone(),
+                directory.clone(),
+            )));
             app.manage(Arc::new(pet_settings::PetControls::new(directory.clone())));
             app.manage(Arc::new(pet_notifications::PetNotifications::new()));
             let interaction_state = Arc::new(pet_interactions::PetInteractions::new());
@@ -1099,6 +1118,7 @@ pub fn run() {
         .on_window_event(|window, event| {
             titlebar::on_window_event(window, event);
             assistant::on_window_event(window, event);
+            speech::on_window_event(window, event);
             pet_settings::on_window_event(window, event);
             if let WindowEvent::CloseRequested { api, .. } = event {
                 if let Some(controller) = window.app_handle().try_state::<Arc<Controller>>() {
@@ -1123,6 +1143,8 @@ pub fn run() {
     app.run(|app, event| {
         if matches!(&event, tauri::RunEvent::Exit) {
             assistant::stop(app);
+            speech::stop(app);
+            speech_settings::shutdown(app);
             notifications::stop(app);
         }
         if let tauri::RunEvent::ExitRequested { api, .. } = event {

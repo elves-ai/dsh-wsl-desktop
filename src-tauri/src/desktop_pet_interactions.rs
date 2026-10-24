@@ -5,6 +5,7 @@ use super::{notifications, Controller};
 use crate::{
     assistant_transport::Client,
     pet_interactions::{self as model, Card, Reply},
+    pet_native_policy::PetFocusPolicy,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -12,7 +13,7 @@ use std::{
     collections::BTreeMap,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc, Condvar, Mutex,
+        mpsc, Arc, Condvar, Mutex,
     },
     thread,
     time::Duration,
@@ -52,6 +53,7 @@ struct Data {
     connected: bool,
     connection: Option<Connection>,
     entries: BTreeMap<String, Entry>,
+    focus: PetFocusPolicy,
 }
 impl Data {
     fn disconnect(&mut self, generation: Option<u64>) -> bool {
@@ -99,6 +101,14 @@ impl Data {
         true
     }
 }
+#[derive(Clone, Copy)]
+enum FocusChange {
+    Refresh,
+    Composer(bool),
+    InteractionSurface(bool),
+    Hidden,
+}
+
 pub(super) struct PetInteractions {
     data: Mutex<Data>,
     changed: Condvar,
@@ -112,6 +122,7 @@ impl PetInteractions {
                 connected: false,
                 connection: None,
                 entries: BTreeMap::new(),
+                focus: PetFocusPolicy::default(),
             }),
             changed: Condvar::new(),
         }
@@ -126,26 +137,100 @@ impl PetInteractions {
     }
     fn publish(&self, app: &AppHandle) {
         let snapshot = self.snapshot();
-        self.update_focusable(app, true);
+        self.update_focusable(app);
         let _ = app.emit_to(
             EventTarget::webview(PET),
             "pet-interactions-state",
             snapshot,
         );
     }
-    fn update_focusable(&self, app: &AppHandle, active: bool) {
-        let focusable = {
-            let data = self.data.lock().unwrap_or_else(|e| e.into_inner());
-            active && data.connected && !data.entries.is_empty()
+    fn update_focusable(&self, app: &AppHandle) {
+        let _ = self.change_focus(app, FocusChange::Refresh);
+    }
+    // Called only by assistant_action's blocking worker, never the UI thread.
+    // Resolve the IPC only after focusability, window focus and WebView focus succeed.
+    pub(super) fn set_composer_active(&self, app: &AppHandle, active: bool) -> Result<(), String> {
+        let (done, completed) = mpsc::channel();
+        self.queue_focus(app, FocusChange::Composer(active), Some(done))?;
+        completed
+            .recv()
+            .map_err(|_| "桌宠输入焦点操作未完成。".to_owned())?
+    }
+    pub(super) fn prepare_hide(&self, app: &AppHandle) -> Result<(), String> {
+        self.change_focus(app, FocusChange::Hidden)
+    }
+    fn change_focus(&self, app: &AppHandle, change: FocusChange) -> Result<(), String> {
+        self.queue_focus(app, change, None)
+    }
+    fn queue_focus(
+        &self,
+        app: &AppHandle,
+        change: FocusChange,
+        done: Option<mpsc::Sender<Result<(), String>>>,
+    ) -> Result<(), String> {
+        let handle = app.clone();
+        // Serialize policy changes and their native effects on the UI thread. A queued
+        // notification must not apply a stale "not focusable" after a user starts typing.
+        app.run_on_main_thread(move || {
+            let result = if let Some(state) = handle.try_state::<Arc<PetInteractions>>() {
+                let result = state.apply_focus(&handle, change);
+                if result.is_err() && matches!(change, FocusChange::Composer(true)) {
+                    // Failed activation is not an input lease. Retain only live-card focus.
+                    state
+                        .data
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .focus
+                        .set_composer_active(false);
+                    let _ = state.apply_focus(&handle, FocusChange::Refresh);
+                }
+                result
+            } else {
+                Err("桌宠交互尚未就绪。".to_owned())
+            };
+            if let Some(done) = done {
+                let _ = done.send(result);
+            }
+        })
+        .map_err(|_| "无法更新桌宠输入焦点。".to_owned())
+    }
+    fn apply_focus(&self, app: &AppHandle, change: FocusChange) -> Result<(), String> {
+        let visible =
+            !matches!(change, FocusChange::Hidden) && super::pet_settings::pet_visible(app);
+        let interactions_enabled = super::pet_settings::interaction_enabled(app);
+        let (focusable, activate) = {
+            let mut data = self.data.lock().unwrap_or_else(|e| e.into_inner());
+            match change {
+                FocusChange::Composer(active) => data.focus.set_composer_active(active),
+                FocusChange::InteractionSurface(active) => {
+                    data.focus.set_interaction_surface_active(active);
+                }
+                FocusChange::Hidden => data.focus.set_composer_active(false),
+                FocusChange::Refresh => {}
+            }
+            let live_cards = interactions_enabled && data.connected && !data.entries.is_empty();
+            let focusable = data.focus.focusable(visible, live_cards);
+            let activate =
+                matches!(change, FocusChange::Composer(true)) && data.focus.composer_active();
+            (focusable, activate)
         };
-        // Never activate or resize the window. No state lock spans a window RPC.
-        if let Some(window) = app.get_window(PET) {
-            let _ = window.set_focusable(
-                focusable
-                    && super::pet_settings::pet_visible(app)
-                    && super::pet_settings::interaction_enabled(app),
-            );
+        // No state lock spans a window/WebView RPC. Never resize, and never
+        // activate for incoming cards, disconnects, or surface preference changes.
+        let window = app.get_window(PET).ok_or("桌宠窗口尚未创建。")?;
+        window
+            .set_focusable(focusable)
+            .map_err(|_| "无法设置桌宠输入状态。")?;
+        if matches!(change, FocusChange::Composer(true)) && !activate {
+            return Err("桌宠已隐藏，无法打开输入。".into());
         }
+        if activate && focusable {
+            window.set_focus().map_err(|_| "无法聚焦桌宠窗口。")?;
+            app.get_webview(PET)
+                .ok_or("桌宠页面尚未创建。")?
+                .set_focus()
+                .map_err(|_| "无法聚焦桌宠输入页面。")?;
+        }
+        Ok(())
     }
     fn wait(&self, seconds: u64) {
         let data = self.data.lock().unwrap_or_else(|e| e.into_inner());
@@ -362,8 +447,7 @@ pub(super) fn set_pet_interaction_surface(
     active: bool,
 ) -> Result<(), String> {
     assert_pet(&view)?;
-    state.update_focusable(&app, active);
-    Ok(())
+    state.change_focus(&app, FocusChange::InteractionSurface(active))
 }
 
 pub(super) fn wake(app: &AppHandle) {
@@ -372,7 +456,11 @@ pub(super) fn wake(app: &AppHandle) {
             state.invalidate(app, None);
         }
         state.changed.notify_all();
-        state.update_focusable(app, true);
+        if !super::pet_settings::pet_visible(app) {
+            let _ = state.change_focus(app, FocusChange::Hidden);
+        } else {
+            state.update_focusable(app);
+        }
     }
 }
 

@@ -12,6 +12,7 @@ Windows 原生 **Tauri 2 + WebView2** 桌面应用。DSH、Node、会话与项�
 
 - [下载与安装说明](<DOWNLOADS.md>)
 - [隐私说明](<PRIVACY.md>)
+- [本地千问朗读设置与启动](<QWEN_SPEECH.md>)：“设置 → 语音”配置外置 WSL Q8/ROCm 环境与模型，检测、查看运行状态、启动/试听/停止释放显存；默认关闭自动朗读，音量与桌宠菜单同步。不接管外部服务，不增加高级语音功能；Windows 窗口实机验收仍独立进行。
 - [Code signing policy](<CODE_SIGNING.md>)：当前构建未签名；已于 2026-10-22 提交 SignPath Foundation 申请，等待审核，尚未获得批准。
 
 ## 使用方法

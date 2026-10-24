@@ -45,6 +45,20 @@ test('Windows build locks dependencies and fails when installer artifacts are mi
   assert.match(collect.run, /dsh-wsl-desktop_/);
 });
 
+test('local Windows staging copies test metadata and permissions before npm test', () => {
+  const script = readFileSync(new URL('../scripts/Build-Windows.ps1', import.meta.url), 'utf8');
+  const beforeTests = script.slice(0, script.indexOf('& npm.cmd test'));
+  assert.ok(script.includes('& npm.cmd test'));
+  const rootFiles = beforeTests.match(/^\$rootFiles = @\((.*)\)$/m)?.[1];
+  const folders = beforeTests.match(/^\$folders = @\((.*)\)$/m)?.[1];
+  for (const file of ['RELEASE_NOTES.md', '.gitignore', '.gitattributes']) {
+    assert.ok(rootFiles?.includes("'" + file + "'"), file + ' must be staged before tests');
+  }
+  assert.ok(folders?.includes("'src-tauri/permissions'"));
+  assert.match(beforeTests, /foreach \(\$file in \$rootFiles\) \{ Copy-Item/);
+  assert.match(beforeTests, /foreach \(\$folder in \$folders\) \{[\s\S]*robocopy\.exe/);
+});
+
 test('only successful tag pushes may publish a release with narrowly scoped write permission', () => {
   const job = workflow.jobs['publish-release'];
   assert.equal(job.needs, 'build-windows');

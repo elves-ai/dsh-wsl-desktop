@@ -177,11 +177,34 @@ pub(super) enum Action {
     MotionActive {
         active: bool,
     },
+    PetInput {
+        active: bool,
+    },
     PetSource,
     PetSettings,
     HitRegions {
         regions: Vec<HitRegion>,
     },
+}
+
+fn action_allowed(label: &str, action: &Action) -> bool {
+    match action {
+        Action::PetInput { .. } | Action::MotionActive { .. } | Action::HitRegions { .. } => {
+            label == PET
+        }
+        Action::Enable { .. }
+        | Action::Reconfigure
+        | Action::NewSession
+        | Action::SelectSession { .. } => label == CHAT,
+        // Inline conversation shares the bound session, never project/session setup.
+        Action::Send { .. } | Action::Cancel | Action::Retry => [PET, CHAT].contains(&label),
+        Action::OpenDsh
+        | Action::ToggleChat
+        | Action::Hide
+        | Action::Drag
+        | Action::PetSource
+        | Action::PetSettings => [PET, CHAT].contains(&label),
+    }
 }
 
 fn document_allowed(url: &Url, label: &str) -> bool {
@@ -237,6 +260,9 @@ pub(super) async fn assistant_action(
     request: Action,
 ) -> Result<Snapshot, String> {
     assert_assistant(&view)?;
+    if !action_allowed(view.label(), &request) {
+        return Err("此助手页面无权执行该操作。".into());
+    }
     let state = state.inner().clone();
     let caller = view.label().to_owned();
     let window = view.window();
@@ -263,6 +289,10 @@ pub(super) async fn assistant_action(
             Action::PetSource => {
                 open::that_detached("https://github.com/PC2005-cloud/dsh-pet")
                     .map_err(|_| "无法打开上游项目地址。")?;
+            }
+            Action::PetInput { active } => {
+                app.state::<Arc<super::pet_interactions::PetInteractions>>()
+                    .set_composer_active(&app, active)?;
             }
             Action::MotionActive { active } => {
                 if caller != PET {
@@ -318,9 +348,6 @@ pub(super) async fn assistant_action(
                 state.wake.notify_all();
             }
             action => {
-                if caller != CHAT {
-                    return Err("请在对话面板中操作会话。".into());
-                }
                 let _lease = state
                     .operation
                     .try_lock()
@@ -1090,6 +1117,54 @@ pub(super) fn start(app: tauri::AppHandle, controller: Arc<Controller>, state: A
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn inline_actions_are_scoped_without_setup_privileges() {
+        for action in [
+            Action::Send {
+                text: "hello".into(),
+                request_id: "request".into(),
+                client_time_zone: None,
+            },
+            Action::Cancel,
+            Action::Retry,
+            Action::ToggleChat,
+        ] {
+            assert!(action_allowed(PET, &action));
+            assert!(action_allowed(CHAT, &action));
+            assert!(!action_allowed("dsh-main", &action));
+        }
+        for action in [
+            Action::Enable {
+                path: "/project".into(),
+            },
+            Action::Reconfigure,
+            Action::NewSession,
+            Action::SelectSession {
+                session_id: "session".into(),
+            },
+        ] {
+            assert!(!action_allowed(PET, &action));
+            assert!(action_allowed(CHAT, &action));
+        }
+        for active in [true, false] {
+            let action: Action = serde_json::from_value(serde_json::json!({
+                "action": "pet_input", "active": active
+            }))
+            .unwrap();
+            assert!(matches!(action, Action::PetInput { active: value } if value == active));
+            assert!(action_allowed(PET, &action));
+            assert!(!action_allowed(CHAT, &action));
+            assert!(!action_allowed("dsh-main", &action));
+        }
+        for payload in [
+            serde_json::json!({"action":"pet_input"}),
+            serde_json::json!({"action":"pet_input", "active":"true"}),
+            serde_json::json!({"action":"pet_input", "active":true, "extra":1}),
+        ] {
+            assert!(serde_json::from_value::<Action>(payload).is_err());
+        }
+    }
+
     #[test]
     fn exact_documents_only() {
         for (label, view) in [(PET, "pet"), (CHAT, "chat")] {

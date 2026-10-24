@@ -1,0 +1,18 @@
+{
+  "identifier": "speech-settings",
+  "description": "Trusted local settings speech configuration and fixed-text audition; no remote/launcher shell access.",
+  "local": true,
+  "webviews": [
+    "launcher-settings",
+    "dsh-settings"
+  ],
+  "permissions": [
+    "allow-get-speech-settings",
+    "allow-save-speech-config",
+    "allow-speech-action",
+    "allow-get-speech-preferences",
+    "allow-set-speech-preferences",
+    "allow-test-speech",
+    "allow-cancel-speech-test"
+  ]
+}

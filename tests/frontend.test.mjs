@@ -28,7 +28,8 @@ async function mount(native, initial = base(), options = {}) {
   const location = { href: options.location || (options.mode === 'startup' ? 'http://127.0.0.1:1420/index.html' : 'http://127.0.0.1:1420/index.html?view=settings&section=environment') };
   const context = vm.createContext({
     appIconUrl: 'app-icon.png',
-    URL, console, document: { querySelector: () => root, getElementById: id => nodes.get(id), createElement: tag => ({ tagName: tag, value: '', textContent: '', set innerHTML(_) { throw new Error('Native data must not use HTML'); } }) }, window: { location, addEventListener(name, handler) { windowHandlers.set(name, handler); } },
+    SpeechSettings: class { setVisible() {} dispose() {} },
+    URL, console, document: { addEventListener() {}, querySelector: () => root, getElementById: id => nodes.get(id), createElement: tag => ({ tagName: tag, value: '', textContent: '', set innerHTML(_) { throw new Error('Native data must not use HTML'); } }) }, window: { location, addEventListener(name, handler) { windowHandlers.set(name, handler); } },
     isTauri: () => native,
     listen: async (name, callback) => { listenCalls.push(name); if (options.listen) await options.listen(name, callback); subscriptions.set(name, callback); return () => { unlistened.push(name); subscriptions.delete(name); }; },
     invoke: async (name, args) => {
@@ -440,7 +441,7 @@ test('browser previews never invoke native commands or subscribe in either view'
     await app.change('notifications-when-focused', true);
     await app.change('power-enabled', false);
     for (const id of ['pet-visible', 'pet-startup-visible', 'pet-roaming-enabled']) await app.change(id, true);
-    for (const section of ['environment', 'notifications', 'power', 'pet', 'updates', 'logs']) await app.click('nav-' + section);
+    for (const section of ['environment', 'notifications', 'power', 'pet', 'speech', 'updates', 'logs']) await app.click('nav-' + section);
     assert.equal(app.calls.length, 0); assert.equal(app.listenCalls.length, 0); assert.equal(app.subscriptions.size, 0);
     if (mode === 'settings') {
       assert.equal(app.node('notifications-enabled').checked, false);
@@ -970,7 +971,7 @@ test('power defaults enabled, subscribes before read, and provides the protectio
   assert.match(app.template, /默认启用.*仅防止系统自动休眠.*屏幕仍可熄灭/);
   assert.match(app.template, /托盘后继续保护.*退出启动器后不再保护.*不阻止手动睡眠或合盖休眠/);
   const sections = [...app.template.matchAll(/id="nav-([^"]+)"/g)].map(match => match[1]);
-  assert.deepEqual(sections, ['environment', 'notifications', 'power', 'pet', 'updates', 'logs']);
+  assert.deepEqual(sections, ['environment', 'notifications', 'power', 'pet', 'speech', 'updates', 'logs']);
   await app.click('nav-power');
   assert.equal(app.node('settings-title').textContent, '电源管理');
   assert.match(app.node('settings-description').textContent, /系统自动休眠保护/);
@@ -1368,7 +1369,7 @@ test('settings has only check and logs service actions and navigation never invo
   const calls = [...app.calls];
   for (const selected of ['environment', 'notifications', 'power', 'updates', 'logs', 'environment']) {
     await app.click('nav-' + selected);
-    for (const section of ['environment', 'notifications', 'power', 'pet', 'updates', 'logs']) {
+    for (const section of ['environment', 'notifications', 'power', 'pet', 'speech', 'updates', 'logs']) {
       assert.equal(app.node('settings-' + section).hidden, section !== selected);
       assert.equal(app.node('nav-' + section).attributes['aria-current'], section === selected ? 'page' : 'false');
     }
@@ -1394,7 +1395,7 @@ test('menu events route settings tabs without IPC even when the environment fail
   for (const selected of ['notifications', 'power', 'environment', 'updates', 'logs', 'notifications']) {
     show({ payload: selected }); await flush();
     assert.equal(app.node('settings-' + selected).hidden, false); assert.equal(app.node('settings-title').focused, true);
-    for (const section of ['environment', 'notifications', 'power', 'pet', 'updates', 'logs']) assert.equal(app.node('settings-' + section).hidden, section !== selected);
+    for (const section of ['environment', 'notifications', 'power', 'pet', 'speech', 'updates', 'logs']) assert.equal(app.node('settings-' + section).hidden, section !== selected);
     assert.equal(app.node('notifications-enabled').checked, true); assert.equal(app.node('notifications-enabled').disabled, false);
     assert.deepEqual(app.calls, calls);
   }

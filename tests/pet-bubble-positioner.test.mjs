@@ -26,9 +26,11 @@ function fixture({x=0,y=0,width=360,height=320,anchor=box(112,110,135,130),tools
   let summary = null;
   interaction.querySelector = () => summary;
   interaction.getBoundingClientRect = () => box(0,0,parseFloat(interaction.style.width || '348'),parseFloat(interaction.style.height || '256'));
-  const nodes = { '.pet-shell':host, '.pet-tools':tools, '#pet-bubble':bubble, '#pet-interaction':interaction };
+  const dialogue = make(box(0,0,324,128)); dialogue.hidden=true;
+  dialogue.getBoundingClientRect=()=>box(0,0,parseFloat(dialogue.style.width||'324'),Math.min(dialogue.dataset.expanded==='true'?256:128,parseFloat(dialogue.style['max-height']||'128')));
+  const nodes = { '#pet-dialogue':dialogue, '.pet-shell':host, '.pet-tools':tools, '#pet-bubble':bubble, '#pet-interaction':interaction };
   const root = make(box(x,y,width,height)); root.querySelector = selector => nodes[selector] ?? null;
-  return {root,pet,bubble,interaction,host, setHeight(value) {naturalHeight=value;}, collapse() {summary=make(box(0,0,120,32)); summary.getBoundingClientRect=()=>box(0,0,120,interaction.style.height === 'auto' ? 10 : 32);}, nodes};
+  return {root,pet,bubble,interaction,dialogue,host, setHeight(value) {naturalHeight=value;}, collapse() {summary=make(box(0,0,120,32)); summary.getBoundingClientRect=()=>box(0,0,120,interaction.style.height === 'auto' ? 10 : 32);}, nodes};
 }
 const rectOf = node => ({x:parseFloat(node.style.left),y:parseFloat(node.style.top),width:parseFloat(node.style.width),height:parseFloat(node.style.height)});
 
@@ -69,4 +71,16 @@ test('shell offsets use local coordinates and hidden bubbles or missing hosts ar
   layoutPetBubbles(f.root,f.pet); assert.deepEqual(rectOf(f.bubble),{x:17.5,y:52,width:324,height:50});
   f.bubble.hidden=true; f.setHeight(80); layoutPetBubbles(f.root,f.pet); assert.equal(rectOf(f.bubble).height,50);
   delete f.nodes['.pet-shell']; assert.doesNotThrow(()=>layoutPetBubbles(f.root,f.pet));
+});
+
+test('inline conversation fits above the pet at either screen edge and expanded text stays bounded',()=>{
+  for(const insets of [{left:0,right:0},{left:112.5,right:0},{left:0,right:112.5}]){
+    const f=fixture({anchor:box(112.5,142,135,160)});f.bubble.hidden=true;f.dialogue.hidden=false;
+    layoutPetBubbles(f.root,f.pet,insets);const compact=rectOf(f.dialogue);
+    assert.equal(f.dialogue.dataset.placement,'above');assert.ok(compact.y+compact.height<=134);
+    assert.ok(compact.x>=insets.left+6);assert.ok(compact.x+compact.width<=360-insets.right-6);
+    f.dialogue.dataset.expanded='true';layoutPetBubbles(f.root,f.pet,insets);const full=rectOf(f.dialogue);
+    assert.equal(full.height,256);assert.ok(full.y>=6);assert.ok(full.y+full.height<=314);
+    assert.deepEqual(f.pet.style.getPropertyValue('top'),'');
+  }
 });

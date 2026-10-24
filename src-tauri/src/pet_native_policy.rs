@@ -4,6 +4,39 @@ use crate::pet_geometry::{
 };
 use std::time::Duration;
 
+/// Independent owners of pet keyboard focusability. Only an explicit composer open
+/// may activate the window; notification changes merely recompute focusability.
+pub struct PetFocusPolicy {
+    composer_active: bool,
+    interaction_surface_active: bool,
+}
+impl Default for PetFocusPolicy {
+    fn default() -> Self {
+        Self {
+            composer_active: false,
+            interaction_surface_active: true,
+        }
+    }
+}
+impl PetFocusPolicy {
+    pub fn set_composer_active(&mut self, active: bool) {
+        self.composer_active = active;
+    }
+    pub fn set_interaction_surface_active(&mut self, active: bool) {
+        self.interaction_surface_active = active;
+    }
+    pub fn composer_active(&self) -> bool {
+        self.composer_active
+    }
+    pub fn focusable(&mut self, visible: bool, live_cards: bool) -> bool {
+        if !visible {
+            // Showing the pet again must not restore an old typing lease.
+            self.composer_active = false;
+        }
+        visible && (self.composer_active || (self.interaction_surface_active && live_cards))
+    }
+}
+
 pub const WORK_AREA_CACHE_TTL: Duration = Duration::from_millis(350);
 
 struct Snapshot {
@@ -91,6 +124,46 @@ pub fn clamped_move_target(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn composer_focus_survives_notification_and_surface_changes() {
+        let mut focus = PetFocusPolicy::default();
+        assert!(!focus.focusable(true, false));
+        focus.set_composer_active(true);
+        // No cards (including disconnects/bubbles disabled) must not cancel typing.
+        assert!(focus.focusable(true, false));
+        assert!(focus.focusable(true, true));
+        focus.set_interaction_surface_active(false);
+        assert!(focus.focusable(true, true));
+        assert!(focus.focusable(true, false));
+        focus.set_composer_active(false);
+        assert!(!focus.focusable(true, true));
+    }
+
+    #[test]
+    fn composer_close_preserves_only_live_card_focus() {
+        let mut focus = PetFocusPolicy::default();
+        focus.set_composer_active(true);
+        focus.set_composer_active(false);
+        assert!(focus.focusable(true, true));
+        assert!(!focus.focusable(true, false));
+        focus.set_interaction_surface_active(false);
+        assert!(!focus.focusable(true, true));
+    }
+
+    #[test]
+    fn hidden_pet_releases_composer_and_does_not_restore_typing() {
+        let mut focus = PetFocusPolicy::default();
+        focus.set_composer_active(true);
+        assert!(!focus.focusable(false, true));
+        assert!(!focus.composer_active());
+        assert!(!focus.focusable(true, false));
+        // Delayed input-open IPC while hidden must not arm the next show either.
+        focus.set_composer_active(true);
+        assert!(!focus.focusable(false, false));
+        assert!(!focus.focusable(true, false));
+        assert!(focus.focusable(true, true));
+    }
+
     const MAIN: Area = Area {
         x: 0.0,
         y: 0.0,
