@@ -21,17 +21,39 @@ class Node {
  addEventListener(name,fn){this.handlers.set(name,fn);}
  emit(name){this.handlers.get(name)?.({target:this});}
 }
-function fixture({ native=true, initial=snapshot(), initialPrefs=prefs(), invoke:custom, listen:customListen }={}) {
+function fixture({ native=true, initial=snapshot(), initialPrefs=prefs(), invoke:custom, listen:customListen, resources:resourceFactory }={}) {
  const nodes=new Map(), listeners=new Map(), calls=[], order=[], timers=new Map(), sources=[];let serial=0,clock=0,copied;
  const root={set innerHTML(html){for(const m of html.matchAll(/id="(speech-[^"]+)"/g))nodes.set(m[1],new Node());},querySelector(selector){return nodes.get(selector.slice(1));}};
  const context={state:'suspended',destination:{},resume(){order.push('resume');this.state='running';return Promise.resolve();},close(){order.push('close');return Promise.resolve();},createGain(){return{gain:{value:1},connect(){},disconnect(){}};},decodeAudioData(){return Promise.resolve({duration:.1});},createBufferSource(){const s={onended:null,connect(){},disconnect(){},start(){order.push('play');},stop(){order.push('stop');}};sources.push(s);return s;}};
  const view={AudioContext:class{constructor(){return context;}},crypto:{getRandomValues(bytes){bytes.fill(++serial);return bytes;}},atob:s=>Buffer.from(s,'base64').toString('binary'),setTimeout(fn){timers.set(++clock,fn);return clock;},clearTimeout(id){timers.delete(id);},navigator:{clipboard:{async writeText(value){copied=value;}}}};
  const bridge={async listen(name,fn){order.push('listen:'+name);listeners.set(name,fn);if(customListen)await customListen(name,fn);return()=>{listeners.delete(name);order.push('unlisten:'+name);};},async invoke(name,args){calls.push({name,args});order.push(name);if(custom)return custom(name,args,fallback);return fallback(name,args);}};
  function fallback(name,args){if(name==='get_speech_settings')return initial;if(name==='get_speech_preferences')return initialPrefs;if(name==='speech_action')return initial;if(name==='save_speech_config')return snapshot({revision:1,config:args.config});if(name==='set_speech_preferences')return prefs({...initialPrefs,...args.patch,revision:initialPrefs.revision+1});if(name==='test_speech')return{request_id:args.requestId,voice_id:'pet-airhead-v1',wav_base64:wav()};if(name==='cancel_speech_test')return;throw Error('unexpected command '+name);}
- const settings=new SpeechSettings(root,view,native,bridge);
+ const settings=new SpeechSettings(root,view,native,bridge,resourceFactory);
  const node=id=>nodes.get('speech-'+id);
  return{settings,node,calls,order,listeners,timers,sources,context,get copied(){return copied;},show(){settings.setVisible(true);},hide(){settings.setVisible(false);},event(name,payload){listeners.get(name)?.({payload});},click(id){node(id).emit('click');},fill(id,value){node(id).value=value;node(id).emit('input');},async poll(){const jobs=[...timers.values()];timers.clear();jobs.forEach(fn=>fn());await tick();}};
 }
+
+test('resource selections are unsaved drafts and lifecycle follows trusted visible speech settings', async()=>{
+ let select, getDraft, visible=false, disposed=false;
+ const f=fixture({resources(root,onSelect,read){select=onSelect;getDraft=read;return{isBusy:()=>false,setVisible:v=>{visible=v;},setBlocked(){},dispose(){disposed=true;}};}});
+ assert.equal(visible,false);f.show();await tick();assert.equal(visible,true);
+ assert.deepEqual(getDraft(),config);select({python_path:'/detected/bin/python'});
+ assert.equal(f.node('python_path').value,'/detected/bin/python');assert.match(f.node('draft').textContent,/未保存/);
+ assert.equal(f.calls.some(c=>c.name==='save_speech_config'),false);
+ f.event('launcher-speech-state',snapshot({revision:3}));assert.equal(f.node('python_path').value,'/detected/bin/python');
+ f.hide();assert.equal(visible,false);select({model_dir:'/late'});assert.equal(f.node('model_dir').value,config.model_dir);
+ f.settings.dispose();assert.equal(disposed,true);
+});
+test('resource busy blocks save, check, start and audition without blocking cancel or preferences',async()=>{
+ let busy=false,blocked=false;
+ const f=fixture({resources(){return{isBusy:()=>busy,setVisible(){},setBlocked:v=>{blocked=v;},dispose(){}};}});f.show();await tick();
+ f.fill('model_dir','/candidate');busy=true;f.node('resources').emit('speech-resources-busy');
+ for(const id of ['save','check','start','test']){assert.equal(f.node(id).disabled,true);f.click(id);}await tick();
+ assert.equal(f.calls.some(c=>c.name==='save_speech_config'||c.args?.action==='start'||c.args?.action==='check'),false);
+ assert.equal(f.node('auto').disabled,false);assert.equal(blocked,false);
+ busy=false;f.node('resources').emit('speech-resources-busy');assert.equal(f.node('save').disabled,false);
+ f.event('launcher-speech-state',ready({revision:4}));assert.equal(blocked,true);f.settings.dispose();
+});
 
 test('preview stays unknown, disabled and entirely non-mutating even for synthetic events',async()=>{
  const f=fixture({native:false});f.show();for(const id of ['save','refresh','check','start','stop','test','copy']){assert.equal(f.node(id).disabled,true);f.click(id);}f.fill('model_dir','/new');f.node('auto').checked=true;f.node('auto').emit('change');await tick();assert.deepEqual(f.calls,[]);assert.equal(f.listeners.size,0);assert.equal(f.timers.size,0);assert.equal(f.node('model_state').textContent,'未知');assert.match(f.node('message').textContent,/浏览器预览/);f.settings.dispose();

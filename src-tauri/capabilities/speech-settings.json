@@ -13,6 +13,11 @@
     "allow-get-speech-preferences",
     "allow-set-speech-preferences",
     "allow-test-speech",
-    "allow-cancel-speech-test"
+    "allow-cancel-speech-test",
+    "allow-discover-speech-resources",
+    "allow-browse-speech-path",
+    "allow-get-speech-download",
+    "allow-download-speech-model",
+    "allow-cancel-speech-download"
   ]
 }

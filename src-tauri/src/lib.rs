@@ -18,6 +18,7 @@ pub mod pet_settings;
 pub mod power;
 pub mod protocol;
 pub mod setup;
+pub mod speech_resources;
 pub mod speech_settings;
 #[cfg(any(windows, test))]
 pub mod speech_wsl;

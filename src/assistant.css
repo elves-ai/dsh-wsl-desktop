@@ -84,7 +84,7 @@ textarea::placeholder { color: #9dabbc; }
 .pet-credit { color: #587b9e; text-decoration: none; }
 .pet-credit:hover { text-decoration: underline; }
 .asset-license { color: #8793a0; font-size: 8px; }
-.pet-menu { position: absolute; z-index: 10; top: 6px; left: calc(6px + var(--pet-visible-left, 0px)); width: 172px; max-width: calc(100% - var(--pet-visible-left, 0px) - var(--pet-visible-right, 0px) - 12px); max-height: min(300px, calc(100% - 12px)); overflow: auto; padding: 4px; border: 1px solid #d5e1ef; border-radius: 9px; background: #f8fcfffa; box-shadow: 0 4px 16px #24496a2b; font-size: 12px; }
+.pet-menu { position: absolute; z-index: 10; top: 6px; left: calc(6px + var(--pet-visible-left, 0px)); width: 172px; max-width: calc(100% - var(--pet-visible-left, 0px) - var(--pet-visible-right, 0px) - 12px); max-height: calc(100% - 12px); overflow: visible; padding: 4px; border: 1px solid #d5e1ef; border-radius: 9px; background: #f8fcfffa; box-shadow: 0 4px 16px #24496a2b; font-size: 12px; }
 .pet-menu-header { display: flex; align-items: center; justify-content: space-between; padding-left: 7px; height: 24px; color: #7991aa; font-size: 10px; }
 .pet-menu-close { width: 24px; height: 24px; padding: 0; font-size: 18px; line-height: 24px; background: transparent; }
 .pet-menu > button { display: block; width: 100%; min-height: 27px; padding: 5px 8px; border-radius: 5px; background: transparent; text-align: left; font-size: 12px; }
@@ -94,8 +94,6 @@ textarea::placeholder { color: #9dabbc; }
 .pet-menu select { flex: 1; min-width: 0; border: 1px solid #d5e3f2; border-radius: 5px; padding: 4px; background: white; font-size: 11px; }
 #pet-topmost[aria-checked="true"] { background: #edf4fd; color: #276baf; }
 #pet-topmost[aria-checked="true"]::after { content: '✓'; float: right; }
-.pet-menu-credit { display: flex; flex-direction: column; gap: 2px; margin-top: 3px; padding: 5px 7px 2px; border-top: 1px solid #e2eaf4; font-size: 9px; line-height: 1.4; overflow-wrap: anywhere; }
-.pet-menu-credit .asset-license { font-size: 8px; }
 .pet-notice { position: absolute; z-index: 12; top: 2px; left: calc(10px + var(--pet-visible-left, 0px)); right: calc(10px + var(--pet-visible-right, 0px)); font-size: 10px; color: #9d5445; background: #fff2edf5; border-radius: 7px; padding: 5px; margin: 0; max-height: 50px; overflow: auto; overflow-wrap: anywhere; }
 [data-view=pet] .preview { font-size: 9px; border-radius: 7px; padding: 3px; }
 @keyframes pulse { 50% { opacity: .4; } }

@@ -19,7 +19,7 @@ async function mount(native, initial = base(), options = {}) {
   let savedNotification = options.initialNotification || notification();
   let savedPower = options.initialPower || power();
   let savedPet = options.initialPet || pet();
-  const nodes = new Map(); const subscriptions = new Map(); const calls = []; const windowHandlers = new Map(); const listenCalls = []; const unlistened = [];
+  const nodes = new Map(); const subscriptions = new Map(); const calls = []; const windowHandlers = new Map(); const listenCalls = []; const unlistened = []; const speechVisibility = [];
   const node = id => {
     if (!nodes.has(id)) nodes.set(id, { id, textContent: '', value: '', children: [], replaceChildren(...children) { this.children = children; }, dataset: {}, hidden: false, disabled: false, checked: false, open: false, scrollTop: 0, scrollHeight: 0, clientHeight: 0, handlers: {}, attributes: {}, set innerHTML(_) { throw new Error('Native data must not use HTML'); }, addEventListener(name, fn) { this.handlers[name] = fn; }, setAttribute(name, value) { this.attributes[name] = value; }, removeAttribute(name) { delete this.attributes[name]; if (name === 'value') delete this.value; }, focus() { this.focused = true; }, scrollIntoView() { this.scrolled = true; } });
     return nodes.get(id);
@@ -28,7 +28,7 @@ async function mount(native, initial = base(), options = {}) {
   const location = { href: options.location || (options.mode === 'startup' ? 'http://127.0.0.1:1420/index.html' : 'http://127.0.0.1:1420/index.html?view=settings&section=environment') };
   const context = vm.createContext({
     appIconUrl: 'app-icon.png',
-    SpeechSettings: class { setVisible() {} dispose() {} },
+    SpeechSettings: class { setVisible(visible) { speechVisibility.push(visible); } dispose() {} },
     URL, console, document: { addEventListener() {}, querySelector: () => root, getElementById: id => nodes.get(id), createElement: tag => ({ tagName: tag, value: '', textContent: '', set innerHTML(_) { throw new Error('Native data must not use HTML'); } }) }, window: { location, addEventListener(name, handler) { windowHandlers.set(name, handler); } },
     isTauri: () => native,
     listen: async (name, callback) => { listenCalls.push(name); if (options.listen) await options.listen(name, callback); subscriptions.set(name, callback); return () => { unlistened.push(name); subscriptions.delete(name); }; },
@@ -64,12 +64,33 @@ async function mount(native, initial = base(), options = {}) {
     },
   });
   vm.runInContext(source, context); await flush();
-  return { template: root.template, pet(snapshot) { subscriptions.get('pet-settings-state')?.({ payload: snapshot }); }, power(snapshot) { subscriptions.get('launcher-power-state')?.({ payload: snapshot }); }, node(id) { assert.ok(nodes.has(id), 'Missing DOM node: ' + id); return nodes.get(id); }, has: id => nodes.has(id), location, calls, subscriptions, listenCalls, unlistened, async fill(id, value) { const item = nodes.get(id); item.value = value; item.handlers.input?.(); await flush(); }, async choose(id, value) { const item = nodes.get(id); item.value = value; item.handlers.change?.(); await flush(); }, async submit() { nodes.get('setup-form')?.handlers.submit?.({ preventDefault() {} }); await flush(); }, async change(id, checked) { const item = nodes.get(id); if (!item) return; item.checked = checked; item.handlers.change?.(); await flush(); }, notification(snapshot) { subscriptions.get('launcher-notification-state')?.({ payload: snapshot }); }, unload() { windowHandlers.get('beforeunload')?.(); }, event(snapshot) { subscriptions.get('launcher-state')?.({ payload: snapshot }); }, update(snapshot) { subscriptions.get('launcher-update-state')?.({ payload: snapshot }); }, async click(id) { nodes.get(id)?.handlers.click?.(); await flush(); } };
+  return { speechVisibility, template: root.template, pet(snapshot) { subscriptions.get('pet-settings-state')?.({ payload: snapshot }); }, power(snapshot) { subscriptions.get('launcher-power-state')?.({ payload: snapshot }); }, node(id) { assert.ok(nodes.has(id), 'Missing DOM node: ' + id); return nodes.get(id); }, has: id => nodes.has(id), location, calls, subscriptions, listenCalls, unlistened, async fill(id, value) { const item = nodes.get(id); item.value = value; item.handlers.input?.(); await flush(); }, async choose(id, value) { const item = nodes.get(id); item.value = value; item.handlers.change?.(); await flush(); }, async submit() { nodes.get('setup-form')?.handlers.submit?.({ preventDefault() {} }); await flush(); }, async change(id, checked) { const item = nodes.get(id); if (!item) return; item.checked = checked; item.handlers.change?.(); await flush(); }, notification(snapshot) { subscriptions.get('launcher-notification-state')?.({ payload: snapshot }); }, unload() { windowHandlers.get('beforeunload')?.(); }, event(snapshot) { subscriptions.get('launcher-state')?.({ payload: snapshot }); }, update(snapshot) { subscriptions.get('launcher-update-state')?.({ payload: snapshot }); }, async click(id) { nodes.get(id)?.handlers.click?.(); await flush(); } };
 }
 
 const petControls = ['pet-visible', 'pet-startup-visible', 'pet-roaming-enabled', 'pet-bubble-notifications'];
 const petCalls = app => app.calls.filter(([name]) => ['get_pet_settings', 'set_pet_settings', 'set_pet_visibility'].includes(name));
 const petValues = app => petControls.map(id => app.node(id).checked);
+
+test('speech auto discovery waits until native settings has actually been revealed', async () => {
+  const pending=deferred();
+  const app=await mount(true,base(),{location:'http://127.0.0.1:1420/index.html?view=settings&section=pet',invoke(name,args,{fallback}){return name==='settings_page_ready'?pending.promise:fallback();}});
+  assert.equal(app.speechVisibility.includes(true),false);
+  pending.resolve('pet');await flush();assert.equal(app.speechVisibility.at(-1),true);
+});
+
+test('speech lives inside pet settings and legacy routes open pet with correct speech visibility', async () => {
+  for (const legacy of [false, true]) {
+    const app = await mount(true, base(), { location: 'http://127.0.0.1:1420/index.html?view=settings&section=' + (legacy ? 'speech' : 'pet') });
+    assert.equal(app.node('settings-pet').hidden, false);
+    assert.equal(app.has('nav-speech'), false);
+    assert.equal(app.node('nav-pet').attributes['aria-current'], 'page');
+    assert.equal(app.speechVisibility.at(-1), true);
+    await app.click('nav-updates'); assert.equal(app.speechVisibility.at(-1), false);
+    app.subscriptions.get('launcher-show-settings')({payload:'speech'}); await flush();
+    assert.equal(app.node('settings-pet').hidden, false);
+    assert.equal(app.speechVisibility.at(-1), true);
+  }
+});
 
 test('pet category supports URL, native routing, sidebar navigation and unchanged neighboring routes', async () => {
   const app = await mount(true, base(), { location: 'http://127.0.0.1:1420/index.html?view=settings&section=pet' });
@@ -441,7 +462,7 @@ test('browser previews never invoke native commands or subscribe in either view'
     await app.change('notifications-when-focused', true);
     await app.change('power-enabled', false);
     for (const id of ['pet-visible', 'pet-startup-visible', 'pet-roaming-enabled']) await app.change(id, true);
-    for (const section of ['environment', 'notifications', 'power', 'pet', 'speech', 'updates', 'logs']) await app.click('nav-' + section);
+    for (const section of ['environment', 'notifications', 'power', 'pet', 'updates', 'logs']) await app.click('nav-' + section);
     assert.equal(app.calls.length, 0); assert.equal(app.listenCalls.length, 0); assert.equal(app.subscriptions.size, 0);
     if (mode === 'settings') {
       assert.equal(app.node('notifications-enabled').checked, false);
@@ -971,7 +992,7 @@ test('power defaults enabled, subscribes before read, and provides the protectio
   assert.match(app.template, /默认启用.*仅防止系统自动休眠.*屏幕仍可熄灭/);
   assert.match(app.template, /托盘后继续保护.*退出启动器后不再保护.*不阻止手动睡眠或合盖休眠/);
   const sections = [...app.template.matchAll(/id="nav-([^"]+)"/g)].map(match => match[1]);
-  assert.deepEqual(sections, ['environment', 'notifications', 'power', 'pet', 'speech', 'updates', 'logs']);
+  assert.deepEqual(sections, ['environment', 'notifications', 'power', 'pet', 'updates', 'logs']);
   await app.click('nav-power');
   assert.equal(app.node('settings-title').textContent, '电源管理');
   assert.match(app.node('settings-description').textContent, /系统自动休眠保护/);
@@ -1369,7 +1390,7 @@ test('settings has only check and logs service actions and navigation never invo
   const calls = [...app.calls];
   for (const selected of ['environment', 'notifications', 'power', 'updates', 'logs', 'environment']) {
     await app.click('nav-' + selected);
-    for (const section of ['environment', 'notifications', 'power', 'pet', 'speech', 'updates', 'logs']) {
+    for (const section of ['environment', 'notifications', 'power', 'pet', 'updates', 'logs']) {
       assert.equal(app.node('settings-' + section).hidden, section !== selected);
       assert.equal(app.node('nav-' + section).attributes['aria-current'], section === selected ? 'page' : 'false');
     }
@@ -1395,7 +1416,7 @@ test('menu events route settings tabs without IPC even when the environment fail
   for (const selected of ['notifications', 'power', 'environment', 'updates', 'logs', 'notifications']) {
     show({ payload: selected }); await flush();
     assert.equal(app.node('settings-' + selected).hidden, false); assert.equal(app.node('settings-title').focused, true);
-    for (const section of ['environment', 'notifications', 'power', 'pet', 'speech', 'updates', 'logs']) assert.equal(app.node('settings-' + section).hidden, section !== selected);
+    for (const section of ['environment', 'notifications', 'power', 'pet', 'updates', 'logs']) assert.equal(app.node('settings-' + section).hidden, section !== selected);
     assert.equal(app.node('notifications-enabled').checked, true); assert.equal(app.node('notifications-enabled').disabled, false);
     assert.deepEqual(app.calls, calls);
   }

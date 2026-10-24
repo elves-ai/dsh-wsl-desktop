@@ -9,6 +9,8 @@ export type SpeechSnapshot = {
   gpu_name: string | null; message: string; error: string | null; logs: string[];
 };
 type Action = 'refresh' | 'check' | 'cancel_check' | 'start' | 'stop';
+type ResourceControls = { setVisible(visible: boolean): void; setBlocked(blocked: boolean): void; isBusy(): boolean; dispose(): void };
+type ResourceFactory = (root: HTMLElement, onSelect: (patch: Partial<SpeechConfig>) => void, getDraft: () => SpeechConfig) => ResourceControls;
 type Bridge = {
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
   listen<T>(name: string, callback: (event: { payload: T }) => void): Promise<() => void>;
@@ -45,13 +47,14 @@ export function speechDiagnostics(s?: SpeechSnapshot, p?: SpeechPreferences): st
     busy: s?.busy ?? false, error_present: !!s?.error, preferences_revision: p?.revision ?? null }, null, 2);
 }
 export const speechSettingsMarkup = `<div class="setting-group"><h2>本地千问语音</h2>
-<p class="setting-help">WSL · Q8 / ROCm · 固定音色。不安装依赖、不下载模型、不在打开本页时加载模型。</p>
+<p class="setting-help">宠物朗读 · WSL · Q8 / ROCm · 固定音色。可选择已有模型或手动确认下载；打开本页不会加载模型或安装依赖。</p>
 <dl class="connection-info"><div><dt>当前 WSL 发行版</dt><dd id="speech-distribution">未知</dd></div></dl>
 <label for="speech-model_dir">模型目录（WSL 绝对路径）</label><input id="speech-model_dir" type="text" maxlength="4096" autocomplete="off" spellcheck="false" disabled>
-<details class="speech-paths"><summary>运行路径（已有 Python 与原生库）</summary>
-<label for="speech-python_path">Python 可执行文件</label><input id="speech-python_path" type="text" maxlength="4096" autocomplete="off" spellcheck="false" disabled>
+<label for="speech-python_path">Python 可执行文件（WSL）</label><input id="speech-python_path" type="text" maxlength="4096" autocomplete="off" spellcheck="false" disabled>
+<div id="speech-resources"></div>
+<details class="speech-paths"><summary>高级：原生库路径</summary>
 <label for="speech-native_lib">原生库文件</label><input id="speech-native_lib" type="text" maxlength="4096" autocomplete="off" spellcheck="false" disabled>
-<p class="setting-help">填写实际已安装路径；不猜测环境或自动安装。</p></details>
+<p class="setting-help">使用已编译的 Q8 / ROCm 原生库；下载模型不会安装 Python 依赖或编译此库。</p></details>
 <p id="speech-draft" class="setting-help"></p><button id="speech-save" class="button primary" disabled>保存并检测候选路径</button></div>
 <div class="setting-group"><h2>运行状态</h2><dl class="connection-info">
 <div><dt>环境</dt><dd id="speech-environment_state">未知</dd></div><div><dt>模型文件</dt><dd id="speech-models_state">未知</dd></div>
@@ -74,6 +77,7 @@ export const speechSettingsMarkup = `<div class="setting-group"><h2>本地千问
 
 /** Mounted in the existing settings section; all service traffic goes through native IPC. */
 export class SpeechSettings {
+  private resources?: ResourceControls;
   private snapshot?: SpeechSnapshot;
   private preferences?: SpeechPreferences;
   private visible = false;
@@ -94,7 +98,7 @@ export class SpeechSettings {
   private player?: QwenSpeech;
   private audition: 'unplayed' | 'generating' | 'playing' | 'completed' | 'stopped' | 'failed' = 'unplayed';
   private readonly cleanup = new AbortController();
-  constructor(private readonly root: HTMLElement, private readonly view: Window, private readonly native: boolean, private readonly bridge: Bridge) {
+  constructor(private readonly root: HTMLElement, private readonly view: Window, private readonly native: boolean, private readonly bridge: Bridge, resourceFactory?: ResourceFactory) {
     root.innerHTML = speechSettingsMarkup;
     for (const key of ['model_dir', 'python_path', 'native_lib']) this.input(key).addEventListener('input', () => {
       this.dirty = true; this.draftRevision++; this.render();
@@ -117,9 +121,21 @@ export class SpeechSettings {
     }, { signal: this.cleanup.signal });
     this.input('volume').addEventListener('change', () => { void this.setPreferences({ volume: Number(this.input('volume').value) }); }, { signal: this.cleanup.signal });
     this.button('copy').addEventListener('click', () => { void this.copyDiagnostics(); }, { signal: this.cleanup.signal });
+    this.resources = resourceFactory?.(this.node('resources'), patch => {
+      if (!this.visible || this.disposed) return;
+      let changed = false;
+      for (const key of ['model_dir', 'python_path', 'native_lib'] as const) {
+        if (typeof patch[key] === 'string' && this.input(key).value !== patch[key]) { this.input(key).value = patch[key]; changed = true; }
+      }
+      if (changed) { this.dirty = true; this.draftRevision++; this.render(); }
+    }, () => this.getDraft());
+    this.node('resources').addEventListener('speech-resources-busy', () => this.render(), { signal: this.cleanup.signal });
     this.render();
   }
   private node(id: string): HTMLElement { return this.root.querySelector<HTMLElement>('#speech-' + id)!; }
+  private getDraft(): SpeechConfig {
+    return { model_dir: this.input('model_dir').value.trim(), python_path: this.input('python_path').value.trim(), native_lib: this.input('native_lib').value.trim() };
+  }
   private input(id: string): HTMLInputElement { return this.node(id) as HTMLInputElement; }
   private button(id: string): HTMLButtonElement { return this.node(id) as HTMLButtonElement; }
   private live(epoch: number): boolean { return this.visible && !this.disposed && this.epoch === epoch; }
@@ -127,6 +143,7 @@ export class SpeechSettings {
     if (this.disposed || this.visible === visible) return;
     this.visible = visible; this.epoch++;
     if (!visible) {
+      this.resources?.setVisible(false);
       this.view.clearTimeout(this.poll); this.poll = undefined;
       this.stops.splice(0).forEach(stop => stop()); this.subscribed = false;
       if (this.player && this.player.state.phase !== 'idle') this.audition = 'stopped';
@@ -210,7 +227,7 @@ export class SpeechSettings {
       if (this.refreshing || this.pending || this.snapshot?.busy) return;
       this.refreshing = true;
     }
-    else if (!interrupt && (this.pending || this.snapshot?.busy || this.player?.state.phase !== 'idle')) return;
+    else if (!interrupt && (this.pending || this.snapshot?.busy || this.resources?.isBusy() || this.player?.state.phase !== 'idle')) return;
     if (interrupt && this.pendingAction === action) return;
     if (action === 'stop' && !this.canStop()) return;
     if (action === 'start' && (!this.snapshot?.configured || this.snapshot.ownership === 'external')) return;
@@ -236,9 +253,9 @@ export class SpeechSettings {
       && (['model_dir', 'python_path', 'native_lib'] as const).some(key => this.input(key).value.trim() !== s.config[key]);
   }
   private async save(): Promise<void> {
-    if (!this.native || !this.visible || !this.subscribed || this.pending || this.snapshot?.busy || this.player?.state.phase !== 'idle' || !this.dirty) return;
+    if (!this.native || !this.visible || !this.subscribed || this.pending || this.snapshot?.busy || this.resources?.isBusy() || this.player?.state.phase !== 'idle' || !this.dirty) return;
     if (this.pathsLocked()) { this.error = '请先停止语音服务，再保存修改后的路径；草稿会保留。'; this.render(); return; }
-    const config: SpeechConfig = { model_dir: this.input('model_dir').value.trim(), python_path: this.input('python_path').value.trim(), native_lib: this.input('native_lib').value.trim() };
+    const config = this.getDraft();
     if (Object.values(config).some(path => !path.startsWith('/') || path.startsWith('//') || path.includes(String.fromCharCode(92)) || Array.from(path).some(char => char.charCodeAt(0) < 32))) {
       this.error = '请填写三个已有文件或目录的 WSL 绝对路径，再保存并检测。'; this.render(); return;
     }
@@ -274,7 +291,10 @@ export class SpeechSettings {
     const s = this.snapshot, p = this.preferences;
     const enabled = this.native && this.visible && this.subscribed && !this.disposed;
     const active = !!this.player && this.player.state.phase !== 'idle';
-    const busy = !!this.pending || !!s?.busy || active;
+    const externalBusy = !!this.pending || !!s?.busy || active;
+    const busy = externalBusy || !!this.resources?.isBusy();
+    this.resources?.setBlocked(externalBusy || s?.service_state === 'running' || s?.ownership === 'managed');
+    this.resources?.setVisible(enabled);
     const labels: Record<string, string> = { unknown: '未知', checking: '检测中', passed: '通过', error: '异常', stopped: '已停止', starting: '启动中', running: '运行中', stopping: '停止中', unloaded: '未加载', loading: '加载中', ready: '就绪', generating: '生成中' };
     for (const key of ['environment_state', 'models_state', 'service_state', 'model_state'] as const) this.node(key).textContent = labels[s?.[key] ?? 'unknown'];
     this.node('distribution').textContent = s?.distribution || '未知（沿用启动器配置）';
@@ -307,5 +327,5 @@ export class SpeechSettings {
     this.button('copy').disabled = !this.native || !s;
     this.node('diagnostics').textContent = speechDiagnostics(s, p);
   }
-  dispose(): void { if (this.disposed) return; this.setVisible(false); this.disposed = true; this.cleanup.abort(); }
+  dispose(): void { if (this.disposed) return; this.setVisible(false); this.disposed = true; this.resources?.dispose(); this.cleanup.abort(); }
 }

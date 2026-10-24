@@ -78,6 +78,9 @@ impl WslSpeechRuntime {
             "--launch-held",
             "--stop",
             "--probe-owned",
+            "--resources-discover",
+            "--resources-browse",
+            "--resources-download",
         ]
         .contains(&mode)
         {
@@ -110,7 +113,12 @@ impl WslSpeechRuntime {
         Ok(c)
     }
     fn spawn(config: &Config, mode: &str, payload: &Value, hold: bool) -> Result<Spawned, String> {
-        let mut bytes = serde_json::to_vec(&json!({"source":STANDARD.encode(HELPER)}))
+        let source = if mode.starts_with("--resources-") {
+            include_str!("../helpers/speech_resources.py")
+        } else {
+            HELPER
+        };
+        let mut bytes = serde_json::to_vec(&json!({"source":STANDARD.encode(source)}))
             .map_err(|_| "无法编码语音操作。")?;
         bytes.push(b'\n');
         bytes.extend(serde_json::to_vec(payload).map_err(|_| "无法编码语音操作。")?);
@@ -135,20 +143,26 @@ impl WslSpeechRuntime {
                 Err(())
             });
         });
+        let resource = mode.starts_with("--resources-");
         let (tx, output) = mpsc::sync_channel(32);
         thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
             let mut total = 0usize;
             loop {
                 let mut line = Vec::new();
-                match (&mut reader).take(8193).read_until(b'\n', &mut line) {
+                match (&mut reader)
+                    .take(if resource { 65537 } else { 8193 })
+                    .read_until(b'\n', &mut line)
+                {
                     Ok(0) => {
                         let _ = tx.send(Ok(None));
                         break;
                     }
                     Ok(_) => {
                         total += line.len();
-                        if line.len() > 8192 || total > 65536 {
+                        if line.len() > (if resource { 65536 } else { 8192 })
+                            || total > (if resource { 8 * 1024 * 1024 } else { 65536 })
+                        {
                             let _ = tx.send(Err(()));
                             break;
                         }
@@ -210,7 +224,12 @@ impl WslSpeechRuntime {
             }
             if cancelled_at.is_some() {
                 input.take();
-                if cancelled_at.unwrap().elapsed() > Duration::from_secs(2) {
+                let grace = if mode == "--resources-download" {
+                    20
+                } else {
+                    2
+                };
+                if cancelled_at.unwrap().elapsed() > Duration::from_secs(grace) {
                     let _ = p.child.kill();
                 }
             }
@@ -241,7 +260,12 @@ impl WslSpeechRuntime {
             if exited && read_done {
                 break;
             }
-            if cancelled_at.is_some_and(|t| t.elapsed() > Duration::from_secs(5)) {
+            let limit = if mode == "--resources-download" {
+                25
+            } else {
+                5
+            };
+            if cancelled_at.is_some_and(|t| t.elapsed() > Duration::from_secs(limit)) {
                 let _ = p.child.kill();
                 break;
             }
@@ -361,6 +385,92 @@ impl WslSpeechRuntime {
                 None
             },
         }
+    }
+}
+fn resource_result(value: Value) -> Result<Value, String> {
+    if value.get("ok").and_then(Value::as_bool) == Some(true) {
+        return Ok(value.get("result").cloned().unwrap_or(Value::Null));
+    }
+    let message = match value.get("error").and_then(Value::as_str) {
+        Some("existing_model_mismatch") => "目标目录已有不兼容模型，未覆盖；请选择新目录。",
+        Some("model_hash_mismatch") => "下载模型的 SHA256 不匹配，未发布文件，可重试。",
+        Some("unsafe_download_directory" | "unsafe_model_file" | "unsafe_path") => {
+            "路径不安全；请使用当前 WSL 用户拥有的非共享目录。"
+        }
+        Some("download_busy") => "此目录已有模型下载，请稍后重试。",
+        Some("untrusted_download_redirect") => "模型服务器重定向不在可信 HTTPS 白名单内。",
+        Some("cancelled") => "模型下载已取消。",
+        Some("incomplete_download") => "模型下载不完整，未发布文件，可重试。",
+        _ => "资源操作失败，请检查路径、权限或网络后重试。",
+    };
+    Err(message.into())
+}
+impl crate::speech_resources::Runtime for WslSpeechRuntime {
+    fn discover(
+        &self,
+        config: &SpeechConfig,
+    ) -> Result<crate::speech_resources::Discovery, String> {
+        let result = self.exchange(
+            &self.config()?,
+            "--resources-discover",
+            json!({"python_path":config.python_path,"model_dir":config.model_dir,"native_lib":config.native_lib}),
+            false,
+            &Cancellation::default(),
+            Duration::from_secs(110),
+            &|_| {},
+        )?;
+        serde_json::from_value(resource_result(result)?).map_err(|_| "Python 候选结果无效。".into())
+    }
+    fn browse(
+        &self,
+        path: Option<String>,
+        kind: crate::speech_resources::PathKind,
+    ) -> Result<crate::speech_resources::Directory, String> {
+        let result = self.exchange(
+            &self.config()?,
+            "--resources-browse",
+            json!({"path":path,"kind":kind}),
+            false,
+            &Cancellation::default(),
+            Duration::from_secs(10),
+            &|_| {},
+        )?;
+        serde_json::from_value(resource_result(result)?).map_err(|_| "目录浏览结果无效。".into())
+    }
+    fn download(
+        &self,
+        path: &str,
+        cancel: &Cancellation,
+        progress: &dyn Fn(crate::speech_resources::Progress),
+    ) -> Result<(), String> {
+        let result = self.exchange(
+            &self.config()?,
+            "--resources-download",
+            json!({"model_dir":path}),
+            true,
+            cancel,
+            Duration::from_secs(3600),
+            &|value| {
+                if let Ok(update) =
+                    serde_json::from_value::<crate::speech_resources::Progress>(value.clone())
+                {
+                    if update.downloaded_bytes <= 6 * 1024 * 1024 * 1024u64
+                        && update
+                            .total_bytes
+                            .is_none_or(|n| n <= 6 * 1024 * 1024 * 1024u64)
+                        && update.file.as_deref().is_none_or(|name| {
+                            matches!(
+                                name,
+                                "qwen-talker-1.7b-base-Q8_0.gguf" | "qwen-tokenizer-12hz-Q8_0.gguf"
+                            )
+                        })
+                    {
+                        progress(update);
+                    }
+                }
+            },
+        )?;
+        resource_result(result).map(|_| ())
     }
 }
 impl Runtime for WslSpeechRuntime {

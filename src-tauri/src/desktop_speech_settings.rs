@@ -1,6 +1,9 @@
 //! Narrow trusted settings facade; runtime paths never become JS commands.
 use super::{assert_local, settings_page, Controller};
 use crate::{
+    speech_resources::{
+        Directory, Discovery, DownloadStatus, Manager as ResourceManager, PathKind,
+    },
     speech_settings::{
         Manager as SpeechManager, PreferencesPatch, SpeechAction, SpeechConfig, SpeechPreferences,
         SpeechSnapshot,
@@ -16,6 +19,7 @@ use tauri::{Emitter, Manager, Webview};
 
 pub(super) struct SpeechControls {
     manager: Result<Arc<SpeechManager>, String>,
+    resources: Result<Arc<ResourceManager>, String>,
     tests: Mutex<HashMap<String, String>>,
 }
 impl SpeechControls {
@@ -32,7 +36,18 @@ impl SpeechControls {
                 .clone()
                 .ok_or_else(|| "请先完成主程序的 WSL 环境配置。".to_string())
         });
+        let resource_app = app.clone();
+        let mut resources = Err("语音资源尚未初始化。".to_string());
         let result = WslSpeechRuntime::new(provider).and_then(|runtime| {
+            let runtime = Arc::new(runtime);
+            resources = Ok(Arc::new(ResourceManager::new(
+                runtime.clone(),
+                Arc::new(move |snapshot| {
+                    for label in ["launcher-settings", "dsh-settings"] {
+                        let _ = resource_app.emit_to(label, "launcher-speech-download", &snapshot);
+                    }
+                }),
+            )));
             let listener = Arc::new(move |snapshot: SpeechSnapshot| {
                 for label in ["launcher-settings", "dsh-settings"] {
                     let _ = app.emit_to(label, "launcher-speech-state", &snapshot);
@@ -40,13 +55,14 @@ impl SpeechControls {
             });
             SpeechManager::new(
                 directory.join("speech-settings.json"),
-                Arc::new(runtime),
+                runtime,
                 Some(listener),
             )
             .map(Arc::new)
         });
         Self {
             manager: result,
+            resources,
             tests: Mutex::new(HashMap::new()),
         }
     }
@@ -148,6 +164,52 @@ pub(super) async fn cancel_speech_test(view: Webview, request_id: String) -> Res
     assert_page(&view, false)?;
     super::speech::cancel_for_view(&view, request_id).await
 }
+fn resource_controls(app: &tauri::AppHandle) -> Result<Arc<ResourceManager>, String> {
+    app.try_state::<Arc<SpeechControls>>()
+        .ok_or("语音资源尚未初始化。")?
+        .resources
+        .clone()
+}
+#[tauri::command]
+pub(super) async fn discover_speech_resources(view: Webview) -> Result<Discovery, String> {
+    assert_page(&view, true)?;
+    let resources = resource_controls(view.app_handle())?;
+    let config = controls(view.app_handle())?.get_snapshot().config;
+    tauri::async_runtime::spawn_blocking(move || resources.discover(&config))
+        .await
+        .map_err(|_| "资源发现任务未完成。".to_string())?
+}
+#[tauri::command]
+pub(super) async fn browse_speech_path(
+    view: Webview,
+    path: Option<String>,
+    kind: PathKind,
+) -> Result<Directory, String> {
+    assert_page(&view, true)?;
+    let resources = resource_controls(view.app_handle())?;
+    tauri::async_runtime::spawn_blocking(move || resources.browse(path, kind))
+        .await
+        .map_err(|_| "目录浏览任务未完成。".to_string())?
+}
+#[tauri::command]
+pub(super) fn get_speech_download(view: Webview) -> Result<DownloadStatus, String> {
+    assert_page(&view, false)?;
+    Ok(resource_controls(view.app_handle())?.snapshot())
+}
+#[tauri::command]
+pub(super) fn download_speech_model(
+    view: Webview,
+    model_dir: String,
+) -> Result<DownloadStatus, String> {
+    assert_page(&view, true)?;
+    let manager = controls(view.app_handle())?;
+    resource_controls(view.app_handle())?.start(model_dir, &manager)
+}
+#[tauri::command]
+pub(super) fn cancel_speech_download(view: Webview) -> Result<DownloadStatus, String> {
+    assert_page(&view, false)?;
+    Ok(resource_controls(view.app_handle())?.cancel())
+}
 /// Native Back/close safety net. Only this settings view's audition ID is stopped.
 pub(super) fn cancel_tests(app: &tauri::AppHandle, label: &str) {
     let Some(state) = app.try_state::<Arc<SpeechControls>>() else {
@@ -177,6 +239,9 @@ pub(super) fn cancel_tests(app: &tauri::AppHandle, label: &str) {
     }
 }
 pub(super) fn shutdown(app: &tauri::AppHandle) {
+    if let Ok(resources) = resource_controls(app) {
+        resources.shutdown();
+    }
     if let Ok(manager) = controls(app) {
         manager.shutdown();
     }

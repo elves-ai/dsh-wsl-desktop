@@ -713,7 +713,7 @@ test('late pet listener registration is cleaned once without a read or UI mutati
 
 test('all configuration sections and controls remain on the in-window settings page, not the native titlebar', () => {
   const frontend = readFileSync(new URL('../src/main.ts', import.meta.url), 'utf8');
-  assert.match(frontend, /const settingsSections = \['environment', 'notifications', 'power', 'pet', 'speech', 'updates', 'logs'\] as const/);
+  assert.match(frontend, /const settingsSections = \['environment', 'notifications', 'power', 'pet', 'updates', 'logs'\] as const/);
   assert.doesNotMatch(frontend, /[“「]文件[”」]菜单/);
   assert.match(frontend, /托盘右键菜单/);
   const settingsTemplate = frontend.slice(frontend.indexOf('app.innerHTML = settingsView ?'), frontend.indexOf('<main class="startup"'));

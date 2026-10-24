@@ -28,6 +28,8 @@ test('real browser keeps speech above, input below and controls inside either ed
       if (document.getElementById('pet-status')) failures.push(['pet head status remains']);
       document.getElementById('notice').textContent = '移动失败后仍可打开设置';
       document.getElementById('pet-topmost').textContent = '窗口置顶：已开启';
+      document.getElementById('pet-animation').innerHTML = '<option>被鼠标拖拽悬空反馈</option>';
+      if (document.querySelector('#pet-menu .pet-menu-credit, #pet-menu .asset-license, #pet-menu .pet-credit')) failures.push(['menu material attribution remains']);
       const bubble = document.getElementById('pet-bubble');
       bubble.className = 'pet-notifications';
       bubble.innerHTML = '<button class="pet-notification-open"><span class="pet-notification-title">完成通知</span><span class="pet-notification-body">任务已经完成，可打开查看</span></button><button class="pet-notification-close">×</button>';
@@ -67,7 +69,16 @@ test('real browser keeps speech above, input below and controls inside either ed
             if (rect.x !== original.x || rect.width !== original.width || rect.height !== original.height) failures.push(['stage/pet changed',left,right]);
           }
           // Native hit reporting reads these same post-layout bounding boxes.
-          if (panel === 'pet-menu') { const menu = document.getElementById('pet-menu').getBoundingClientRect(); if (menu.width > 180 || menu.height > 300) failures.push(['menu too large',menu.width,menu.height]); }
+          if (panel === 'pet-menu') {
+            const element = document.getElementById('pet-menu'), menu = element.getBoundingClientRect();
+            if (menu.width > 180 || menu.height > 308) failures.push(['menu too large',menu.width,menu.height]);
+            if (element.scrollHeight > element.clientHeight || element.scrollWidth > element.clientWidth) failures.push(['menu needs scrolling',left,right,element.scrollHeight,element.clientHeight]);
+            if (getComputedStyle(element).overflowY !== 'visible') failures.push(['menu still has a scroll container']);
+            for (const control of element.querySelectorAll('button,select')) {
+              const rect = control.getBoundingClientRect();
+              if (rect.top < menu.top || rect.bottom > menu.bottom || rect.top < 0 || rect.bottom > 320) failures.push(['menu control clipped',control.textContent,rect.top,rect.bottom,menu.bottom]);
+            }
+          }
           const tools = panel === 'pet-menu' ? [...document.querySelectorAll('#pet-menu button')] : [];
           for (const button of tools) {
             const rect = button.getBoundingClientRect();

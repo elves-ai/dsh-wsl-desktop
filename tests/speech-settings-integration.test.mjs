@@ -10,7 +10,7 @@ test('speech settings management and pet preferences have separate exact local c
  assert.equal(settings.local,true);assert.equal(settings.remote,undefined);assert.deepEqual(settings.webviews,['launcher-settings','dsh-settings']);
  assert.deepEqual(pet.webviews,['assistant-pet']);assert.equal(pet.local,true);assert.equal(pet.remote,undefined);
  assert.deepEqual(pet.permissions,['allow-get-speech-preferences','allow-set-speech-preferences']);
- for(const name of ['get_speech_settings','save_speech_config','speech_action','get_speech_preferences','set_speech_preferences','test_speech','cancel_speech_test']){
+ for(const name of ['get_speech_settings','save_speech_config','speech_action','get_speech_preferences','set_speech_preferences','test_speech','cancel_speech_test','discover_speech_resources','browse_speech_path','download_speech_model','cancel_speech_download','get_speech_download']){
   assert.ok(settings.permissions.includes('allow-'+name.replaceAll('_','-')));
   assert.ok(read('src-tauri/build.rs').includes('"'+name+'"'));
   assert.ok(read('src-tauri/src/desktop.rs').includes('speech_settings::'+name));
@@ -18,9 +18,14 @@ test('speech settings management and pet preferences have separate exact local c
  for(const p of settings.permissions)assert.doesNotMatch(p,/shell|http|fs|perform-action|set-project/);
 });
 test('speech settings stay in the current trusted settings navigation and not the titlebar',()=>{
- assert.ok(read('src/main.ts').includes("'pet', 'speech', 'updates'"));
+ const main=read('src/main.ts');
+ assert.ok(main.includes("'pet', 'updates'"));
+ assert.ok(main.includes("parameters.get('section') === 'speech' ? 'pet'"));
+ assert.match(main, /<section id="settings-pet"[\s\S]*?<div id="settings-speech"[\s\S]*?<\/section>/);
+ assert.ok(main.includes("setVisible(selected === 'pet'"));
+ assert.ok(main.includes("settingsSection === 'pet'"));
  assert.ok(read('src-tauri/src/desktop.rs').includes('"pet" | "speech" | "updates"'));
- assert.ok(read('src-tauri/src/desktop_settings.rs').includes('"speech" => "speech"'));
+ assert.ok(read('src-tauri/src/desktop_settings.rs').includes('"speech" => "pet"'));
  assert.doesNotMatch(read('titlebar.html'),/speech-model|speech-start|speech-volume/);
  assert.doesNotMatch(read('src-tauri/tauri.conf.json'),/18765/);
 });
@@ -28,7 +33,7 @@ test('native speech management guards settings callers and auditions only fixed 
  const s=read('src-tauri/src/desktop_speech_settings.rs');
  assert.ok(s.includes('settings_page::label(view.window().label())'));
  assert.ok(s.includes('settings_page::is_active(view.window().label())'));
- for(const name of ['get_speech_settings','save_speech_config','speech_action','test_speech','cancel_speech_test']){
+ for(const name of ['get_speech_settings','save_speech_config','speech_action','test_speech','cancel_speech_test','discover_speech_resources','browse_speech_path','download_speech_model','cancel_speech_download','get_speech_download']){
   const from=s.indexOf('fn '+name+'(');assert.ok(from>=0,name);
   const body=s.slice(from,s.indexOf('#[tauri::command]',from+4)<0?undefined:s.indexOf('#[tauri::command]',from+4));
   assert.ok(body.includes('assert_page(&view,'),name+' exact trusted settings guard');
@@ -45,7 +50,7 @@ test('only small trusted bridge sources are embedded, not models or executable s
  assert.ok(native.includes('--launch-held'));assert.ok(native.includes('--inspect'));
  assert.ok(native.includes('no_proxy()'));assert.ok(native.includes('Policy::none()'));
  assert.ok(native.includes('X-DSH-Speech-Control'));
- assert.doesNotMatch(read('src/speech-settings.ts'),/fetch\(|XMLHttpRequest|http:\/\/127\.0\.0\.1:18765/);
+ for (const file of ['src/speech-settings.ts','src/speech-resources.ts']) assert.doesNotMatch(read(file),/fetch\(|XMLHttpRequest|http:\/\/127\.0\.0\.1:18765/);
  assert.ok(read('scripts/Build-Windows.ps1').includes("'services/qwen_tts'"));
  assert.ok(read('scripts/Build-Windows.ps1').includes("'src-tauri/helpers'"));
 });

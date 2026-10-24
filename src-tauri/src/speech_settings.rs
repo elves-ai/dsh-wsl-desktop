@@ -374,6 +374,7 @@ struct State {
     owned: Option<ManagedSession>,
     cancelled_requests: std::collections::VecDeque<String>,
     closed: bool,
+    resource_download: bool,
 }
 struct Shared {
     state: Mutex<State>,
@@ -388,6 +389,13 @@ struct Shared {
 /// All file updates (paths AND preferences) are serialized by the same state lock.
 pub struct Manager {
     shared: Arc<Shared>,
+}
+pub struct ResourceDownloadLease(Arc<Shared>);
+impl Drop for ResourceDownloadLease {
+    fn drop(&mut self) {
+        self.0.state.lock().unwrap().resource_download = false;
+        self.0.changed.notify_all();
+    }
 }
 impl Manager {
     pub fn new(
@@ -425,6 +433,7 @@ impl Manager {
                     owned: None,
                     cancelled_requests: Default::default(),
                     closed: false,
+                    resource_download: false,
                 }),
                 changed: Condvar::new(),
                 worker: Mutex::new(()),
@@ -434,6 +443,34 @@ impl Manager {
                 listener,
             }),
         })
+    }
+    /// Atomically excludes config checks and both explicit/automatic model starts.
+    /// A lease does not mutate persisted settings or claim that a model is ready.
+    pub fn begin_resource_download(&self) -> Result<ResourceDownloadLease, String> {
+        let _worker = self
+            .shared
+            .worker
+            .try_lock()
+            .map_err(|_| "语音操作尚未结束，请稍后重试。")?;
+        let _stopping = self
+            .shared
+            .stopping
+            .try_lock()
+            .map_err(|_| "语音服务正在停止。")?;
+        let mut state = self.shared.state.lock().unwrap();
+        if state.closed
+            || state.resource_download
+            || state.operation.is_some()
+            || state.owned.is_some()
+            || matches!(
+                state.snapshot.service_state,
+                ServiceState::Starting | ServiceState::Running | ServiceState::Stopping
+            )
+        {
+            return Err("请先结束语音操作并停止服务，再下载模型。".into());
+        }
+        state.resource_download = true;
+        Ok(ResourceDownloadLease(self.shared.clone()))
     }
     pub fn get_snapshot(&self) -> SpeechSnapshot {
         self.shared.state.lock().unwrap().snapshot.clone()
@@ -611,6 +648,9 @@ impl Manager {
             let mut state = self.shared.state.lock().unwrap();
             if state.closed {
                 return Err("语音控制器已关闭。".into());
+            }
+            if state.resource_download && matches!(kind, "save" | "check" | "start") {
+                return Err("模型正在下载，请完成或取消下载后再操作。".into());
             }
             // A live model must never silently retain old paths while the saved
             // configuration changes underneath it. Check before superseding work.

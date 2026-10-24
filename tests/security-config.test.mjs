@@ -454,7 +454,8 @@ test('settings navigation reuses local children in the existing parent without r
   assert.ok(settings.includes('app.get_webview(page_label)'));
   assert.ok(settings.includes('page.window().label() != window.label()'));
   assert.ok(settings.includes('window.add_child('));
-  assert.ok(settings.includes('index.html?view=settings&section={section}'));
+  assert.ok(settings.includes('index.html?view=settings&section={}'));
+  assert.match(settings, /format!\(\s*"index.html\?view=settings&section=\{\}",\s*state.section/);
   assert.ok(settings.includes('local_content(target, page_label)'));
   assert.ok(settings.includes('tauri::webview::NewWindowResponse::Deny'));
   assert.ok(settings.includes('"launcher-show-settings"'));

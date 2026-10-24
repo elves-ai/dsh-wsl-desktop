@@ -2,6 +2,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import './style.css';
 import { SpeechSettings } from './speech-settings';
+import { SpeechResources } from './speech-resources';
 import appIconUrl from '../app-icon.png';
 
 interface EnvironmentCheck {
@@ -77,14 +78,15 @@ if (!app) throw new Error('缺少应用挂载节点');
 
 const parameters = new URL(window.location.href).searchParams;
 const settingsView = parameters.get('view') === 'settings';
-const settingsSections = ['environment', 'notifications', 'power', 'pet', 'speech', 'updates', 'logs'] as const;
+const settingsSections = ['environment', 'notifications', 'power', 'pet', 'updates', 'logs'] as const;
 type SettingsSection = typeof settingsSections[number];
-let settingsSection: SettingsSection = settingsSections.find(section => section === parameters.get('section')) || 'environment';
+const initialSection = parameters.get('section') === 'speech' ? 'pet' : parameters.get('section');
+let settingsSection: SettingsSection = settingsSections.find(section => section === initialSection) || 'environment';
 const mark = `<img src="${appIconUrl}" width="36" height="36" alt="" />`;
 // Templates contain only developer-owned markup. All native values use textContent/value.
 app.innerHTML = settingsView ? `
 <main class="settings-shell" id="settings-shell">
-  <aside class="settings-sidebar"><button class="settings-back" id="settings-back" type="button" aria-label="返回"><svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="m11.5 4.5-5.5 5.5 5.5 5.5M6 10h10" /></svg><span>返回</span></button><div class="settings-brand"><span class="small-mark">${mark}</span><span>DSH<small>应用设置</small></span></div><nav aria-label="设置分类">${settingsSections.map((section,index) => `<button class="settings-nav" id="nav-${section}" type="button"><span class="nav-index" aria-hidden="true">0${index+1}</span>${['环境与目录','系统通知','电源管理','桌面宠物','语音','软件更新','诊断日志'][index]}</button>`).join('')}</nav><p class="settings-sidebar-note">设置保存在本机<br>不会上传到维护者</p></aside>
+  <aside class="settings-sidebar"><button class="settings-back" id="settings-back" type="button" aria-label="返回"><svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="m11.5 4.5-5.5 5.5 5.5 5.5M6 10h10" /></svg><span>返回</span></button><div class="settings-brand"><span class="small-mark">${mark}</span><span>DSH<small>应用设置</small></span></div><nav aria-label="设置分类">${settingsSections.map((section,index) => `<button class="settings-nav" id="nav-${section}" type="button"><span class="nav-index" aria-hidden="true">0${index+1}</span>${['环境与目录','系统通知','电源管理','桌面宠物','软件更新','诊断日志'][index]}</button>`).join('')}</nav><p class="settings-sidebar-note">设置保存在本机<br>不会上传到维护者</p></aside>
   <div class="settings-content">
     <header class="settings-heading"><p class="eyebrow">应用设置</p><h1 id="settings-title" tabindex="-1">环境与目录</h1><p id="settings-description">指定已有的 DSH 项目，查看本地运行配置。</p></header>
     <div class="error-notice" id="error-notice" role="alert" hidden></div>
@@ -95,7 +97,6 @@ app.innerHTML = settingsView ? `
     </section>
     <section id="settings-notifications" aria-label="系统通知" hidden><div class="setting-group"><div class="toggle-row"><div><h2>任务通知</h2><p>提醒任务结束、失败，以及需要你选择、回答或确认计划。默认仅在 DSH 不在前台时通知。</p></div><label class="switch"><input id="notifications-enabled" type="checkbox" aria-label="启用系统通知" disabled><span></span></label></div><div class="toggle-row"><div><h2>窗口聚焦时也通知</h2><p id="notifications-focused-help">同时用于桌宠气泡和系统通知。开启后，DSH 窗口聚焦时也按当前通知渠道提醒；可在系统通知关闭时配置，不会开启系统通知。</p></div><label class="switch"><input id="notifications-when-focused" type="checkbox" aria-label="窗口聚焦时也通知" aria-describedby="notifications-focused-help" disabled><span></span></label></div><p id="notification-message" class="setting-help" role="status" aria-live="polite">正在读取通知设置。</p><button class="button secondary" id="test-notification" type="button" disabled>发送测试通知</button></div><p class="setting-help">默认关闭。通知显示会话名称（未命名时显示短编号），不显示对话正文和错误详情。Windows 通知中心可能保留名称；请勿在名称中放入敏感信息。点击任务通知可定位会话（需配套 Harness 前端）；仅启动器运行中有效。本轮结束不代表整个长任务完成。退出启动器后不再提醒。</p><p class="setting-help">若未看到横幅，请检查 Windows 通知权限及勿扰模式。</p></section>
     <section id="settings-power" aria-label="电源管理" hidden><div class="setting-group"><div class="toggle-row"><div><h2>任务期间防休眠</h2><p id="power-help">默认启用。任务运行期间，仅防止系统自动休眠，屏幕仍可熄灭。</p></div><label class="switch"><input id="power-enabled" type="checkbox" aria-label="任务期间防休眠" aria-describedby="power-help power-message" checked disabled><span></span></label></div><p id="power-active" class="setting-help" role="status" aria-live="polite">正在读取保护状态。</p><p id="power-message" class="setting-help" role="status" aria-live="polite">正在读取电源设置。</p><button class="button secondary" id="power-refresh" type="button" disabled>重新检测</button></div><p class="setting-help">最小化到托盘后继续保护；退出启动器后不再保护。不阻止手动睡眠或合盖休眠。</p></section>
-    <section id="settings-speech" aria-label="语音" hidden></section>
     <section id="settings-pet" aria-label="桌面宠物" hidden>
       <div class="setting-group">
         <div class="toggle-row"><div><h2>显示桌面宠物</h2><p id="pet-visible-help">立即显示或隐藏桌面宠物，不会停止 DSH 任务。</p></div><label class="switch"><input id="pet-visible" type="checkbox" aria-label="显示桌面宠物" aria-describedby="pet-visible-help pet-message" disabled><span></span></label></div>
@@ -104,6 +105,7 @@ app.innerHTML = settingsView ? `
         <div class="toggle-row"><div><h2>气泡通知</h2><p id="pet-bubble-help">任务完成、失败时显示摘要；需要回答、确认计划或授权时，可直接在气泡中选择、输入、允许一次或拒绝。待处理请求可手动收起，不会自动授权或取消。</p><p id="pet-bubble-policy" class="setting-help">独立于系统通知开关。桌宠显示时仅用气泡提醒，不发送 Windows 通知；关闭气泡则静默，不回退系统通知。桌宠隐藏时按系统通知开关提醒，不补历史气泡。普通任务提醒前台静默，沿用系统通知中的“窗口聚焦时也通知”选项；待答和授权交互会保留，直到处理或手动收起。</p></div><label class="switch"><input id="pet-bubble-notifications" type="checkbox" aria-label="气泡通知" aria-describedby="pet-bubble-help pet-bubble-policy pet-message" disabled><span></span></label></div>
         <p id="pet-message" class="setting-help" role="status" aria-live="polite">正在读取桌面宠物设置。</p><button class="button secondary" id="pet-refresh" type="button" disabled>重新读取</button>
       </div>
+      <div id="settings-speech" role="region" aria-label="宠物语音设置"></div>
       <p class="setting-help pet-source">来源：<a href="https://github.com/PC2005-cloud/dsh-pet" target="_blank" rel="noopener noreferrer">PC2005-cloud/dsh-pet</a>。动画素材仅限非商业使用。</p>
     </section>
     <section id="settings-updates" aria-label="软件更新" hidden><div class="setting-group"><div class="group-heading"><h2>DSH WSL Desktop</h2><span id="update-current-version" class="muted">正在读取版本</span></div><p id="update-new-version" hidden></p><p id="update-message" role="status" aria-live="polite" tabindex="-1">正在读取更新状态。</p><pre id="update-notes" aria-label="更新说明" hidden></pre><div id="update-progress-row" hidden><progress id="update-progress" aria-label="更新下载进度"></progress><span id="update-progress-label"></span></div><div class="setting-actions"><button class="button secondary" id="check-update" type="button" disabled>检查更新</button><button class="button primary" id="install-update" type="button" hidden disabled>下载并安装</button></div></div><p class="setting-help">仅更新 Windows 启动器，不会更新或停止 WSL 中的 DSH。安装前需要你确认。</p></section>
@@ -161,7 +163,9 @@ let settingsDisposed = false;
 let settingsReturnError = '';
 let settingsReadyError = '';
 let settingsSectionRevision = 0;
-const speechSettings = settingsView ? new SpeechSettings(document.getElementById('settings-speech')!, window, native, { invoke, listen }) : undefined;
+let settingsPageRevealed = !native;
+const speechSettings = settingsView ? new SpeechSettings(document.getElementById('settings-speech')!, window, native, { invoke, listen },
+  (root, onSelect, getDraft) => new SpeechResources(root, window, native, { invoke, listen }, onSelect, getDraft)) : undefined;
 const repositoryInput = document.getElementById('repository-input') as HTMLInputElement;
 const saveRepositoryButton = document.getElementById('save-repository') as HTMLButtonElement;
 let connected = false;
@@ -730,18 +734,18 @@ async function performUpdate(command: 'check_update' | 'install_update'): Promis
 
 function selectSettings(section: string, focus = false): void {
   if (!settingsView) return;
-  const selected = settingsSections.find(item => item === section);
+  const selected = settingsSections.find(item => item === (section === 'speech' ? 'pet' : section));
   if (!selected) return;
   settingsSection = selected;
   const index = settingsSections.indexOf(selected);
-  element('settings-title').textContent = ['环境与目录', '系统通知', '电源管理', '桌面宠物', '语音', '软件更新', '诊断日志'][index] || '';
-  element('settings-description').textContent = ['指定已有的 DSH 项目，查看本地运行配置。', '管理后台任务的系统提醒。', '管理任务期间的系统自动休眠保护。', '管理桌面宠物的显示与随机漫游。', '配置已有的本地千问运行环境与朗读偏好。', '检查并安装 Windows 启动器的新版本。', '查看本次启动和服务操作的脱敏记录。'][index] || '';
+  element('settings-title').textContent = ['环境与目录', '系统通知', '电源管理', '桌面宠物', '软件更新', '诊断日志'][index] || '';
+  element('settings-description').textContent = ['指定已有的 DSH 项目，查看本地运行配置。', '管理后台任务的系统提醒。', '管理任务期间的系统自动休眠保护。', '管理桌面宠物的显示、随机漫游与本地语音。', '检查并安装 Windows 启动器的新版本。', '查看本次启动和服务操作的脱敏记录。'][index] || '';
   for (const item of settingsSections) {
     element('settings-' + item).hidden = item !== selected;
     element('nav-' + item).dataset.active = String(item === selected);
     element('nav-' + item).setAttribute('aria-current', item === selected ? 'page' : 'false');
   }
-  speechSettings?.setVisible(selected === 'speech' && !document.hidden);
+  speechSettings?.setVisible(selected === 'pet' && !document.hidden && settingsPageRevealed);
   if (focus) element('settings-title').focus({ preventScroll: true });
 }
 function showUpdates(): void { selectSettings('updates'); }
@@ -763,7 +767,10 @@ async function readySettingsPage(initialization: Promise<void>[]): Promise<void>
     if (settingsDisposed) return;
     const revision = settingsSectionRevision;
     const section = await invoke<string>('settings_page_ready');
-    if (!settingsDisposed && settingsSectionRevision === revision) selectSettings(section);
+    if (!settingsDisposed) {
+      settingsPageRevealed = true;
+      selectSettings(settingsSectionRevision === revision ? section : settingsSection);
+    }
   } catch {
     if (!settingsDisposed) {
       settingsReadyError = '设置页面准备失败，请重试打开设置。';
@@ -982,7 +989,7 @@ window.addEventListener('beforeunload', () => {
   petDisposed = true; unlistenPet?.(); unlistenPet = undefined;
   unlisten?.(); unlistenShowLogs?.(); unlistenShowSettings?.(); unlistenUpdates?.(); unlistenShowUpdates?.();
 }, { once: true });
-document.addEventListener('visibilitychange', () => speechSettings?.setVisible(settingsSection === 'speech' && !document.hidden));
+document.addEventListener('visibilitychange', () => speechSettings?.setVisible(settingsSection === 'pet' && !document.hidden && settingsPageRevealed));
 window.addEventListener('pagehide', () => speechSettings?.dispose(), { once: true });
 render();
 const initialization = initialize();

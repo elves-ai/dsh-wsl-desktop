@@ -96,7 +96,7 @@ pub(super) fn show_in(window: &Window, section: &str) -> Result<(), String> {
         "notifications" => "notifications",
         "power" => "power",
         "pet" => "pet",
-        "speech" => "speech",
+        "speech" => "pet",
         "updates" => "updates",
         "logs" => "logs",
         _ => "environment",
@@ -116,7 +116,9 @@ pub(super) fn show_in(window: &Window, section: &str) -> Result<(), String> {
             let created = window.add_child(
                 WebviewBuilder::new(
                     page_label,
-                    WebviewUrl::App(format!("index.html?view=settings&section={section}").into()),
+                    WebviewUrl::App(
+                        format!("index.html?view=settings&section={}", state.section).into(),
+                    ),
                 )
                 .focused(false)
                 .on_navigation(move |target| local_content(target, page_label))

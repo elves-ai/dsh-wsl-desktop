@@ -420,14 +420,15 @@ test('pet rejects reordered visibility events independently of roaming preferenc
 });
 
 
-test('pet keeps bottom chrome absent and moves all existing actions and credit inside the compact menu', async () => {
+test('pet keeps all existing menu actions without a bottom material attribution', async () => {
   const ui=setup({view:'pet'}); await tick(); const markup=ui.nodes.get('assistant-root').innerHTML;
   assert.ok(!markup.includes('pet-status'));
   assert.ok(!markup.includes('class="pet-tools"')); assert.ok(!markup.includes('class="pet-attribution"'));
   const menu=markup.slice(markup.indexOf('<section id="pet-menu"'),markup.indexOf('<div id="pet-bubble"'));
   for(const action of ['toggle_chat','open_dsh','pet_settings','hide']) assert.ok(menu.includes('data-action="'+action+'"'));
-  assert.ok(menu.includes('data-pet-command="close-menu"')); assert.ok(menu.includes('data-upstream="true"'));
-  assert.ok(menu.includes('动画素材禁止商用')); assert.ok(!menu.includes('<p>'));
+  assert.ok(menu.includes('data-pet-command="close-menu"'));
+  assert.ok(!menu.includes('data-upstream="true"')); assert.ok(!menu.includes('pet-menu-credit'));
+  assert.ok(!menu.includes('动画素材禁止商用')); assert.ok(!menu.includes('<p>'));
 });
 
 test('pet menu closes on repeated right-click, explicit close, outside press, Escape and blur', async () => {
