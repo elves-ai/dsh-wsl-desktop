@@ -1,6 +1,6 @@
 [package]
 name = "dsh-wsl-desktop"
-version = "0.1.17"
+version = "0.1.18"
 description = "Windows launcher for DeepSeek Harness in WSL"
 edition = "2021"
 rust-version = "1.85"

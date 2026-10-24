@@ -222,6 +222,8 @@ pub trait Runtime: Send + Sync + 'static {
         cancel: &Cancellation,
         progress: &dyn Fn(u8),
     ) -> Result<Inspection, String>;
+    /// Pure bounded status reads may overlap model operations after refresh preemption.
+    /// Must never load models, mutate model files, or start/stop a service.
     fn status(&self, cancel: &Cancellation) -> Result<ServiceStatus, String>;
     fn start(&self, config: &SpeechConfig, cancel: &Cancellation)
         -> Result<ManagedSession, String>;
@@ -380,6 +382,8 @@ struct Shared {
     state: Mutex<State>,
     changed: Condvar,
     worker: Mutex<()>,
+    // Read-only status polling must never reserve admission for model/file operations.
+    refreshing: Mutex<()>,
     stopping: Mutex<()>,
     runtime: Arc<dyn Runtime>,
     store: Store,
@@ -437,6 +441,7 @@ impl Manager {
                 }),
                 changed: Condvar::new(),
                 worker: Mutex::new(()),
+                refreshing: Mutex::new(()),
                 stopping: Mutex::new(()),
                 runtime,
                 store,
@@ -460,7 +465,10 @@ impl Manager {
         let mut state = self.shared.state.lock().unwrap();
         if state.closed
             || state.resource_download
-            || state.operation.is_some()
+            || state
+                .operation
+                .as_ref()
+                .is_some_and(|op| op.kind != "refresh")
             || state.owned.is_some()
             || matches!(
                 state.snapshot.service_state,
@@ -469,8 +477,21 @@ impl Manager {
         {
             return Err("请先结束语音操作并停止服务，再下载模型。".into());
         }
+        let cancelled_refresh = state.operation.is_some();
+        if cancelled_refresh {
+            cancel_operation(&mut state);
+            bump(&mut state, "已让出状态刷新，开始准备模型下载。");
+        }
         state.resource_download = true;
-        Ok(ResourceDownloadLease(self.shared.clone()))
+        let snapshot = cancelled_refresh.then(|| state.snapshot.clone());
+        let lease = ResourceDownloadLease(self.shared.clone());
+        drop(state);
+        drop(_stopping);
+        drop(_worker);
+        if let Some(snapshot) = snapshot {
+            self.shared.emit(snapshot);
+        }
+        Ok(lease)
     }
     pub fn get_snapshot(&self) -> SpeechSnapshot {
         self.shared.state.lock().unwrap().snapshot.clone()
@@ -629,6 +650,7 @@ impl Manager {
         // Cancellation alone is insufficient at process exit: drain any in-flight
         // launch so a successful late child is released before the caller quits.
         drop(self.shared.worker.lock().unwrap());
+        drop(self.shared.refreshing.lock().unwrap());
         drop(self.shared.stopping.lock().unwrap());
         let remaining = self.shared.state.lock().unwrap().owned.take();
         if let Some(session) = remaining {
@@ -691,7 +713,12 @@ impl Manager {
                 {
                     return Ok(state.snapshot.clone());
                 }
-                if !matches!(kind, "stop" | "save") {
+                if !matches!(kind, "stop" | "save")
+                    && !state
+                        .operation
+                        .as_ref()
+                        .is_some_and(|op| op.kind == "refresh")
+                {
                     return Err("另一项语音操作正在进行中。".into());
                 }
                 cancel_operation(&mut state);
@@ -750,7 +777,13 @@ impl Manager {
                     run_stop(&shared, id, &cancel);
                     return;
                 }
-                let _guard = shared.worker.lock().unwrap();
+                // Status is a pure runtime read. Serialize polls separately so a slow
+                // HTTP response cannot block explicit checks, starts or downloads.
+                let _guard = if kind == "refresh" {
+                    shared.refreshing.lock().unwrap()
+                } else {
+                    shared.worker.lock().unwrap()
+                };
                 if !shared.current(id, &cancel) {
                     return;
                 }

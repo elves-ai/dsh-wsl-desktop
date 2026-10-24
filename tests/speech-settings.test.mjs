@@ -61,6 +61,34 @@ test('preview stays unknown, disabled and entirely non-mutating even for synthet
 test('opening visible speech subscribes first then reads only lightweight state and preferences',async()=>{
  const f=fixture();assert.equal(f.calls.length,0);f.show();await tick();assert.deepEqual(f.calls.map(c=>c.name),['get_speech_settings','get_speech_preferences']);assert.equal(f.listeners.size,3);assert.ok(f.order.indexOf('listen:launcher-speech-stop')<f.order.indexOf('get_speech_settings'));assert.equal(f.node('test').disabled,true);assert.equal(f.node('model_state').textContent,'未知');assert.equal(f.node('progress').hidden,true);await f.poll();assert.deepEqual(f.calls.at(-1),{name:'speech_action',args:{action:'refresh'}});f.hide();assert.equal(f.listeners.size,0);assert.equal(f.timers.size,0);
 });
+test('read-only polling never toggles resource locks or status guidance',async()=>{
+ let blocked=false;const locks=[];
+ const f=fixture({resources(){return{isBusy:()=>false,setVisible(){},setBlocked(value){blocked=value;locks.push(value);},dispose(){}};}});
+ f.show();await tick();const message=f.node('message').textContent;const before=locks.length;
+ for(let cycle=0;cycle<3;cycle++){
+  f.event('launcher-speech-state',snapshot({revision:cycle*2+1,busy:true,operation:'refresh'}));
+  assert.equal(blocked,false,'read-only refresh must not disable path browsing or close its panel');
+  assert.equal(f.node('message').textContent,message);
+  assert.equal(f.node('check').disabled,false);assert.equal(f.node('start').disabled,false);
+  f.event('launcher-speech-state',snapshot({revision:cycle*2+2}));
+ }
+ assert.equal(locks.slice(before).includes(true),false);f.settings.dispose();
+});
+test('save, check and start are dispatchable while only a read-only refresh is busy',async()=>{
+ for(const action of ['save','check','start']){
+  const f=fixture({initial:snapshot({busy:true,operation:'refresh'})});f.show();await tick();
+  if(action==='save')f.fill('model_dir','/candidate');
+  assert.equal(f.node(action).disabled,false);f.click(action);await tick();
+  assert.ok(f.calls.some(c=>action==='save'?c.name==='save_speech_config':c.args?.action===action));f.settings.dispose();
+ }
+});
+test('an old refresh failure cannot replace guidance after a newer explicit operation',async()=>{
+ const pending=deferred();
+ const f=fixture({invoke(name,args,fallback){return name==='speech_action'&&args.action==='refresh'?pending.promise:fallback(name,args);}});f.show();await tick();
+ await f.poll();f.click('start');await tick();pending.reject(Error('cancelled refresh'));await tick();
+ assert.doesNotMatch(f.node('message').textContent,/未完成|失败/);f.settings.dispose();
+});
+
 test('poll skips native refresh during start, check and candidate validation without false errors',async()=>{
  for(const operation of ['start','check','save']){
   const f=fixture({initial:snapshot({busy:true,operation}),invoke(name,args,fallback){if(name==='speech_action'&&args.action==='refresh')throw Error('native busy');return fallback(name,args);}});f.show();await tick();await f.poll();assert.equal(f.calls.some(c=>c.args?.action==='refresh'),false);assert.equal(f.node('refresh').disabled,true);assert.doesNotMatch(f.node('message').textContent,/未完成|失败/);f.event('launcher-speech-state',snapshot({revision:2}));assert.equal(f.node('refresh').disabled,false);await f.poll();assert.equal(f.calls.filter(c=>c.args?.action==='refresh').length,1);f.settings.dispose();

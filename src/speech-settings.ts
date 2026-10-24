@@ -227,7 +227,7 @@ export class SpeechSettings {
       if (this.refreshing || this.pending || this.snapshot?.busy) return;
       this.refreshing = true;
     }
-    else if (!interrupt && (this.pending || this.snapshot?.busy || this.resources?.isBusy() || this.player?.state.phase !== 'idle')) return;
+    else if (!interrupt && (this.pending || this.operationBusy() || this.resources?.isBusy() || this.player?.state.phase !== 'idle')) return;
     if (interrupt && this.pendingAction === action) return;
     if (action === 'stop' && !this.canStop()) return;
     if (action === 'start' && (!this.snapshot?.configured || this.snapshot.ownership === 'external')) return;
@@ -240,8 +240,12 @@ export class SpeechSettings {
     try {
       const result = await this.bridge.invoke<unknown>('speech_action', { action });
       if (this.live(epoch)) this.acceptSnapshot(result);
-    } catch { if (this.live(epoch)) this.error = '语音操作未完成。请刷新状态后重试；外部服务请到原终端管理。'; }
+    } catch { if (this.live(epoch) && (action !== 'refresh' || this.serial === token)) this.error = '语音操作未完成。请刷新状态后重试；外部服务请到原终端管理。'; }
     finally { if (this.live(epoch)) { if (this.pending === token) { this.pending = 0; this.pendingAction = undefined; } if (action === 'refresh') this.refreshing = false; this.render(); } }
+  }
+  /** A periodic read-only status probe must not lock path editors or dismiss resource panels. */
+  private operationBusy(): boolean {
+    return !!this.snapshot?.busy && this.snapshot.operation !== 'refresh';
   }
   private canStop(): boolean {
     return this.snapshot?.ownership === 'managed' || this.pendingAction === 'start'
@@ -253,7 +257,7 @@ export class SpeechSettings {
       && (['model_dir', 'python_path', 'native_lib'] as const).some(key => this.input(key).value.trim() !== s.config[key]);
   }
   private async save(): Promise<void> {
-    if (!this.native || !this.visible || !this.subscribed || this.pending || this.snapshot?.busy || this.resources?.isBusy() || this.player?.state.phase !== 'idle' || !this.dirty) return;
+    if (!this.native || !this.visible || !this.subscribed || this.pending || this.operationBusy() || this.resources?.isBusy() || this.player?.state.phase !== 'idle' || !this.dirty) return;
     if (this.pathsLocked()) { this.error = '请先停止语音服务，再保存修改后的路径；草稿会保留。'; this.render(); return; }
     const config = this.getDraft();
     if (Object.values(config).some(path => !path.startsWith('/') || path.startsWith('//') || path.includes(String.fromCharCode(92)) || Array.from(path).some(char => char.charCodeAt(0) < 32))) {
@@ -291,7 +295,7 @@ export class SpeechSettings {
     const s = this.snapshot, p = this.preferences;
     const enabled = this.native && this.visible && this.subscribed && !this.disposed;
     const active = !!this.player && this.player.state.phase !== 'idle';
-    const externalBusy = !!this.pending || !!s?.busy || active;
+    const externalBusy = !!this.pending || this.operationBusy() || active;
     const busy = externalBusy || !!this.resources?.isBusy();
     this.resources?.setBlocked(externalBusy || s?.service_state === 'running' || s?.ownership === 'managed');
     this.resources?.setVisible(enabled);
@@ -308,7 +312,7 @@ export class SpeechSettings {
     // Native snapshot errors are static safe diagnostics; raw RPC exceptions never reach this sink.
     const nativeError = s?.error?.replace(/[\r\n\t]+/g, ' ').slice(0, 400) || '';
     const problem = this.error ? this.error + (nativeError ? ' ' + nativeError : '') : nativeError ? nativeError + ' 请修正后重新检测。' : '';
-    this.node('message').textContent = !this.native ? '浏览器预览不连接 WSL，不读取或更改本机语音配置。' : problem || (s?.busy ? '正在执行语音操作；可取消检测或停止托管服务。' : active ? '正在试听，可随时停止。' : '先检测路径，再启动并加载模型，最后试听。');
+    this.node('message').textContent = !this.native ? '浏览器预览不连接 WSL，不读取或更改本机语音配置。' : problem || (this.operationBusy() ? '正在执行语音操作；可取消检测或停止托管服务。' : active ? '正在试听，可随时停止。' : '先检测路径，再启动并加载模型，最后试听。');
     this.node('message').dataset.error = String(!!this.error || !!s?.error);
     this.node('audio-message').textContent = ({ unplayed: '最近试听：未试听', generating: '最近试听：生成中', playing: '最近试听：播放中', completed: '最近试听：播放完成', stopped: '最近试听：已停止', failed: '最近试听：失败。请点击试听允许本页音频，并检查服务状态。' })[this.audition];
     for (const key of ['model_dir', 'python_path', 'native_lib']) this.input(key).disabled = !enabled;

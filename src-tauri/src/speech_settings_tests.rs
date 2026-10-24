@@ -71,6 +71,9 @@ struct FakeRuntime {
     stops: Mutex<Vec<(String, String)>>,
     cancelled: Mutex<Vec<String>>,
     inspect_gate: Mutex<Option<Arc<Gate>>>,
+    status_gate: Mutex<Option<Arc<Gate>>>,
+    status_cancel: Mutex<Option<Cancellation>>,
+    status_failure: AtomicBool,
     start_gate: Mutex<Option<Arc<Gate>>>,
     prepare_gate: Mutex<Option<Arc<Gate>>>,
     stop_gate: Mutex<Option<Arc<Gate>>>,
@@ -89,6 +92,9 @@ impl Default for FakeRuntime {
             stops: Mutex::new(Vec::new()),
             cancelled: Mutex::new(Vec::new()),
             inspect_gate: Mutex::new(None),
+            status_gate: Mutex::new(None),
+            status_cancel: Mutex::new(None),
+            status_failure: AtomicBool::new(false),
             start_gate: Mutex::new(None),
             prepare_gate: Mutex::new(None),
             stop_gate: Mutex::new(None),
@@ -137,8 +143,20 @@ impl Runtime for FakeRuntime {
             },
         })
     }
-    fn status(&self, _cancel: &Cancellation) -> Result<ServiceStatus, String> {
-        Ok(self.status.lock().unwrap().clone())
+    fn status(&self, cancel: &Cancellation) -> Result<ServiceStatus, String> {
+        let status = self.status.lock().unwrap().clone();
+        let failure = self.status_failure.load(Ordering::Relaxed);
+        let gate = self.status_gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            *self.status_cancel.lock().unwrap() = Some(cancel.clone());
+            gate.block();
+        }
+        // Deliberately ignore cancellation here to exercise controller fencing.
+        if failure {
+            Err("RAW SECRET delayed status error".into())
+        } else {
+            Ok(status)
+        }
     }
     fn start(
         &self,
@@ -477,6 +495,190 @@ fn newer_candidate_and_preference_change_survive_old_late_result() {
     assert_eq!(data.config, Some(config("newer")));
     assert_eq!(data.preferences.volume, 64);
 }
+// Keep test cleanup safe even if an admission assertion fails while status is blocked.
+struct ReleaseGateOnDrop(Arc<Gate>);
+impl Drop for ReleaseGateOnDrop {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+
+#[test]
+fn user_operations_preempt_refresh_without_waiting_or_accepting_its_late_result() {
+    for kind in ["save", "check", "start"] {
+        let (dir, runtime, manager) = setup();
+        saved(&manager);
+        let gate = Arc::new(Gate::default());
+        let _release = ReleaseGateOnDrop(gate.clone());
+        *runtime.status_gate.lock().unwrap() = Some(gate.clone());
+        let poll = manager.action(SpeechAction::Refresh).unwrap();
+        gate.entered();
+        let result = match kind {
+            "save" => manager.save_config(config("newer")),
+            "check" => manager.action(SpeechAction::Check),
+            _ => manager.action(SpeechAction::Start),
+        }
+        .unwrap();
+        assert_eq!(result.operation.as_deref(), Some(kind));
+        assert!(result.revision > poll.revision);
+        assert!(runtime
+            .status_cancel
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .is_cancelled());
+        // A blocked read must not retain the model worker after admission succeeds.
+        let final_state = idle(&manager);
+        assert!(final_state.error.is_none());
+        if kind == "start" {
+            assert_eq!(final_state.model_state, ModelState::Ready);
+        }
+        if kind == "save" {
+            assert_eq!(
+                Store { path: dir.file() }.load().unwrap().config,
+                Some(config("newer"))
+            );
+        }
+        gate.release();
+        drop(manager.shared.refreshing.lock().unwrap());
+        assert_eq!(
+            manager.get_snapshot(),
+            final_state,
+            "late poll overwrote {kind}"
+        );
+    }
+}
+
+#[test]
+fn model_download_preempts_refresh_and_ignores_late_success_or_error() {
+    for fail in [false, true] {
+        let (_dir, runtime, manager) = setup();
+        saved(&manager);
+        runtime.status_failure.store(fail, Ordering::Relaxed);
+        let gate = Arc::new(Gate::default());
+        let _release = ReleaseGateOnDrop(gate.clone());
+        *runtime.status_gate.lock().unwrap() = Some(gate.clone());
+        let poll = manager.action(SpeechAction::Refresh).unwrap();
+        gate.entered();
+        let lease = manager.begin_resource_download().unwrap();
+        let downloading = manager.get_snapshot();
+        assert!(!downloading.busy);
+        assert!(downloading.operation.is_none());
+        assert!(downloading.revision > poll.revision);
+        assert!(runtime
+            .status_cancel
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .is_cancelled());
+        assert!(manager.save_config(config("other")).is_err());
+        assert!(manager.action(SpeechAction::Check).is_err());
+        assert!(manager.action(SpeechAction::Start).is_err());
+        assert!(manager.begin_resource_download().is_err());
+        gate.release();
+        drop(manager.shared.refreshing.lock().unwrap());
+        assert_eq!(manager.get_snapshot(), downloading);
+        drop(lease);
+        runtime.status_failure.store(false, Ordering::Relaxed);
+        manager.action(SpeechAction::Check).unwrap();
+        assert!(idle(&manager).error.is_none());
+    }
+}
+
+#[test]
+fn background_refresh_cannot_preempt_a_real_check_or_relax_download_worker_protection() {
+    let (_dir, runtime, manager) = setup();
+    saved(&manager);
+    let gate = Arc::new(Gate::default());
+    let _release = ReleaseGateOnDrop(gate.clone());
+    *runtime.inspect_gate.lock().unwrap() = Some(gate.clone());
+    manager.action(SpeechAction::Check).unwrap();
+    gate.entered();
+    let checking = manager.get_snapshot();
+    assert_eq!(manager.action(SpeechAction::Refresh).unwrap(), checking);
+    assert!(manager.begin_resource_download().is_err());
+    assert!(manager.action(SpeechAction::Start).is_err());
+    manager.action(SpeechAction::CancelCheck).unwrap();
+    // Even if a new refresh is admitted while the cancelled inspector drains,
+    // downloads must still honor the real worker lock.
+    manager.action(SpeechAction::Refresh).unwrap();
+    idle(&manager);
+    assert!(manager.begin_resource_download().is_err());
+    gate.release();
+    drop(manager.shared.worker.lock().unwrap());
+    assert!(manager.begin_resource_download().is_ok());
+}
+
+#[test]
+fn shutdown_cancels_and_drains_an_inflight_readonly_refresh() {
+    let (_dir, runtime, manager) = setup();
+    let manager = Arc::new(manager);
+    let gate = Arc::new(Gate::default());
+    let _release = ReleaseGateOnDrop(gate.clone());
+    *runtime.status_gate.lock().unwrap() = Some(gate.clone());
+    manager.action(SpeechAction::Refresh).unwrap();
+    gate.entered();
+    let shutting_down = manager.clone();
+    let (finished, completion) = std::sync::mpsc::channel();
+    let worker = thread::spawn(move || {
+        shutting_down.shutdown();
+        finished.send(()).unwrap();
+    });
+    let mut state = manager.shared.state.lock().unwrap();
+    while !state.closed {
+        let (next, timeout) = manager
+            .shared
+            .changed
+            .wait_timeout(state, Duration::from_secs(5))
+            .unwrap();
+        state = next;
+        assert!(!timeout.timed_out(), "shutdown did not cancel status");
+    }
+    drop(state);
+    assert!(runtime
+        .status_cancel
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .is_cancelled());
+    assert!(
+        completion.try_recv().is_err(),
+        "shutdown did not drain status reader"
+    );
+    gate.release();
+    completion.recv_timeout(Duration::from_secs(5)).unwrap();
+    worker.join().unwrap();
+    assert!(!manager.get_snapshot().busy);
+    assert!(manager.get_snapshot().error.is_none());
+}
+
+#[test]
+fn download_still_rejects_owned_external_and_stopping_services() {
+    let (_dir, runtime, manager) = setup();
+    saved(&manager);
+    {
+        let _stopping = manager.shared.stopping.lock().unwrap();
+        assert!(manager.begin_resource_download().is_err());
+    }
+    *runtime.status.lock().unwrap() = ServiceStatus {
+        identity_valid: true,
+        instance_id: Some("external-session-0001".into()),
+        service_state: ServiceState::Running,
+        model_state: ModelState::Ready,
+        gpu_name: None,
+    };
+    manager.action(SpeechAction::Refresh).unwrap();
+    assert_eq!(idle(&manager).ownership, Ownership::External);
+    assert!(manager.begin_resource_download().is_err());
+    *runtime.status.lock().unwrap() = stopped();
+    manager.action(SpeechAction::Start).unwrap();
+    assert_eq!(idle(&manager).ownership, Ownership::Managed);
+    assert!(manager.begin_resource_download().is_err());
+}
+
 #[test]
 fn refresh_is_lightweight_and_manual_external_model_status_is_honest() {
     let (_dir, runtime, manager) = setup();
