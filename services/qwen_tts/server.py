@@ -1,4 +1,4 @@
-"""Loopback-only, offline Qwen3 Q8 ROCm narration service. No GPU import at startup.
+"""Loopback-only, offline Qwen3 Q8 GPU narration service. No GPU import at startup.
 
 Engine injection is an in-process testing API, never a production CLI mode.
 """
@@ -286,10 +286,10 @@ def _engine_child(connection, cancel, model_dir, native_lib, device):
         connection.close()
 
 
-def validate_engine_settings(model_dir, native_lib, device):
+def validate_engine_settings(model_dir, native_lib, device, *, allow_auto=False):
     """Validate local configuration without importing/loading a GPU library."""
-    if not isinstance(device, str) or not re.fullmatch(r"ROCm(?:0|[1-9][0-9]?)", device):
-        raise ServiceError(503, "device must be ROCm followed by 1..2 digits; no CPU fallback")
+    if not (allow_auto and device == "auto") and (not isinstance(device, str) or not re.fullmatch(r"(?:ROCm|CUDA)(?:0|[1-9][0-9]?)", device)):
+        raise ServiceError(503, "explicit CUDA0..99 or ROCm0..99 required; no CPU fallback")
     try:
         model = Path(model_dir).expanduser().resolve()
         library = Path(native_lib).expanduser().resolve()
@@ -587,6 +587,9 @@ class QwenHTTPServer(ThreadingHTTPServer):
         self.service = service
         self._managed = validate_managed_identity(managed) if managed is not None else None
         self.device = getattr(service.engine, "settings", (None, None, "ROCm0"))[2]
+        if not isinstance(self.device, str) or not re.fullmatch(r"(?:ROCm|CUDA)(?:0|[1-9][0-9]?)", self.device):
+            raise ServiceError(503, "unsupported_device")
+        self.backend = "cuda" if self.device.startswith("CUDA") else "rocm"
         self.gpu_name = gpu_name if (isinstance(gpu_name, str) and len(gpu_name) <= 256
                                      and gpu_name.isprintable()) else None
         self.shutdown_started = threading.Event()
@@ -596,7 +599,7 @@ class QwenHTTPServer(ThreadingHTTPServer):
     def status(self):
         return {**IDENTITY, "status_protocol": 1,
                 "instance_id": self._managed["instance_id"] if self._managed else None,
-                "backend": "rocm", "device": self.device, "gpu_name": self.gpu_name,
+                "backend": self.backend, "device": self.device, "gpu_name": self.gpu_name,
                 **self.service.status()}
 
     def managed_shutdown(self):
@@ -811,8 +814,8 @@ def main(argv=None):
     parser.add_argument("--model-dir", default=os.environ.get("DSH_QWEN_MODEL_DIR"),
                         help="explicit local Qwen3 12Hz Base directory (or DSH_QWEN_MODEL_DIR)")
     parser.add_argument("--native-lib", default=os.environ.get("DSH_QWEN_NATIVE_LIB"),
-                        help="external Q8 ROCm shared library (or DSH_QWEN_NATIVE_LIB)")
-    parser.add_argument("--device", default="ROCm0", help="ROCm GPU device, e.g. ROCm0 (no CPU fallback)")
+                        help="external Q8 GPU shared library (or DSH_QWEN_NATIVE_LIB)")
+    parser.add_argument("--device", default="auto", help="auto, CUDA0..99 or ROCm0..99 (no CPU fallback)")
     parser.add_argument("--port", type=int, default=18765)
     parser.add_argument("--managed-stdin", action="store_true", help="read private management identity from bound stdin")
     args = parser.parse_args(argv)
@@ -829,7 +832,7 @@ def main(argv=None):
     if not 1 <= args.port <= 65535:
         parser.error("port must be 1..65535")
     try:
-        settings = validate_engine_settings(args.model_dir, args.native_lib, args.device)
+        settings = validate_engine_settings(args.model_dir, args.native_lib, args.device, allow_auto=True)
     except ServiceError as exc:
         parser.error(exc.error)
     if __package__:
@@ -839,8 +842,14 @@ def main(argv=None):
     if not is_wsl2():
         parser.error("Qwen inference must run inside WSL2; Windows only hosts the desktop UI")
     probe = report(check_gpu=True, device=args.device)
-    if not probe.get("gpu_compute_verified"):
-        parser.error("WSL ROCm GPU compute is not ready; check the ROCm 10.1 runtime. No CPU fallback")
+    actual_device, backend = probe.get("device"), probe.get("backend")
+    if (probe.get("gpu_compute_verified") is not True
+            or not isinstance(actual_device, str)
+            or not re.fullmatch(r"(?:ROCm|CUDA)(?:0|[1-9][0-9]?)", actual_device)
+            or backend != ("cuda" if actual_device.startswith("CUDA") else "rocm")
+            or (args.device != "auto" and actual_device != args.device)):
+        parser.error("WSL GPU compute is not ready; no CPU or different-device fallback")
+    settings = validate_engine_settings(args.model_dir, args.native_lib, actual_device)
     try:
         load_voice()
     except Exception:
@@ -858,7 +867,7 @@ def main(argv=None):
         raise KeyboardInterrupt
 
     signal.signal(signal.SIGTERM, stop_signal)
-    print(f"dsh-pet-qwen listening on http://127.0.0.1:{args.port}; lazy offline Q8 ROCm, {args.device}", flush=True)
+    print(f"dsh-pet-qwen listening on http://127.0.0.1:{args.port}; lazy offline Q8 {backend}, {actual_device}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

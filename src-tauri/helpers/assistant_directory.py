@@ -8,7 +8,7 @@ from pathlib import Path
 def prepare(raw):
     if not isinstance(raw, str) or len(raw) > 4096 or any(ord(c) < 32 for c in raw):
         raise ValueError("invalid path")
-    raw = raw.strip() or "~/DSH-Assistant"
+    raw = raw.strip() or "~/.dsh-wsl-desktop/assistant"
     if raw.startswith("~/"):
         target = Path.home() / raw[2:]
     elif raw.startswith("/") and not raw.startswith("//"):
@@ -21,7 +21,24 @@ def prepare(raw):
     # rejected so the confirmation never silently selects another project.
     if target.is_symlink():
         raise ValueError("linked workspace")
-    target.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if target == Path.home() / ".dsh-wsl-desktop" / "assistant":
+        # pathlib parents=True creates intermediate directories with default
+        # permissions, not mode. The shared managed root must start private so
+        # speech initialization can safely reuse it after assistant-first setup.
+        parent = target.parent
+        if parent.is_symlink():
+            raise ValueError("linked data root")
+        parent.mkdir(mode=0o700, exist_ok=True)
+        fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            try:
+                os.mkdir("assistant", mode=0o700, dir_fd=fd)
+            except FileExistsError:
+                pass
+        finally:
+            os.close(fd)
+    else:
+        target.mkdir(mode=0o700, parents=True, exist_ok=True)
     resolved = target.resolve(strict=True)
     if not resolved.is_dir() or not os.access(resolved, os.R_OK | os.W_OK | os.X_OK):
         raise ValueError("workspace unavailable")

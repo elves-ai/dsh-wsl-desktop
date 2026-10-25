@@ -18,7 +18,7 @@ const SYNTH_TIMEOUT: Duration = Duration::from_secs(210);
 const HISTORY: usize = 256;
 const CANCELLED: &str = "语音请求已取消或被新请求替换。";
 const UNAVAILABLE: &str =
-    "无法连接本机 Qwen 语音服务，请确认 WSL 内的 Q8/ROCm 服务已在 127.0.0.1:18765 启动。";
+    "无法连接本机 Qwen 语音服务，请确认 WSL 内的 Q8 CUDA / ROCm 服务已在 127.0.0.1:18765 启动。";
 const IDENTITY: &str =
     "本机 Qwen 语音服务身份或音色不匹配，请启动协议 1、pet-airhead-v1 音色的 dsh-pet-qwen 服务。";
 const AUDIO_ERROR: &str =

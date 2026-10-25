@@ -245,6 +245,53 @@ test('a deleted current session can recover through explicit history selection o
   ui.emit(ready(2, { connected: false, workspace_id: null }));
   assert.equal(ui.nodes.get('sessions').disabled, true); assert.equal(ui.nodes.get('new-session').disabled, true);
 });
+test('assistant setup defaults and validation hint use the unified WSL assistant directory', async () => {
+  const path = '~/.dsh-wsl-desktop/assistant';
+  const ui = setup(); await tick();
+  const markup = ui.nodes.get('assistant-root').innerHTML;
+  const input = markup.match(/<input id="workspace"[^>]*>/)[0];
+  assert.ok(input.includes('value="' + path + '"'));
+  assert.ok(input.includes('placeholder="' + path + '"'));
+  ui.emit(ready(2, { enabled: false, connected: false, phase: 'setup' }));
+  assert.equal(ui.nodes.get('workspace').value, path);
+  assert.equal(ui.nodes.get('consent').checked, false);
+  assert.equal(ui.calls.filter(call => call.name === 'assistant_action').length, 0);
+  ui.nodes.get('consent').checked = true;
+  ui.nodes.get('workspace').value = 'relative';
+  ui.nodes.get('enable-form').emit('submit'); await tick();
+  assert.ok(ui.nodes.get('notice').textContent.includes(path));
+  assert.equal(ui.calls.filter(call => call.name === 'assistant_action').length, 0);
+  ui.nodes.get('workspace').value = path;
+  ui.nodes.get('enable-form').emit('submit'); await tick();
+  const request = ui.calls.find(call => call.name === 'assistant_action').args.request;
+  assert.equal(request.action, 'enable'); assert.equal(request.path, path);
+});
+
+test('new default never replaces a typed custom workspace during setup snapshots', async () => {
+  const ui = setup({ getSnapshot: () => ({ ...model.initialSnapshot(), revision: 1 }) }); await tick();
+  const path = '/home/me/custom assistant';
+  ui.nodes.get('workspace').value = path;
+  ui.emit({ ...model.initialSnapshot(), revision: 2 });
+  assert.equal(ui.nodes.get('workspace').value, path);
+  ui.nodes.get('enable-form').emit('submit'); await tick();
+  assert.equal(ui.calls.find(call => call.name === 'assistant_action').args.request.path, path);
+});
+
+test('restored legacy and custom bindings keep their directory and session until explicit reconfiguration', async () => {
+  for (const path of ['/home/me/DSH-Assistant', '/home/me/custom assistant']) {
+    for (const snapshotPath of [path, null]) {
+      const ui = setup({ getSnapshot: () => ready(1, { workspace_path: path }) }); await tick();
+      assert.equal(ui.nodes.get('setup').hidden, true);
+      assert.equal(ui.nodes.get('sessions').value, 's');
+      assert.equal(ui.calls.filter(call => call.name === 'assistant_action').length, 0);
+      ui.emit(ready(2, { enabled: false, connected: false, phase: 'setup', workspace_path: snapshotPath }));
+      assert.equal(ui.nodes.get('workspace').value, path);
+      assert.equal(ui.nodes.get('consent').checked, false);
+      assert.equal(ui.calls.filter(call => call.name === 'assistant_action').length, 0);
+    }
+  }
+});
+
 test('project reconfiguration only opens native setup and requires a fresh explicit confirmation', async () => {
   const reply = ready(2, { enabled: false, phase: 'setup', connected: false, workspace_path: '/home/me/Existing-Assistant' });
   const ui = setup({ actionResult: request => request.action === 'reconfigure' ? reply : undefined }); await tick();

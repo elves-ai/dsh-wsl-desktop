@@ -15,6 +15,7 @@
     "allow-open-settings",
     "allow-perform-action",
     "allow-set-project-directory",
+    "allow-pick-settings-path",
     "allow-setup-distributions",
     "allow-setup-identity",
     "allow-complete-setup",

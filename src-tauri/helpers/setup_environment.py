@@ -82,7 +82,7 @@ def ensure_directory(home, relative):
         info = current.lstat()
         if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid():
             raise SetupError('storage')
-        # Parent directories (.local/share) can be public; none may be writable
+        # Existing parent directories can be public; none may be writable
         # by another user. Never follow a symlink in the deployment namespace.
         if info.st_mode & 0o022:
             raise SetupError('storage')
@@ -197,8 +197,8 @@ def install(payload):
     except Exception:
         raise SetupError('node')
     profile = hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()[:24]
-    base = home / '.local/share/dsh-wsl-desktop'
-    state = home / '.local/state/dsh-wsl-desktop' / profile
+    base = home / '.dsh-wsl-desktop'
+    state = base / 'state' / profile
     config = dict(values, state_directory=str(state), manager_version=VERSION)
     report = checks['inspect_values'](config, port)
     for check in report['checks']:
@@ -208,20 +208,20 @@ def install(payload):
         raise SetupError('port_busy')
     # Validation above is read-only; all persistent writes start here.
     os.umask(0o077)
-    ensure_directory(home, Path('.local/share/dsh-wsl-desktop'))
+    ensure_directory(home, Path('.dsh-wsl-desktop'))
     lock_fd = os.open(base / '.setup.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
     try:
         info = os.fstat(lock_fd)
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1:
             raise SetupError('storage')
         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        ensure_directory(home, Path('.local/state/dsh-wsl-desktop') / profile)
+        ensure_directory(home, Path('.dsh-wsl-desktop/state') / profile)
         # No overwrite of an active profile, including a startup before it listens.
         held = checks['acquire_idle_server_lock'](str(state))
         try:
             if not checks['port_is_idle'](port):
                 raise SetupError('port_busy')
-            directory = ensure_directory(home, Path('.local/share/dsh-wsl-desktop/profiles') / profile)
+            directory = ensure_directory(home, Path('.dsh-wsl-desktop/profiles') / profile)
             launcher = base / ('manager-' + VERSION + '.py')
             linux_config = directory / 'config.json'
             publish_new(launcher, source)

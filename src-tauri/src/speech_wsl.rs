@@ -36,6 +36,19 @@ except Exception:
 exec(compile(code,'<dsh-speech-runtime>','exec'),{'__name__':'__main__'})
 "#;
 
+fn gpu_backend_matches(backend: &str, device: &str) -> bool {
+    let prefix = match backend {
+        "cuda" => "CUDA",
+        "rocm" => "ROCm",
+        _ => return false,
+    };
+    device.strip_prefix(prefix).is_some_and(|index| {
+        (1..=2).contains(&index.len())
+            && index.bytes().all(|c| c.is_ascii_digit())
+            && (index.len() == 1 || !index.starts_with('0'))
+    })
+}
+
 type Provider = Arc<dyn Fn() -> Result<Config, String> + Send + Sync>;
 struct Owned {
     config: Config,
@@ -78,6 +91,7 @@ impl WslSpeechRuntime {
             "--launch-held",
             "--stop",
             "--probe-owned",
+            "--resources-initialize",
             "--resources-discover",
             "--resources-browse",
             "--resources-download",
@@ -344,14 +358,69 @@ impl WslSpeechRuntime {
                 .map_err(|_| "语音控制连接未完成。")?,
         )
     }
+    fn parse_inspection(v: &Value) -> Result<Inspection, String> {
+        if v.get("kind").and_then(Value::as_str) != Some("result") {
+            return Err("检测没有返回有效结果。".into());
+        }
+        let env = v
+            .get("environment_ok")
+            .and_then(Value::as_bool)
+            .ok_or("检测结果缺少环境状态。")?;
+        let models = v
+            .get("models_ok")
+            .and_then(Value::as_bool)
+            .ok_or("检测结果缺少模型状态。")?;
+        if env
+            && !gpu_backend_matches(
+                v.get("backend").and_then(Value::as_str).unwrap_or(""),
+                v.get("device").and_then(Value::as_str).unwrap_or(""),
+            )
+        {
+            return Err("GPU 检测结果缺少匹配的 CUDA / ROCm 后端与设备。".into());
+        }
+        let error = v.get("error_code").and_then(Value::as_str).map(|c| {
+            match c {
+                "missing_talker" => "缺少主模型文件 qwen-talker-1.7b-base-Q8_0.gguf。",
+                "missing_codec" => "缺少声码器文件 qwen-tokenizer-12hz-Q8_0.gguf。",
+                "hash_mismatch_talker" => "主模型 SHA256 不匹配，请重新检查下载文件。",
+                "hash_mismatch_codec" => "声码器 SHA256 不匹配，请重新检查下载文件。",
+                "native_unavailable" => "原生推理库不可用或 ABI 版本不匹配，请按配置说明检查。",
+                "rocm_sdk_not_installed" => "AMD ROCm 后端在所选 Python 环境中未找到匹配的 ROCm 运行时。",
+                "cuda_libraries_unavailable" => "NVIDIA CUDA 后端未找到匹配的驱动或 CUDA / cuBLAS 运行库，请检查 WSL GPU 驱动与所选环境。",
+                "gpu_backend_mismatch" => "实际 GPU 后端或设备与所选 CUDA / ROCm 环境不匹配，未使用 CPU 回退。",
+                "gpu_runtime_unavailable" => "CUDA 与 ROCm GPU 计算检测均未通过；请按识别到的显卡检查驱动、对应运行库和原生推理库。",
+                "wsl2_gpu_bridge_required" => "需要可用的 WSL2 GPU 桥接。",
+                "gpu_compute_failed" | "gpu_device_unavailable" | "gpu_probe_failed" => {
+                    "CUDA / ROCm GPU 计算检测未通过，请检查所选显卡与运行环境。"
+                }
+                "models_unavailable" => "模型目录不可读，请检查两个模型文件及权限。",
+                "check_cancelled" => "检测已取消。",
+                "check_timeout" | "gpu_probe_timeout" => "环境或模型检测超时，可重试。",
+                _ => "语音配置检测未通过，请检查运行时、推理库和模型文件。",
+            }
+            .to_string()
+        });
+        Ok(Inspection {
+            environment_ok: env,
+            models_ok: models,
+            gpu_name: v
+                .get("gpu_name")
+                .and_then(Value::as_str)
+                .filter(|s| s.len() <= 256 && !s.chars().any(char::is_control))
+                .map(str::to_string),
+            error,
+        })
+    }
     fn parse_status(v: &Value) -> ServiceStatus {
         let valid = v.get("service").and_then(Value::as_str) == Some("dsh-pet-qwen")
             && v.get("protocol").and_then(Value::as_u64) == Some(1)
             && v.get("voice_id").and_then(Value::as_str) == Some("pet-airhead-v1");
         let modern = valid
             && v.get("status_protocol").and_then(Value::as_u64) == Some(1)
-            && v.get("backend").and_then(Value::as_str) == Some("rocm")
-            && v.get("device").and_then(Value::as_str) == Some("ROCm0");
+            && gpu_backend_matches(
+                v.get("backend").and_then(Value::as_str).unwrap_or(""),
+                v.get("device").and_then(Value::as_str).unwrap_or(""),
+            );
         let model = if modern {
             match v.get("model_state").and_then(Value::as_str) {
                 Some("unloaded") => ModelState::Unloaded,
@@ -397,15 +466,38 @@ fn resource_result(value: Value) -> Result<Value, String> {
         Some("unsafe_download_directory" | "unsafe_model_file" | "unsafe_path") => {
             "路径不安全；请使用当前 WSL 用户拥有的非共享目录。"
         }
+        Some("initialize_busy") => "此目录已有语音初始化，请稍后重试。",
+        Some("unsafe_initialize_directory" | "unsafe_initialize_file") => "初始化目录或配置不安全；请使用当前用户拥有的私有普通文件与目录。",
+        Some("initialize_config_conflict") => "已有不同或损坏的语音初始化配置，原文件未覆盖；请检查配置后重试。",
+        Some("initialize_runtime_conflict") => "默认虚拟环境目录已有未受本应用管理的内容，未覆盖。请选用已有环境或检查目录。",
+        Some("initialize_python_unavailable") => "未找到可用于创建虚拟环境的 Python ≥ 3.10；请先准备 Python 并选择路径。",
+        Some("initialize_venv_failed" | "initialize_pip_failed") => "无法离线初始化 Python 虚拟环境；请检查 Python venv/ensurepip 支持后重试，未安装系统软件。",
+        Some("initialize_timeout") => "语音初始化超时，已停止本次子进程；可重试。",
         Some("download_busy") => "此目录已有模型下载，请稍后重试。",
         Some("untrusted_download_redirect") => "模型服务器重定向不在可信 HTTPS 白名单内。",
-        Some("cancelled") => "模型下载已取消。",
+        Some("cancelled") => "语音资源操作已取消。",
         Some("incomplete_download") => "模型下载不完整，未发布文件，可重试。",
         _ => "资源操作失败，请检查路径、权限或网络后重试。",
     };
     Err(message.into())
 }
 impl crate::speech_resources::Runtime for WslSpeechRuntime {
+    fn initialize(
+        &self,
+        config: &SpeechConfig,
+        cancel: &Cancellation,
+    ) -> Result<crate::speech_resources::Initialization, String> {
+        let result = self.exchange(
+            &self.config()?,
+            "--resources-initialize",
+            json!({"python_path":config.python_path,"model_dir":config.model_dir,"native_lib":config.native_lib}),
+            true,
+            cancel,
+            Duration::from_secs(180),
+            &|_| {},
+        )?;
+        serde_json::from_value(resource_result(result)?).map_err(|_| "语音初始化结果无效。".into())
+    }
     fn discover(
         &self,
         config: &SpeechConfig,
@@ -487,46 +579,7 @@ impl Runtime for WslSpeechRuntime {
         let launcher = self.config()?;
         let script = self.stage(&launcher, cancel)?;
         let v=self.exchange(&launcher,"--inspect",json!({"script_path":script,"python_path":config.python_path,"model_dir":config.model_dir,"native_lib":config.native_lib}),true,cancel,Duration::from_secs(190),&|v|{if v.get("kind").and_then(Value::as_str)==Some("progress"){if let Some(p)=v.get("progress").and_then(Value::as_u64).filter(|p|*p<=100){progress(p as u8)}}})?;
-        if v.get("kind").and_then(Value::as_str) != Some("result") {
-            return Err("检测没有返回有效结果。".into());
-        }
-        let env = v
-            .get("environment_ok")
-            .and_then(Value::as_bool)
-            .ok_or("检测结果缺少环境状态。")?;
-        let models = v
-            .get("models_ok")
-            .and_then(Value::as_bool)
-            .ok_or("检测结果缺少模型状态。")?;
-        let error = v.get("error_code").and_then(Value::as_str).map(|c| {
-            match c {
-                "missing_talker" => "缺少主模型文件 qwen-talker-1.7b-base-Q8_0.gguf。",
-                "missing_codec" => "缺少声码器文件 qwen-tokenizer-12hz-Q8_0.gguf。",
-                "hash_mismatch_talker" => "主模型 SHA256 不匹配，请重新检查下载文件。",
-                "hash_mismatch_codec" => "声码器 SHA256 不匹配，请重新检查下载文件。",
-                "native_unavailable" => "原生推理库不可用或 ABI 版本不匹配，请按配置说明检查。",
-                "rocm_sdk_not_installed" => "所选 Python 环境尚未安装匹配的 ROCm 运行时。",
-                "wsl2_gpu_bridge_required" => "需要可用的 WSL2 GPU 桥接。",
-                "gpu_compute_failed" | "gpu_device_unavailable" | "gpu_probe_failed" => {
-                    "ROCm GPU 计算检测未通过，请检查所选运行环境。"
-                }
-                "models_unavailable" => "模型目录不可读，请检查两个模型文件及权限。",
-                "check_cancelled" => "检测已取消。",
-                "check_timeout" | "gpu_probe_timeout" => "环境或模型检测超时，可重试。",
-                _ => "语音配置检测未通过，请检查运行时、推理库和模型文件。",
-            }
-            .to_string()
-        });
-        Ok(Inspection {
-            environment_ok: env,
-            models_ok: models,
-            gpu_name: v
-                .get("gpu_name")
-                .and_then(Value::as_str)
-                .filter(|s| s.len() <= 256 && !s.chars().any(char::is_control))
-                .map(str::to_string),
-            error,
-        })
+        Self::parse_inspection(&v)
     }
     fn status(&self, cancel: &Cancellation) -> Result<ServiceStatus, String> {
         cancel.check()?;
@@ -656,7 +709,8 @@ impl Runtime for WslSpeechRuntime {
                 }
                 break;
             }
-            if start.elapsed() > Duration::from_secs(45) {
+            // Auto may run two bounded GPU probes (CUDA then ROCm) before HTTP opens.
+            if start.elapsed() > Duration::from_secs(95) {
                 return Err("语音服务启动超时。".into());
             }
             thread::sleep(Duration::from_millis(100));

@@ -4,6 +4,7 @@ Run: python3 -B -m unittest discover -s tests -p test_qwen_native.py -v
 """
 import contextlib
 import ctypes as C
+import ctypes.util
 import gc
 import hashlib
 import io
@@ -187,6 +188,73 @@ class FakeCABI:
         C.memset(out, 0, C.sizeof(native.QtAudio))
 
 
+class CudaLibraryTests(unittest.TestCase):
+    """Library discovery/preload mocks only; no real shared object is opened."""
+    def test_system_toolkit_and_wheel_paths_are_used_without_framework(self):
+        for location in ('system', 'toolkit', 'wheel'):
+            with self.subTest(location=location), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                expected = {'system': 'libcublas.so.12',
+                            'toolkit': str(root / 'lib64/libcublas.so.12'),
+                            'wheel': str(root / 'nvidia/cublas/lib/libcublas.so.12')}[location]
+                sentinel = object()
+                def cdll(path, **kwargs):
+                    if path != expected:
+                        raise OSError('PRIVATE library path')
+                    self.assertEqual(kwargs['mode'], C.RTLD_GLOBAL)
+                    return sentinel
+                with patch.object(ctypes.util, 'find_library', return_value='libcublas.so.12' if location == 'system' else None), \
+                        patch.object(native.C, 'CDLL', side_effect=cdll) as load, \
+                        patch.dict(native.os.environ, {'CUDA_HOME': directory}, clear=True), \
+                        patch.object(native.sys, 'path', [directory]):
+                    self.assertIs(native._load_cuda_library('cublas', major='12'), sentinel)
+                    self.assertEqual(load.call_args.args[0], expected)
+
+    def test_all_toolkit_environment_roots_and_target_library_layout(self):
+        for key in ('CUDA_HOME', 'CUDA_PATH', 'CUDAToolkit_ROOT'):
+            for layout in ('lib64', 'targets/x86_64-linux/lib'):
+                for major in ('12', '13'):
+                    with self.subTest(key=key, layout=layout, major=major), tempfile.TemporaryDirectory() as directory:
+                        expected = str(Path(directory) / layout / ('libcublas.so.' + major))
+                        sentinel = object()
+                        def cdll(path, **kwargs):
+                            if path != expected:
+                                raise OSError('PRIVATE library path')
+                            return sentinel
+                        with patch.object(ctypes.util, 'find_library', return_value=None), \
+                                patch.object(native.C, 'CDLL', side_effect=cdll), \
+                                patch.dict(native.os.environ, {key: directory}, clear=True), \
+                                patch.object(native.sys, 'path', []):
+                            self.assertIs(native._load_cuda_library('cublas', major=major), sentinel)
+
+    def test_unavailable_cuda_library_raises_only_static_code(self):
+        with patch.object(ctypes.util, 'find_library', return_value=None), \
+                patch.object(native.C, 'CDLL', side_effect=OSError('PRIVATE /path/driver')):
+            with self.assertRaises(native.NativeQ8Error) as caught:
+                native._load_cuda_library('cuda')
+            self.assertEqual(caught.exception.error, 'cuda_libraries_unavailable')
+            self.assertIsNone(native._load_cuda_library('cudart', required=False))
+
+    def test_cuda_preload_matches_blas_runtime_major_and_never_imports_rocm(self):
+        for major in ('13', '12', '11'):
+            driver, blas = object(), object()
+            def load(name, required=True, major=None):
+                if name == 'cuda':
+                    return driver
+                return blas if name == 'cublas' and major == selected else None
+            selected = major
+            with self.subTest(major=major), patch.object(native, '_load_cuda_library', side_effect=load) as loader, \
+                    patch.object(native.importlib, 'import_module', side_effect=AssertionError('must not import SDK')):
+                self.assertEqual(native.preload_backend('cuda'), (driver, blas))
+                loader.assert_any_call('cudart', required=False, major=major)
+                loader.assert_any_call('cublasLt', required=False, major=major)
+        with patch.object(native, '_load_cuda_library', return_value=None):
+            with self.assertRaises(native.NativeQ8Error):
+                native.preload_backend('cuda')
+        with self.assertRaises(native.NativeQ8Error):
+            native.preload_backend('cpu')
+
+
 class NativeTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -302,7 +370,7 @@ assert all(name not in sys.modules for name in ('rocm_sdk', 'numpy', 'torch', 'q
         self.assertNotIn("qt_init", self.lib.calls)
         self.lib.abi = 6
         self.lib.init_result = None
-        self.failure(self.make, 503, "native ROCm backend unavailable")
+        self.failure(self.make, 503, "gpu_backend_mismatch")
         self.assertNotIn("qt_extract_voice_ref", self.lib.calls)
         self.assertEqual(self.lib.freed_context, 0)  # NULL init self-cleans in C
 
@@ -383,16 +451,46 @@ assert all(name not in sys.modules for name in ('rocm_sdk', 'numpy', 'torch', 'q
                                  "invalid selected reference WAV")
         self.assertEqual(self.lib.calls, [])
 
-    def test_explicit_rocm_only_and_no_silent_cpu_fallback(self):
-        for device in (None, "", "auto", "CPU", "CUDA0", "Vulkan0", "ROCm", "ROCm-1",
+    def test_explicit_gpu_only_and_no_silent_cpu_fallback(self):
+        for device in (None, "", "auto", "CPU", "CUDA00", "CUDA100", "Vulkan0", "ROCm", "ROCm-1",
                        "ROCm00", "ROCm01", "ROCm100", "ROCm99999999999999999999"):
             with self.subTest(device=device):
-                self.failure(lambda: self.make(device=device), 503, "explicit ROCm device required")
+                self.failure(lambda: self.make(device=device), 503, "explicit GPU device required")
         self.assertEqual(self.lib.calls, [])
         self.lib.backend = b"CPU"
-        self.failure(self.make, 503, "native ROCm backend unavailable")
+        self.failure(self.make, 503, "gpu_backend_mismatch")
         self.assertEqual(self.lib.freed_context, 1)
         self.assertNotIn("qt_extract_voice_ref", self.lib.calls)
+
+    def test_cuda_device_exact_callback_and_lifecycle_simulation(self):
+        # FakeCABI is a Python simulation, not NVIDIA hardware validation.
+        for device in ('CUDA0', 'CUDA99'):
+            with self.subTest(device=device), patch.object(native, '_load_cuda_library', return_value=object()) as load:
+                self.lib.backend = device.encode('ascii')
+                engine = self.make(device=device)
+                self.assertEqual(self.lib.init_params['device'], device.encode('ascii'))
+                self.import_module.assert_not_called()
+                self.assertIn('cuda', [call.args[0] for call in load.call_args_list])
+                self.assertIn('cublas', [call.args[0] for call in load.call_args_list])
+                self.assertTrue(self.synthesize().startswith(b'RIFF'))
+                engine.close()
+        self.assertEqual(self.lib.freed_context, 2)
+        self.assertEqual(self.lib.freed_voice, 2)
+
+    def test_cuda_wrong_backend_or_index_is_rejected_and_freed_simulation(self):
+        for backend in (b'CPU', b'ROCm0', b'CUDA1', b'CUDA00', b'CUDA0evil', None):
+            with self.subTest(backend=backend), patch.object(native, '_load_cuda_library', return_value=object()):
+                self.lib.backend = backend
+                self.failure(lambda: self.make(device='CUDA0'), 503, 'gpu_backend_mismatch')
+                self.assertNotIn('qt_extract_voice_ref', self.lib.calls)
+        self.assertEqual(self.lib.freed_context, 6)
+        self.import_module.assert_not_called()
+
+    def test_cuda_loader_unavailable_does_not_import_rocm_or_leak_details(self):
+        with patch.object(native, '_load_cuda_library', side_effect=native.NativeQ8Error(503, 'cuda_libraries_unavailable')):
+            self.failure(lambda: self.make(device='CUDA0'), 503, 'cuda_libraries_unavailable')
+        self.import_module.assert_not_called()
+        self.cdll.assert_not_called()
 
     def test_nonzero_rocm_device_is_pinned_and_confirmed(self):
         self.lib.backend = b"ROCm3"
@@ -409,7 +507,7 @@ assert all(name not in sys.modules for name in ('rocm_sdk', 'numpy', 'torch', 'q
                      b"[Load] Talker backend: ROCm0 (CPU threads: 8) PRIVATE", b""):
             with self.subTest(line=line):
                 self.lib.backend_line = line
-                self.failure(self.make, 503, "native ROCm backend unavailable")
+                self.failure(self.make, 503, "gpu_backend_mismatch")
 
     def test_base_model_and_sixteen_codebooks_required(self):
         self.lib.model_type = b"custom_voice"

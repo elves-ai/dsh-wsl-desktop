@@ -1,6 +1,6 @@
 [package]
 name = "dsh-wsl-desktop"
-version = "0.1.18"
+version = "0.1.19"
 description = "Windows launcher for DeepSeek Harness in WSL"
 edition = "2021"
 rust-version = "1.85"
@@ -25,7 +25,7 @@ tungstenite = { version = "0.26", default-features = false, features = ["handsha
 tauri = { version = "2", features = ["tray-icon", "image-png", "unstable"] }
 # Match the COM ABI used by Tauri/Wry; WinRT toasts keep their separate 0.61 dependency.
 webview2-com = "=0.39.1"
-windows-webview = { package = "windows", version = "=0.62.2", features = ["Win32_System_Com"] }
+windows-webview = { package = "windows", version = "=0.62.2", features = ["Win32_System_Com", "Win32_Foundation", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging", "Win32_System_SystemServices"] }
 tauri-plugin-single-instance = "2"
 # Pin the verified desktop API; Cargo.lock also holds notify-rust at 4.11.7
 # (later backend releases raise the minimum Rust version).

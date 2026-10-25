@@ -35,6 +35,8 @@ mod context_menu;
 mod first_run;
 #[path = "desktop_notifications.rs"]
 mod notifications;
+#[path = "desktop_path_picker.rs"]
+mod path_picker;
 #[path = "desktop_pet.rs"]
 mod pet;
 #[path = "desktop_pet_interactions.rs"]
@@ -893,8 +895,10 @@ pub fn run() {
             speech_settings::set_speech_preferences,
             speech_settings::test_speech,
             speech_settings::cancel_speech_test,
+            speech_settings::initialize_speech_environment,
+            speech_settings::cancel_speech_initialization,
             speech_settings::discover_speech_resources,
-            speech_settings::browse_speech_path,
+            path_picker::pick_settings_path,
             speech_settings::get_speech_download,
             speech_settings::download_speech_model,
             speech_settings::cancel_speech_download,

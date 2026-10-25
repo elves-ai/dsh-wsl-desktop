@@ -16,6 +16,7 @@ const listening = (extra = {}) => notification({ enabled: true, phase: 'listenin
 const pet = (extra = {}) => ({ visible: false, startup_visible: true, roaming_enabled: true, bubble_notifications: true, revision: 0, message: '桌面宠物设置已读取。', ...extra });
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 async function mount(native, initial = base(), options = {}) {
+  let pickerResult = null;
   let savedNotification = options.initialNotification || notification();
   let savedPower = options.initialPower || power();
   let savedPet = options.initialPet || pet();
@@ -24,7 +25,7 @@ async function mount(native, initial = base(), options = {}) {
     if (!nodes.has(id)) nodes.set(id, { id, textContent: '', value: '', children: [], replaceChildren(...children) { this.children = children; }, dataset: {}, hidden: false, disabled: false, checked: false, open: false, scrollTop: 0, scrollHeight: 0, clientHeight: 0, handlers: {}, attributes: {}, set innerHTML(_) { throw new Error('Native data must not use HTML'); }, addEventListener(name, fn) { this.handlers[name] = fn; }, setAttribute(name, value) { this.attributes[name] = value; }, removeAttribute(name) { delete this.attributes[name]; if (name === 'value') delete this.value; }, focus() { this.focused = true; }, scrollIntoView() { this.scrolled = true; } });
     return nodes.get(id);
   };
-  const root = { template: '', set innerHTML(template) { this.template = template; for (const match of template.matchAll(/<[^>]+\bid="([^"]+)"[^>]*>/g)) { const item = node(match[1]); item.hidden = /\bhidden(?:\s|>)/.test(match[0]); item.disabled = /\bdisabled(?:\s|>)/.test(match[0]); } } };
+  const root = { template: '', set innerHTML(template) { this.template = template; for (const match of template.matchAll(/<[^>]+\bid="([^"]+)"[^>]*>/g)) { const item = node(match[1]); item.hidden = /\bhidden(?:\s|>)/.test(match[0]); item.disabled = /\bdisabled(?:\s|>)/.test(match[0]); item.readOnly = /\breadonly(?:\s|>)/.test(match[0]); } } };
   const location = { href: options.location || (options.mode === 'startup' ? 'http://127.0.0.1:1420/index.html' : 'http://127.0.0.1:1420/index.html?view=settings&section=environment') };
   const context = vm.createContext({
     appIconUrl: 'app-icon.png',
@@ -37,6 +38,7 @@ async function mount(native, initial = base(), options = {}) {
       const fallback = () => {
         if (name === 'get_snapshot' || name === 'perform_action' || name === 'set_project_directory') return initial;
         if (['get_update_snapshot', 'check_update', 'install_update'].includes(name)) return options.initialUpdate || update();
+        if (name === 'pick_settings_path') return pickerResult;
         if (name === 'setup_distributions') return ['Ubuntu', 'Debian'];
         if (name === 'setup_identity') return { linux_user: args.linuxUser || 'test', home: '/home/test', node: '/usr/bin/node' };
         if (name === 'complete_setup') return base({ state: 'starting', busy: true });
@@ -64,7 +66,7 @@ async function mount(native, initial = base(), options = {}) {
     },
   });
   vm.runInContext(source, context); await flush();
-  return { speechVisibility, template: root.template, pet(snapshot) { subscriptions.get('pet-settings-state')?.({ payload: snapshot }); }, power(snapshot) { subscriptions.get('launcher-power-state')?.({ payload: snapshot }); }, node(id) { assert.ok(nodes.has(id), 'Missing DOM node: ' + id); return nodes.get(id); }, has: id => nodes.has(id), location, calls, subscriptions, listenCalls, unlistened, async fill(id, value) { const item = nodes.get(id); item.value = value; item.handlers.input?.(); await flush(); }, async choose(id, value) { const item = nodes.get(id); item.value = value; item.handlers.change?.(); await flush(); }, async submit() { nodes.get('setup-form')?.handlers.submit?.({ preventDefault() {} }); await flush(); }, async change(id, checked) { const item = nodes.get(id); if (!item) return; item.checked = checked; item.handlers.change?.(); await flush(); }, notification(snapshot) { subscriptions.get('launcher-notification-state')?.({ payload: snapshot }); }, unload() { windowHandlers.get('beforeunload')?.(); }, event(snapshot) { subscriptions.get('launcher-state')?.({ payload: snapshot }); }, update(snapshot) { subscriptions.get('launcher-update-state')?.({ payload: snapshot }); }, async click(id) { nodes.get(id)?.handlers.click?.(); await flush(); } };
+  return { async pick(id, path) { pickerResult = path; const button = id === 'repository-input' ? 'pick-repository' : id.replace('setup-', 'setup-pick-'); nodes.get(button)?.handlers.click?.(); await flush(); }, speechVisibility, template: root.template, pet(snapshot) { subscriptions.get('pet-settings-state')?.({ payload: snapshot }); }, power(snapshot) { subscriptions.get('launcher-power-state')?.({ payload: snapshot }); }, node(id) { assert.ok(nodes.has(id), 'Missing DOM node: ' + id); return nodes.get(id); }, has: id => nodes.has(id), location, calls, subscriptions, listenCalls, unlistened, async fill(id, value) { const item = nodes.get(id); item.value = value; item.handlers.input?.(); await flush(); }, async choose(id, value) { const item = nodes.get(id); item.value = value; item.handlers.change?.(); await flush(); }, async submit() { nodes.get('setup-form')?.handlers.submit?.({ preventDefault() {} }); await flush(); }, async change(id, checked) { const item = nodes.get(id); if (!item) return; item.checked = checked; item.handlers.change?.(); await flush(); }, notification(snapshot) { subscriptions.get('launcher-notification-state')?.({ payload: snapshot }); }, unload() { windowHandlers.get('beforeunload')?.(); }, event(snapshot) { subscriptions.get('launcher-state')?.({ payload: snapshot }); }, update(snapshot) { subscriptions.get('launcher-update-state')?.({ payload: snapshot }); }, async click(id) { nodes.get(id)?.handlers.click?.(); await flush(); } };
 }
 
 const petControls = ['pet-visible', 'pet-startup-visible', 'pet-roaming-enabled', 'pet-bubble-notifications'];
@@ -513,7 +515,7 @@ test('startup has no settings dashboard or standalone service controls', async (
 
 test('busy snapshots lock settings environment check, directory save and update install', async () => {
   const app = await mount(true, base({ state: 'stopped' }), { initialUpdate: update({ phase: 'available', version: '0.2.0' }) });
-  app.node('repository-input').value = '/home/test/new'; app.node('repository-input').handlers.input();
+  await app.pick('repository-input', '/home/test/new');
   assert.equal(app.node('save-repository').disabled, false);
   app.event(base({ state: 'stopped', busy: true }));
   for (const id of ['check', 'logs', 'save-repository', 'install-update']) { assert.equal(app.node(id).disabled, true); await app.click(id); }
@@ -1439,7 +1441,7 @@ test('notification settings initialize independently when the service snapshot r
 test('dirty repository survives snapshots and repeated navigation', async () => {
   const app = await mount(true, base({ state: 'stopped', managed: false }));
   const draft = '/home/test/unsaved DSH checkout';
-  app.node('repository-input').value = draft; app.node('repository-input').handlers.input();
+  await app.pick('repository-input', draft);
   const calls = [...app.calls];
   for (const section of ['notifications', 'logs', 'environment']) {
     await app.click('nav-' + section);
@@ -1450,14 +1452,14 @@ test('dirty repository survives snapshots and repeated navigation', async () => 
   assert.deepEqual(app.calls, calls);
 });
 
-test('manual directory validates WSL paths and saves only after explicit action', async () => {
+test('native directory selection validates WSL paths and saves only after explicit action', async () => {
   const app = await mount(true, base({ state: 'stopped', managed: false }));
   for (const invalid of ['C:/projects/dsh', '//network/dsh', '/home/test/line\nbreak', '/home/' + 'x'.repeat(4096)]) {
-    app.node('repository-input').value = invalid; app.node('repository-input').handlers.input();
+    await app.pick('repository-input', invalid);
     assert.equal(app.node('save-repository').disabled, true); await app.click('save-repository');
   }
   assert.equal(app.calls.filter(([name]) => name === 'set_project_directory').length, 0);
-  app.node('repository-input').value = ' /home/test/DSH with spaces '; app.node('repository-input').handlers.input();
+  await app.pick('repository-input', '/home/test/DSH with spaces');
   assert.equal(app.node('save-repository').disabled, false); await app.click('save-repository');
   assert.equal(app.calls.at(-1)[0], 'set_project_directory'); assert.equal(app.calls.at(-1)[1].repository, '/home/test/DSH with spaces');
 });
@@ -1465,7 +1467,7 @@ test('manual directory validates WSL paths and saves only after explicit action'
 test('directory save serializes settings actions and explicit failures preserve input', async () => {
   const saving = deferred();
   const app = await mount(true, base({ state: 'stopped', managed: false }), { initialUpdate: update({ phase: 'available', version: '0.2.0' }), invoke(name, _args, { fallback }) { return name === 'set_project_directory' ? saving.promise : fallback(); } });
-  app.node('repository-input').value = '/home/test/missing'; app.node('repository-input').handlers.input();
+  await app.pick('repository-input', '/home/test/missing');
   await app.click('save-repository');
   for (const id of ['save-repository', 'check', 'logs', 'install-update']) { assert.equal(app.node(id).disabled, true); await app.click(id); }
   assert.equal(app.calls.filter(([name]) => name === 'set_project_directory').length, 1);
@@ -1494,7 +1496,7 @@ test('newer service events beat delayed initial and check replies', async () => 
 test('newer service events beat delayed successful directory saves', async () => {
   const saving = deferred();
   const app = await mount(true, base({ state: 'stopped', managed: false }), { invoke(name, _args, { fallback }) { return name === 'set_project_directory' ? saving.promise : fallback(); } });
-  app.node('repository-input').value = '/home/test/new'; app.node('repository-input').handlers.input(); await app.click('save-repository');
+  await app.pick('repository-input', '/home/test/new'); await app.click('save-repository');
   app.event(base({ state: 'error', last_error: 'latest event', environment: environment({ repository: '/home/test/event-wins' }) }));
   saving.resolve(base({ state: 'stopped', environment: environment({ repository: '/home/test/stale-reply' }) })); await flush();
   assert.equal(app.node('repository-input').value, '/home/test/event-wins'); assert.equal(app.node('error-notice').textContent, 'latest event');
@@ -1552,7 +1554,7 @@ test('settings Back has an icon and visible accessible text outside the brand hi
 test('native Back invokes only the fixed no-argument return command and preserves dirty settings', async () => {
   const app = await mount(true, base({ state: 'stopped', managed: false }), { initialNotification: listening({ notify_when_focused: true }) });
   const draft = '/home/test/unsaved settings draft';
-  app.node('repository-input').value = draft; app.node('repository-input').handlers.input();
+  await app.pick('repository-input', draft);
   await app.click('nav-notifications');
   const calls = app.calls.length;
   await app.click('settings-back');
@@ -1588,7 +1590,7 @@ test('Back failure is static retryable Chinese and cannot discard an unsaved dir
   let attempts = 0;
   const app = await mount(true, base({ state: 'stopped', managed: false }), { invoke(name, _args, { fallback }) { if (name === 'return_from_settings' && ++attempts === 1) throw new Error('<script>private diagnostics token=secret</script>'); return fallback(); } });
   const draft = '/home/test/do not save on back';
-  app.node('repository-input').value = draft; app.node('repository-input').handlers.input();
+  await app.pick('repository-input', draft);
   await app.click('settings-back');
   assert.equal(app.node('error-notice').hidden, false);
   assert.equal(app.node('error-notice').textContent, '返回未完成，请重试。');
@@ -1756,7 +1758,9 @@ test('distribution discovery failures and empty lists are retryable without writ
   const app = await mount(true, fresh(), { mode: 'startup', invoke(name, _args, { fallback }) { if (name === 'setup_distributions' && ++attempt === 1) throw new Error('wsl failed token=private'); return fallback(); } });
   assert.match(app.node('setup-error').textContent, /检测失败/);
   assert.doesNotMatch(app.node('setup-error').textContent, /private/);
-  await app.fill('setup-repository', '/home/test/preserved');
+  assert.equal(app.node('setup-repository').readOnly, true);
+  await app.click('setup-detect-distributions');
+  await app.pick('setup-repository', '/home/test/preserved');
   await app.click('setup-detect-distributions');
   assert.equal(app.node('setup-user').value, 'test');
   assert.equal(app.node('setup-repository').value, '/home/test/preserved');
@@ -2081,4 +2085,55 @@ test('setup ignores discovery replies after leaving setup or unloading', async (
     assert.equal(app.node('setup-identity-status').textContent, status);
     assert.equal(app.calls.filter(([name]) => name === 'complete_setup').length, 0);
   }
+});
+
+
+test('repository system picker cancels without changes, serializes synthetic actions and never saves implicitly', async () => {
+  const pending = deferred();
+  const app = await mount(true, base({ state: 'stopped', managed: false }), { invoke(name, args, { fallback }) { return name === 'pick_settings_path' ? pending.promise : fallback(); } });
+  assert.equal(app.node('repository-input').readOnly, true);
+  const before = app.node('repository-input').value;
+  await app.click('pick-repository'); await app.click('pick-repository'); await app.click('save-repository'); await app.click('check');
+  assert.equal(app.node('pick-repository').disabled, true);
+  assert.equal(app.calls.filter(([name]) => name === 'pick_settings_path').length, 1);
+  assert.equal(app.calls.some(([name]) => ['set_project_directory', 'perform_action'].includes(name)), false);
+  pending.resolve(null); await flush();
+  assert.equal(app.node('repository-input').value, before); assert.equal(app.node('save-repository').disabled, true);
+  assert.equal(app.node('pick-repository').disabled, false);
+});
+
+test('repository picker drops stale results after navigation, Back, unload, running state and newer drafts', async () => {
+  for (const mode of ['navigation', 'back', 'unload', 'running', 'draft']) {
+    let pending;
+    const app = await mount(true, base({ state: 'stopped', managed: false }), { invoke(name, args, { fallback }) { return name === 'pick_settings_path' && pending ? pending.promise : fallback(); } });
+    await app.pick('repository-input', '/first/project'); pending = deferred(); await app.click('pick-repository');
+    if (mode === 'navigation') { await app.click('nav-power'); await app.click('nav-environment'); }
+    if (mode === 'back') await app.click('settings-back');
+    if (mode === 'unload') app.unload();
+    if (mode === 'running') app.event(base());
+    if (mode === 'draft') app.node('repository-input').value = '/newer/draft';
+    pending.resolve('/stale/project'); await flush();
+    assert.equal(app.node('repository-input').value, mode === 'draft' ? '/newer/draft' : '/first/project', mode);
+    assert.equal(app.calls.some(([name]) => name === 'set_project_directory'), false);
+  }
+});
+
+test('setup system picker is distribution scoped, preserves cancel and rejects old distribution replies', async () => {
+  const app = await mount(true, fresh(), { mode: 'startup' });
+  assert.equal(app.node('setup-repository').readOnly, true); assert.equal(app.node('setup-node').readOnly, true);
+  await app.pick('setup-repository', '/home/test/project');
+  const args = app.calls.filter(([name]) => name === 'pick_settings_path').at(-1)[1];
+  assert.equal(args.kind, 'setup_repository'); assert.equal(args.distribution, 'Ubuntu'); assert.equal(args.currentPath, '/home/test');
+  await app.pick('setup-node', null); assert.equal(app.node('setup-node').value, '/usr/bin/node');
+  assert.equal(app.calls.some(([name]) => name === 'complete_setup'), false);
+  await app.choose('setup-distribution', 'Debian'); assert.equal(app.node('setup-repository').value, '');
+  const pending = deferred();
+  const late = await mount(true, fresh(), { mode: 'startup', invoke(name, args, { fallback }) { return name === 'pick_settings_path' ? pending.promise : fallback(); } });
+  await late.click('setup-pick-repository'); await late.click('setup-detect-distributions'); await late.click('setup-detect-identity'); await late.submit();
+  assert.equal(late.calls.filter(([name]) => name === 'setup_distributions').length, 1);
+  assert.equal(late.calls.filter(([name]) => name === 'setup_identity').length, 1);
+  assert.equal(late.calls.some(([name]) => name === 'complete_setup'), false);
+  // Native owner is modal, but even programmatic target changes cannot apply a previous result.
+  late.node('setup-distribution').value = 'Debian'; pending.resolve('/old/ubuntu/project'); await flush();
+  assert.equal(late.node('setup-repository').value, '');
 });

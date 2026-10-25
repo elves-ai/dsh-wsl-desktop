@@ -77,6 +77,7 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(result['linux_user'], 'tester')
         self.assertTrue(result['node'].endswith('/v24.12.0/bin/node'))
         self.assertEqual(self.files(), before)
+        self.assertFalse((self.home / '.dsh-wsl-desktop').exists())
 
     def test_success_and_repeat_are_identical_and_private(self):
         result = setup.install(self.payload)
@@ -86,7 +87,14 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(config['repository'], str(self.repository))
         self.assertEqual(config['node'], str(self.node))
         self.assertEqual(config['port'], 31999)
-        self.assertNotEqual(config['state_directory'], str(self.repository))
+        base = self.home / '.dsh-wsl-desktop'
+        profile = Path(result['linux_config']).parent.name
+        self.assertRegex(profile, r'^[0-9a-f]{24}$')
+        self.assertEqual(Path(result['linux_launcher']), base / 'manager-1.0.0.py')
+        self.assertEqual(Path(result['linux_config']), base / 'profiles' / profile / 'config.json')
+        self.assertEqual(Path(config['state_directory']), base / 'state' / profile)
+        self.assertTrue(Path(config['state_directory']).is_dir())
+        self.assertFalse((self.home / '.local').exists())
         for key in ('linux_launcher', 'linux_config'):
             self.assertEqual(Path(result[key]).stat().st_mode & 0o777, 0o600)
         before = self.files()
@@ -97,7 +105,7 @@ class SetupTests(unittest.TestCase):
         with mock.patch.object(setup, 'pidfd_available', return_value=False):
             with self.assertRaisesRegex(setup.SetupError, '^pidfd$'):
                 setup.install(self.payload)
-        self.assertFalse((self.home / '.local').exists())
+        self.assertFalse((self.home / '.dsh-wsl-desktop').exists())
 
     def test_no_manager_import_or_service_start_during_install(self):
         self.payload['manager'] = 'raise RuntimeError("must never execute")\n'
@@ -111,7 +119,7 @@ class SetupTests(unittest.TestCase):
         with self.assertRaisesRegex(setup.SetupError, '^repository$'):
             setup.install(self.payload)
         self.assertEqual(self.files(), before)
-        self.assertFalse((self.home / '.local').exists())
+        self.assertFalse((self.home / '.dsh-wsl-desktop').exists())
 
     def test_missing_dependency_or_assets_is_read_only(self):
         for check in ('dependencies', 'web_assets', 'node'):
@@ -126,7 +134,7 @@ class SetupTests(unittest.TestCase):
                 with self.assertRaisesRegex(setup.SetupError, '^' + check + '$'):
                     setup.install(self.payload)
                 self.assertEqual(self.files(), before)
-                self.assertFalse((self.home / '.local').exists())
+                self.assertFalse((self.home / '.dsh-wsl-desktop').exists())
 
     def test_wrapper_resolves_to_real_linux_node_before_persisting(self):
         import shlex
@@ -151,18 +159,18 @@ class SetupTests(unittest.TestCase):
                 self.checks['run_node'] = lambda *_: json.dumps(result).encode()
                 with self.assertRaisesRegex(setup.SetupError, '^node$'):
                     setup.install(self.payload)
-                self.assertFalse((self.home / '.local').exists())
+                self.assertFalse((self.home / '.dsh-wsl-desktop').exists())
 
     def test_missing_ss_and_busy_port_create_no_deployment(self):
         self.checks['ss_available'] = lambda: False
         with self.assertRaisesRegex(setup.SetupError, '^launcher$'):
             setup.install(self.payload)
-        self.assertFalse((self.home / '.local').exists())
+        self.assertFalse((self.home / '.dsh-wsl-desktop').exists())
         self.checks['ss_available'] = lambda: True
         self.checks['port_is_idle'] = lambda _: False
         with self.assertRaisesRegex(setup.SetupError, '^port_busy$'):
             setup.install(self.payload)
-        self.assertFalse((self.home / '.local').exists())
+        self.assertFalse((self.home / '.dsh-wsl-desktop').exists())
 
     def test_invalid_user_paths_or_port_create_no_deployment(self):
         for key, value in [('linux_user','other'), ('node','node'), ('repository','C:/Harness'),
@@ -171,7 +179,27 @@ class SetupTests(unittest.TestCase):
                 payload = dict(self.payload, request=dict(self.payload['request'], **{key:value}))
                 with self.assertRaises(setup.SetupError):
                     setup.install(payload)
-                self.assertFalse((self.home / '.local').exists())
+                self.assertFalse((self.home / '.dsh-wsl-desktop').exists())
+
+    def test_legacy_deployment_and_saved_paths_are_not_modified(self):
+        legacy = self.home / '.local/share/dsh-wsl-desktop'
+        legacy_state = self.home / '.local/state/dsh-wsl-desktop/old-profile'
+        legacy_config = legacy / 'profiles/old-profile/config.json'
+        legacy_config.parent.mkdir(parents=True)
+        legacy_state.mkdir(parents=True)
+        legacy_launcher = legacy / 'manager-1.0.0.py'
+        legacy_launcher.write_text('existing legacy manager')
+        legacy_config.write_text(json.dumps({'state_directory':str(legacy_state),
+            'linux_launcher':str(legacy_launcher), 'linux_config':str(legacy_config)}))
+        record = legacy_state / 'run.json'
+        record.write_text('existing legacy state')
+        paths = (legacy_launcher, legacy_config, record)
+        before = {path:(path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns) for path in paths}
+        result = setup.install(self.payload)
+        self.assertEqual(Path(result['linux_launcher']), self.home / '.dsh-wsl-desktop/manager-1.0.0.py')
+        self.assertNotEqual(Path(result['linux_config']), legacy_config)
+        self.assertEqual({path:(path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns)
+                          for path in paths}, before)
 
     def test_existing_manager_never_overwritten(self):
         result = setup.install(self.payload)
@@ -194,7 +222,7 @@ class SetupTests(unittest.TestCase):
     def test_symlink_parent_or_file_rejected(self):
         target = self.home / 'outside'
         target.mkdir()
-        (self.home / '.local').symlink_to(target, target_is_directory=True)
+        (self.home / '.dsh-wsl-desktop').symlink_to(target, target_is_directory=True)
         with self.assertRaisesRegex(setup.SetupError, '^storage$'):
             setup.install(self.payload)
         self.assertEqual(list(target.iterdir()), [])

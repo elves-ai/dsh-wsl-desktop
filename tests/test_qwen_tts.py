@@ -237,6 +237,56 @@ class TestValidation(unittest.TestCase):
         loader.assert_not_called()
         self.assertEqual(results, [(503, "selected voice assets do not match")])
 
+    def test_cli_auto_resolves_actual_device_before_creating_worker(self):
+        from services.qwen_tts import runtime_check
+        for device in ('CUDA0', 'ROCm0', 'CUDA99'):
+            backend = 'cuda' if device.startswith('CUDA') else 'rocm'
+            probe = {'gpu_compute_verified': True, 'backend': backend, 'device': device, 'gpu_name': 'SIMULATED GPU'}
+            with self.subTest(device=device), patch.object(runtime_check, 'is_wsl2', return_value=True), \
+                    patch.object(runtime_check, 'report', return_value=probe) as report, \
+                    patch.object(qwen, 'load_voice') as voice, patch.object(qwen, 'QwenEngine') as engine, \
+                    patch.object(qwen, 'SynthesisService') as service, patch.object(qwen, 'QwenHTTPServer') as http, \
+                    patch.object(qwen.signal, 'signal'), patch('builtins.print'):
+                args = ['--model-dir', '.', '--native-lib', qwen.__file__]
+                if device == 'CUDA99':
+                    args.extend(['--device', device])
+                qwen.main(args)
+                report.assert_called_once_with(check_gpu=True, device=device if device == 'CUDA99' else 'auto')
+                self.assertEqual(engine.call_args.args[2], device)
+                voice.assert_called_once_with()
+                http.return_value.serve_forever.assert_called_once_with()
+
+    def test_cli_refuses_failed_math_cpu_or_wrong_device_without_loading(self):
+        from services.qwen_tts import runtime_check
+        probes = [
+            {'gpu_compute_verified': False, 'backend': 'cuda', 'device': 'CUDA0'},
+            {'gpu_compute_verified': True, 'backend': 'cpu', 'device': 'CPU'},
+            {'gpu_compute_verified': True, 'backend': 'rocm', 'device': 'CUDA0'},
+            {'gpu_compute_verified': True, 'backend': 'cuda', 'device': 'CUDA1'},
+            {'gpu_compute_verified': True, 'backend': 'cuda', 'device': 'CUDA00'},
+        ]
+        for probe in probes:
+            with self.subTest(probe=probe), patch.object(runtime_check, 'is_wsl2', return_value=True), \
+                    patch.object(runtime_check, 'report', return_value=probe), \
+                    patch.object(qwen, 'load_voice') as voice, patch.object(qwen, 'QwenEngine') as engine, \
+                    patch('sys.stderr', io.StringIO()), self.assertRaises(SystemExit):
+                qwen.main(['--model-dir', '.', '--native-lib', qwen.__file__, '--device', 'CUDA0'])
+            voice.assert_not_called()
+            engine.assert_not_called()
+
+    def test_status_reports_dynamic_actual_backend_and_refuses_cpu(self):
+        for device in ('CUDA0', 'CUDA99', 'ROCm0', 'ROCm99'):
+            service = types.SimpleNamespace(engine=types.SimpleNamespace(settings=('.', 'native', device)),
+                                            status=lambda: {'model_state': 'unloaded'})
+            with patch.object(qwen.ThreadingHTTPServer, '__init__', return_value=None):
+                server = qwen.QwenHTTPServer(0, service)
+                result = server.status()
+            self.assertEqual(result['device'], device)
+            self.assertEqual(result['backend'], 'cuda' if device.startswith('CUDA') else 'rocm')
+        service.engine.settings = ('.', 'native', 'CPU')
+        with self.assertRaises(qwen.ServiceError):
+            qwen.QwenHTTPServer(0, service)
+
     def test_production_configuration_has_no_cpu_or_legacy_fallback(self):
         for device in ["cpu", "cuda", "ROCm", "ROCm100", "ROCm-1", "ROCm00", "ROCm01", "ROCm0\n"]:
             with self.assertRaises(qwen.ServiceError):

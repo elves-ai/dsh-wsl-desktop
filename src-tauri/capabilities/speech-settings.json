@@ -14,8 +14,9 @@
     "allow-set-speech-preferences",
     "allow-test-speech",
     "allow-cancel-speech-test",
+    "allow-initialize-speech-environment",
+    "allow-cancel-speech-initialization",
     "allow-discover-speech-resources",
-    "allow-browse-speech-path",
     "allow-get-speech-download",
     "allow-download-speech-model",
     "allow-cancel-speech-download"

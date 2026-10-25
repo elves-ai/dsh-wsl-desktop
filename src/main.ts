@@ -91,7 +91,7 @@ app.innerHTML = settingsView ? `
     <header class="settings-heading"><p class="eyebrow">应用设置</p><h1 id="settings-title" tabindex="-1">环境与目录</h1><p id="settings-description">指定已有的 DSH 项目，查看本地运行配置。</p></header>
     <div class="error-notice" id="error-notice" role="alert" hidden></div>
     <section id="settings-environment" aria-label="环境与目录">
-      <div class="setting-group"><h2>DSH 项目目录</h2><p id="repository-help">填写 WSL 内的绝对路径，不是 Windows 路径。</p><label class="visually-hidden" for="repository-input">DSH 项目目录</label><input id="repository-input" type="text" placeholder="/home/用户名/deepseek-harness" autocomplete="off" spellcheck="false" maxlength="4096" aria-describedby="repository-help repository-notice" disabled><p class="setting-help" id="repository-notice" role="status" aria-live="polite">正在读取配置。</p><button class="button primary" id="save-repository" type="button" disabled>保存并重新检测</button></div>
+      <div class="setting-group"><h2>DSH 项目目录</h2><p id="repository-help">使用 Windows 系统窗口选择已配置 WSL 发行版内的项目目录。</p><label class="visually-hidden" for="repository-input">DSH 项目目录</label><input id="repository-input" type="text" placeholder="/home/用户名/deepseek-harness" autocomplete="off" spellcheck="false" maxlength="4096" aria-describedby="repository-help repository-notice" readonly aria-readonly="true" disabled><button class="button secondary" id="pick-repository" type="button" disabled>选择项目目录…</button><p class="setting-help" id="repository-notice" role="status" aria-live="polite">正在读取配置。</p><button class="button primary" id="save-repository" type="button" disabled>保存并重新检测</button></div>
       <div class="setting-group"><div class="group-heading"><h2>运行环境</h2><span id="status-label" class="muted">读取中</span></div><dl class="connection-info"><div><dt>服务地址</dt><dd><code id="origin">尚未连接</code></dd></div><div><dt>进程归属</dt><dd id="ownership">等待检查</dd></div><div><dt>启动配置</dt><dd id="config-location">尚未读取</dd></div></dl><p class="setting-help" id="ownership-hint">仅管理由启动器托管的服务。</p><button class="button secondary" id="check" type="button" disabled>重新检测并进入 DSH</button></div>
       <p class="setting-help">不自动安装软件、克隆项目或安装依赖。修改目录前，请通过托盘右键菜单停止服务。</p>
     </section>
@@ -134,8 +134,8 @@ app.innerHTML = settingsView ? `
     <form id="setup-form" novalidate>
       <div class="setup-field"><label for="setup-distribution">WSL 发行版</label><div class="setup-inline"><select id="setup-distribution" aria-describedby="setup-distribution-status" disabled><option value="">请选择发行版</option></select><button class="button secondary" id="setup-detect-distributions" type="button" disabled>重新检测</button></div><p class="setting-help" id="setup-distribution-status" role="status" aria-live="polite">等待检测发行版。</p></div>
       <div class="setup-field"><label for="setup-user">Linux 用户</label><div class="setup-inline"><input id="setup-user" type="text" placeholder="留空发现发行版默认用户" autocomplete="off" spellcheck="false" maxlength="256" aria-describedby="setup-identity-status" disabled><button class="button secondary" id="setup-detect-identity" type="button" disabled>发现用户与 Node</button></div><p class="setting-help" id="setup-identity-status" role="status" aria-live="polite">自动发现默认用户，也可填写其他用户名后重新发现。</p></div>
-      <div class="setup-field"><label for="setup-repository">Harness 项目目录</label><input id="setup-repository" type="text" placeholder="/home/用户名/deepseek-harness" autocomplete="off" spellcheck="false" maxlength="4096" aria-describedby="setup-repository-help" disabled><p class="setting-help" id="setup-repository-help">填写已准备好的 Harness WSL 绝对目录，不是 Windows 路径。</p></div>
-      <div class="setup-field"><label for="setup-node">Node.js 绝对路径</label><input id="setup-node" type="text" placeholder="/usr/bin/node" autocomplete="off" spellcheck="false" maxlength="4096" aria-describedby="setup-node-help" disabled><p class="setting-help" id="setup-node-help">自动发现后可修改；未发现时请手动填写。使用 nvm 时，请填写具体版本的绝对路径，例如 /home/用户名/.nvm/versions/node/v24.0.0/bin/node。</p></div>
+      <div class="setup-field"><label for="setup-repository">Harness 项目目录</label><input id="setup-repository" type="text" placeholder="/home/用户名/deepseek-harness" autocomplete="off" spellcheck="false" maxlength="4096" aria-describedby="setup-repository-help" readonly aria-readonly="true" disabled><button class="button secondary" id="setup-pick-repository" type="button" disabled>选择项目目录…</button><p class="setting-help" id="setup-repository-help">使用 Windows 系统窗口选择当前发行版内已准备好的 Harness 项目。</p></div>
+      <div class="setup-field"><label for="setup-node">Node.js 绝对路径</label><input id="setup-node" type="text" placeholder="/usr/bin/node" autocomplete="off" spellcheck="false" maxlength="4096" aria-describedby="setup-node-help" readonly aria-readonly="true" disabled><button class="button secondary" id="setup-pick-node" type="button" disabled>选择 Node.js 文件…</button><p class="setting-help" id="setup-node-help">自动发现后可通过系统窗口选择其他 Node.js；nvm 请选具体版本内的可执行文件。</p></div>
       <details class="setup-advanced" id="setup-advanced"><summary>高级配置</summary><div class="setup-field"><label for="setup-port">本地服务端口</label><input id="setup-port" type="number" value="3080" min="1" max="65535" step="1" aria-describedby="setup-port-help" disabled><p class="setting-help" id="setup-port-help">默认 3080。如提示端口冲突，可修改后重试。</p></div></details>
       <div class="error-notice" id="setup-error" role="alert" hidden></div>
       <p class="setting-help" id="setup-submit-status" role="status" aria-live="polite"></p>
@@ -157,6 +157,9 @@ let snapshot: Snapshot = { setup_required: false, state: 'unknown', phase: '连�
 let pending = false;
 let repositoryPending = false;
 let repositoryDirty = false;
+let pathPicking = false;
+let pathPickerEpoch = 0;
+let setupHome = '/';
 let settingsRequestPending = false;
 let settingsReturnPending = false;
 let settingsDisposed = false;
@@ -250,13 +253,13 @@ let setupError = '';
 const setupInput = (name: string) => element<HTMLInputElement>('setup-' + name);
 const setupDistribution = () => element<HTMLSelectElement>('setup-distribution');
 const setupActive = () => !settingsView && !setupDisposed && snapshot.setup_required;
-const absoluteLinuxPath = (value: string) => value.startsWith('/') && !value.startsWith('//') && value.length <= 4096 && !/[\u0000-\u001f\u007f]/.test(value);
+const absoluteLinuxPath = (value: string) => value.startsWith('/') && !value.startsWith('//') && value.length <= 4096 && !value.includes('\\') && !/[\u0000-\u001f\u007f]/.test(value);
 function setupValidation(): string {
   if (!setupDistribution().value) return '请选择 WSL 发行版。';
   const user = setupInput('user').value.trim();
   if (!user || user.startsWith('-') || /[\s\u0000-\u001f\u007f]/.test(user)) return '请先发现默认用户，或填写有效的 Linux 用户名。';
-  if (!absoluteLinuxPath(setupInput('repository').value.trim())) return '请填写 Harness 的 WSL 绝对目录。';
-  if (!absoluteLinuxPath(setupInput('node').value.trim())) return '请填写 Node.js 的 WSL 绝对路径；可手动填写 nvm 中的具体路径。';
+  if (!absoluteLinuxPath(setupInput('repository').value.trim())) return '请选择 Harness 的 WSL 项目目录。';
+  if (!absoluteLinuxPath(setupInput('node').value.trim())) return '请选择 WSL 内的 Node.js 文件（支持 nvm）。';
   const port = Number(setupInput('port').value);
   if (!Number.isInteger(port) || port < 1 || port > 65535) return '端口必须是 1–65535 的整数。';
   return '';
@@ -269,8 +272,9 @@ function renderSetup(): void {
   if (!active) return;
   element('startup-shell').dataset.state = 'setup';
   element('phase').textContent = setupSubmitting ? setupStateUnknown ? '正在确认配置状态' : '正在配置并启动' : '首次配置';
-  const locked = !native || !connected || setupSubmitting || snapshot.busy || updateLocksService();
+  const locked = !native || !connected || setupSubmitting || pathPicking || snapshot.busy || updateLocksService();
   for (const name of ['user', 'repository', 'node', 'port']) setupInput(name).disabled = locked;
+  for (const name of ['repository', 'node']) element<HTMLButtonElement>('setup-pick-' + name).disabled = locked || setupListing || setupDiscovering || !setupDistribution().value;
   setupDistribution().disabled = locked || setupListing;
   element<HTMLButtonElement>('setup-detect-distributions').disabled = setupStateUnknown ? !native || !connected || setupSubmitting || setupListing : locked || setupListing;
   element('setup-detect-distributions').textContent = setupStateUnknown ? '重新读取状态' : '重新检测';
@@ -283,7 +287,7 @@ function renderSetup(): void {
   if (native && connected && !setupInitialized) { setupInitialized = true; void detectSetupDistributions(); }
 }
 async function detectSetupDistributions(): Promise<void> {
-  if (!native || !connected || !setupActive() || setupListing || setupSubmitting) return;
+  if (!native || !connected || !setupActive() || pathPicking || setupListing || setupSubmitting) return;
   setupListing = true;
   setupError = '';
   element('setup-distribution-status').textContent = '正在检测 WSL 发行版…';
@@ -313,8 +317,9 @@ async function detectSetupDistributions(): Promise<void> {
   } finally { setupListing = false; if (!setupDisposed) render(); }
 }
 function changeSetupDistribution(): void {
-  if (!setupActive() || setupSubmitting) return;
-  setupIdentityRevision += 1;
+  if (!setupActive() || setupSubmitting || pathPicking) return;
+  setupIdentityRevision += 1; pathPickerEpoch++; setupHome = '/';
+  setupInput('repository').value = '';
   setupDiscovering = false;
   setupInput('user').value = '';
   setupInput('node').value = '';
@@ -325,7 +330,7 @@ function changeSetupDistribution(): void {
   render();
 }
 async function detectSetupIdentity(): Promise<void> {
-  if (!native || !connected || !setupActive() || setupSubmitting || !setupDistribution().value) return;
+  if (!native || !connected || !setupActive() || pathPicking || setupSubmitting || !setupDistribution().value) return;
   const revision = ++setupIdentityRevision;
   const nodeRevision = setupNodeRevision;
   const distribution = setupDistribution().value;
@@ -337,12 +342,13 @@ async function detectSetupIdentity(): Promise<void> {
   try {
     const identity = await invoke<SetupIdentity>('setup_identity', { distribution, linuxUser });
     if (!setupActive() || revision !== setupIdentityRevision) return;
+    setupHome = absoluteLinuxPath(identity.home) ? identity.home : '/';
     setupInput('user').value = identity.linux_user;
     if (nodeRevision === setupNodeRevision) setupInput('node').value = identity.node;
-    element('setup-identity-status').textContent = '用户：' + identity.linux_user + ' · 主目录：' + identity.home + (identity.node ? ' · 已发现 Node.js，可手动修改。' : ' · 未发现 Node.js，请手动填写绝对路径（支持 nvm）。');
+    element('setup-identity-status').textContent = '用户：' + identity.linux_user + ' · 主目录：' + identity.home + (identity.node ? ' · 已发现 Node.js，可通过系统窗口更换。' : ' · 未发现 Node.js，请通过系统窗口选择（支持 nvm）。');
   } catch (error) {
     if (setupActive() && revision === setupIdentityRevision) {
-      setupError = '用户或 Node.js 发现失败，可重试或手动填写：' + String(error);
+      setupError = '用户或 Node.js 发现失败，可重试或选择已有文件：' + String(error);
       element('setup-identity-status').textContent = '发现未完成，已保留表单。';
     }
   } finally {
@@ -398,7 +404,7 @@ async function completeSetup(): Promise<void> {
   } finally { setupSubmitting = false; if (!setupDisposed) render(); }
 }
 function render(): void {
-  const busy = snapshot.busy || pending || repositoryPending || setupSubmitting;
+  const busy = snapshot.busy || pending || repositoryPending || setupSubmitting || pathPicking;
   const disabled = !native || !connected || busy || updateLocksService();
   const passed = environmentPassed();
   const error = redact(settingsReturnError || settingsReadyError || localError || snapshot.last_error || '');
@@ -470,10 +476,11 @@ function renderSettings(disabled: boolean, passed: boolean, error: string): void
   if (!repositoryDirty) repositoryInput.value = snapshot.environment.repository || '';
   const canConfigure = ['config', 'distribution', 'user', 'python'].every(id => snapshot.environment.checks.some(item => item.id === id && item.status === 'passed'));
   repositoryInput.disabled = disabled || !canConfigure || running;
+  element<HTMLButtonElement>('pick-repository').disabled = repositoryInput.disabled;
   const path = repositoryInput.value.trim();
   const valid = path.startsWith('/') && !path.startsWith('//') && path.length <= 4096 && !/[\u0000-\u001f\u007f]/.test(path);
   saveRepositoryButton.disabled = repositoryInput.disabled || !valid || !repositoryDirty;
-  element('repository-notice').textContent = repositoryPending ? '正在保存并重新检测…' : running ? '修改目录前，请先通过托盘右键菜单停止服务。' : !canConfigure ? '请先准备好 WSL、启动器配置和 Python，再设置项目目录。' : repositoryDirty && !valid ? '请输入有效的 WSL 绝对路径，不能包含控制字符。' : '仅保存到现有服务配置；不会克隆项目或安装依赖。';
+  element('repository-notice').textContent = repositoryPending ? '正在保存并重新检测…' : running ? '修改目录前，请先通过托盘右键菜单停止服务。' : !canConfigure ? '请先准备好 WSL、启动器配置和 Python，再设置项目目录。' : repositoryDirty && !valid ? '请选择有效的 WSL 目录，不能包含控制字符。' : '仅保存到现有服务配置；不会克隆项目或安装依赖。';
   element('status-label').textContent = snapshot.environment_checking ? '检测中' : passed ? '检查通过' : '需要检查';
   element('origin').textContent = safeOrigin(snapshot.origin);
   element('ownership').textContent = snapshot.managed ? '由启动器管理' : snapshot.state === 'ready' ? '未验证归属' : '未托管';
@@ -511,7 +518,7 @@ function renderUpdate(): void {
   checkUpdateButton.disabled = !native || !updateConnected || busy;
   checkUpdateButton.textContent = update.phase === 'checking' || updatePending === 'check_update' ? '正在检查…' : '检查更新';
   installUpdateButton.hidden = !available;
-  installUpdateButton.disabled = !native || !updateConnected || !available || busy || !connected || snapshot.busy || pending || repositoryPending;
+  installUpdateButton.disabled = !native || !updateConnected || !available || busy || !connected || snapshot.busy || pending || repositoryPending || pathPicking;
 }
 
 function renderNotifications(): void {
@@ -736,6 +743,7 @@ function selectSettings(section: string, focus = false): void {
   if (!settingsView) return;
   const selected = settingsSections.find(item => item === (section === 'speech' ? 'pet' : section));
   if (!selected) return;
+  if (selected !== settingsSection) pathPickerEpoch++;
   settingsSection = selected;
   const index = settingsSections.indexOf(selected);
   element('settings-title').textContent = ['环境与目录', '系统通知', '电源管理', '桌面宠物', '软件更新', '诊断日志'][index] || '';
@@ -782,6 +790,7 @@ async function returnFromSettings(): Promise<void> {
   if (!settingsView || settingsDisposed || settingsReturnPending) return;
   // Preview has no retained native view: use a fixed local startup route, never history or URL input.
   if (!native) { window.location.search = ''; return; }
+  pathPickerEpoch++;
   settingsReturnPending = true;
   settingsReturnError = '';
   render();
@@ -805,6 +814,39 @@ async function perform(action: Action): Promise<void> {
     if (eventRevision === revision) snapshot = result;
   } catch (error) { localError = '操作未完成：' + String(error); }
   finally { pending = false; render(); }
+}
+/** Selection returns only a draft; explicit Save / Complete remain the only writers. */
+async function pickRepository(): Promise<void> {
+  if (!native || !settingsView || settingsDisposed || document.hidden || settingsSection !== 'environment'
+    || settingsReturnPending || pathPicking || element<HTMLButtonElement>('pick-repository').disabled) return;
+  const epoch = ++pathPickerEpoch, current = repositoryInput.value;
+  pathPicking = true; localError = ''; render();
+  try {
+    const path = await invoke<unknown>('pick_settings_path', { kind: 'repository', currentPath: current || null });
+    if (settingsDisposed || document.hidden || epoch !== pathPickerEpoch || settingsSection !== 'environment'
+      || settingsReturnPending || snapshot.busy || ['ready', 'starting'].includes(snapshot.state) || repositoryInput.value !== current) return;
+    if (path === null) return;
+    if (typeof path !== 'string' || !absoluteLinuxPath(path)) throw Error('invalid path');
+    repositoryInput.value = path; repositoryDirty = true;
+  } catch { if (!settingsDisposed && epoch === pathPickerEpoch) localError = '无法选择项目目录；仅支持已配置 WSL 发行版内的目录，请重试。'; }
+  finally { pathPicking = false; if (!settingsDisposed) render(); }
+}
+async function pickSetupPath(name: 'repository' | 'node'): Promise<void> {
+  if (!native || !setupActive() || pathPicking || element<HTMLButtonElement>('setup-pick-' + name).disabled) return;
+  const epoch = ++pathPickerEpoch, distribution = setupDistribution().value, user = setupInput('user').value;
+  const current = setupInput(name).value;
+  const base = setupHome === '/' ? '' : setupHome;
+  pathPicking = true; setupError = ''; render();
+  try {
+    const path = await invoke<unknown>('pick_settings_path', { kind: name === 'repository' ? 'setup_repository' : 'setup_node',
+      currentPath: current || (name === 'repository' ? setupHome : base + '/node'), distribution });
+    if (!setupActive() || document.hidden || epoch !== pathPickerEpoch || setupDistribution().value !== distribution
+      || setupInput('user').value !== user || setupInput(name).value !== current || snapshot.busy || setupSubmitting) return;
+    if (path === null) return;
+    if (typeof path !== 'string' || !absoluteLinuxPath(path)) throw Error('invalid path');
+    setupInput(name).value = path; if (name === 'node') setupNodeRevision++;
+  } catch { if (setupActive() && epoch === pathPickerEpoch) setupError = '无法选择路径；请在系统窗口中选择当前发行版内的文件或目录。'; }
+  finally { pathPicking = false; if (!setupDisposed) render(); }
 }
 async function saveRepository(): Promise<void> {
   if (!native || saveRepositoryButton.disabled || pending || repositoryPending) return;
@@ -830,7 +872,7 @@ function previewSnapshot(): Snapshot {
   const ready = preview === 'ready';
   const failed = preview === 'error';
   if (failed) for (const item of checks) {
-    if (item.id === 'repository') Object.assign(item, { status: 'error', message: '未找到配置的 DSH 项目。', hint: '请在设置中填写已有项目的 WSL 绝对路径。' });
+    if (item.id === 'repository') Object.assign(item, { status: 'error', message: '未找到配置的 DSH 项目。', hint: '请在设置中通过系统窗口选择已有项目的 WSL 目录。' });
     if (['node','dependencies','web_assets'].includes(item.id)) Object.assign(item, { status: 'skipped', message: '等待项目目录检查通过。' });
   }
   if (!settingsView && !failed && !ready) for (const item of checks) item.status = 'pending';
@@ -932,7 +974,7 @@ async function initializeUpdates(): Promise<void> {
 if (settingsView) {
   selectSettings(settingsSection);
   element('settings-back').addEventListener('click', () => { void returnFromSettings(); });
-  repositoryInput.addEventListener('input', () => { repositoryDirty = true; render(); });
+  element('pick-repository').addEventListener('click', () => { void pickRepository(); });
   saveRepositoryButton.addEventListener('click', () => { void saveRepository(); });
   notificationsEnabled.addEventListener('change', () => { void performNotification('set_notifications_enabled', notificationsEnabled.checked); });
   notificationsWhenFocused.addEventListener('change', () => {
@@ -957,16 +999,17 @@ if (settingsView) {
     if (setupStateUnknown) void retrySetupSnapshot(); else void detectSetupDistributions();
   });
   setupDistribution().addEventListener('change', changeSetupDistribution);
+  for (const name of ['repository', 'node'] as const) element('setup-pick-' + name).addEventListener('click', () => { void pickSetupPath(name); });
   element('setup-detect-identity').addEventListener('click', () => {
     if (!element<HTMLButtonElement>('setup-detect-identity').disabled) void detectSetupIdentity();
   });
   setupInput('user').addEventListener('input', () => {
     if (setupSubmitting) return;
-    setupIdentityRevision += 1;
+    setupIdentityRevision += 1; pathPickerEpoch++; setupHome = '/';
     setupDiscovering = false;
     setupNodeRevision += 1;
     setupInput('node').value = '';
-    element('setup-identity-status').textContent = '用户已修改，可重新发现 Node.js 或手动填写。';
+    element('setup-identity-status').textContent = '用户已修改，可重新发现 Node.js 或通过系统窗口选择。';
     setupError = '';
     render();
   });
@@ -989,7 +1032,10 @@ window.addEventListener('beforeunload', () => {
   petDisposed = true; unlistenPet?.(); unlistenPet = undefined;
   unlisten?.(); unlistenShowLogs?.(); unlistenShowSettings?.(); unlistenUpdates?.(); unlistenShowUpdates?.();
 }, { once: true });
-document.addEventListener('visibilitychange', () => speechSettings?.setVisible(settingsSection === 'pet' && !document.hidden && settingsPageRevealed));
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) pathPickerEpoch++;
+  speechSettings?.setVisible(settingsSection === 'pet' && !document.hidden && settingsPageRevealed);
+});
 window.addEventListener('pagehide', () => speechSettings?.dispose(), { once: true });
 render();
 const initialization = initialize();

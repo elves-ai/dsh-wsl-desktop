@@ -79,7 +79,7 @@ class StageTests(unittest.TestCase):
         sha = hashlib.sha256()
         for name in sorted(self.files):
             sha.update(name.encode() + b"\0" + self.files[name])
-        expected = self.home / ".local/share/dsh-pet/speech-service" / sha.hexdigest()
+        expected = self.home / ".dsh-wsl-desktop/speech/service" / sha.hexdigest()
         self.assertEqual(result, {"ok": True, "script_path": str(expected / "server.py"),
                                   "runtime_helper": str(expected / "managed_runtime.py")})
         before = (expected / "server.py").stat()
@@ -100,7 +100,7 @@ class StageTests(unittest.TestCase):
         for request in ({"files": {}}, dict(self.request, target="/tmp/escape")):
             with self.assertRaises(runtime.Refused):
                 runtime.stage(request)
-        self.assertFalse((self.home / ".local").exists())
+        self.assertFalse((self.home / ".dsh-wsl-desktop").exists())
 
     def test_base64_and_per_file_caps(self):
         for value in ("!", "YWJj\n", "非ASCII", 3):
@@ -120,13 +120,65 @@ class StageTests(unittest.TestCase):
         with self.assertRaises(runtime.Refused):
             runtime.stage(stage_request(files))
 
-    def test_symlink_cache_ancestor_is_not_followed(self):
+    def test_symlink_cache_ancestors_and_owned_are_not_followed(self):
         outside = self.home / "outside"
         outside.mkdir()
-        (self.home / ".local").symlink_to(outside, target_is_directory=True)
-        with self.assertRaises(OSError):
-            runtime.stage(self.request)
-        self.assertEqual(list(outside.iterdir()), [])
+        parent = self.home
+        for component in (".dsh-wsl-desktop", "speech", "service", "owned"):
+            with self.subTest(component=component):
+                path = parent / component
+                path.symlink_to(outside, target_is_directory=True)
+                try:
+                    if component != "owned":
+                        with self.assertRaises(OSError):
+                            runtime.stage(self.request)
+                    with self.assertRaises(OSError):
+                        runtime.marker_dir(create=True)
+                    self.assertEqual(list(outside.iterdir()), [])
+                finally:
+                    path.unlink()
+                path.mkdir(mode=0o700)
+                parent = path
+
+    def test_cache_ancestors_and_owned_refuse_unsafe_permissions(self):
+        os.close(runtime.marker_dir(create=True))
+        paths = [self.home]
+        for component in (".dsh-wsl-desktop", "speech", "service", "owned"):
+            paths.append(paths[-1] / component)
+        for path in paths:
+            self.assertEqual(path.stat().st_mode & 0o777, 0o700)
+            modes = (0o702, 0o720, 0o740, 0o701) if path.name in ("service", "owned") else (0o702, 0o720)
+            for mode in modes:
+                with self.subTest(path=path, mode=oct(mode)):
+                    path.chmod(mode)
+                    try:
+                        with self.assertRaises(runtime.Refused) as error:
+                            runtime.marker_dir()
+                        self.assertEqual(error.exception.code, "unsafe_cache")
+                    finally:
+                        path.chmod(0o700)
+
+    def test_cache_ancestors_and_owned_refuse_foreign_owner(self):
+        os.close(runtime.marker_dir(create=True))
+        paths = [self.home]
+        for component in (".dsh-wsl-desktop", "speech", "service", "owned"):
+            paths.append(paths[-1] / component)
+        real_fstat = os.fstat
+        for path in paths:
+            identity = (path.stat().st_dev, path.stat().st_ino)
+
+            def foreign_owner(fd):
+                info = real_fstat(fd)
+                if (info.st_dev, info.st_ino) == identity:
+                    fields = list(info)
+                    fields[4] = os.getuid() + 1
+                    return os.stat_result(fields)
+                return info
+
+            with self.subTest(path=path), mock.patch.object(runtime.os, "fstat", side_effect=foreign_owner):
+                with self.assertRaises(runtime.Refused) as error:
+                    runtime.marker_dir()
+                self.assertEqual(error.exception.code, "unsafe_cache")
 
     def test_symlink_bundle_is_not_followed(self):
         fd, root = runtime.cache()
@@ -207,6 +259,28 @@ class StageTests(unittest.TestCase):
                 runtime.absolute(path)
         self.assertEqual(runtime.absolute("/space path/file"), "/space path/file")
 
+    def test_check_event_accepts_only_matching_cuda_rocm_results(self):
+        base = {"kind": "result", "environment_ok": True, "models_ok": True,
+                "gpu_name": "NVIDIA fixture", "error_code": None}
+        for backend, device in [("cuda", "CUDA0"), ("cuda", "CUDA99"), ("rocm", "ROCm1")]:
+            event = dict(base, backend=backend, device=device)
+            self.assertEqual(runtime.check_event(json.dumps(event).encode()), event)
+        for backend, device in [("cuda", "ROCm0"), ("rocm", "CUDA0"), ("cpu", "CPU"),
+                                ("cuda", "auto"), ("cuda", "CUDA00"), ("cuda", "CUDA100"),
+                                ("cuda", "CUDA-1"), (None, None), ([], "CUDA0")]:
+            with self.subTest(backend=backend, device=device), self.assertRaises(runtime.Refused):
+                runtime.check_event(json.dumps(dict(base, backend=backend, device=device)).encode())
+        for fields in [{"backend": "cuda"}, {"device": "CUDA0"}, {"backend": "cuda", "device": "CUDA0", "raw": "/secret"}]:
+            with self.assertRaises(runtime.Refused):
+                runtime.check_event(json.dumps(dict(base, **fields)).encode())
+
+    def test_check_event_preserves_safe_cuda_errors_and_model_roles(self):
+        for code in ["cuda_libraries_unavailable", "gpu_backend_mismatch", "gpu_runtime_unavailable",
+                     "missing_talker", "missing_codec", "hash_mismatch_talker", "hash_mismatch_codec"]:
+            event = {"kind": "result", "environment_ok": False, "models_ok": False,
+                     "gpu_name": None, "error_code": code, "backend": None, "device": None}
+            self.assertEqual(runtime.check_event(json.dumps(event).encode()), event)
+
     def test_bounded_json_rejects_duplicate_trailing_and_oversize(self):
         for text in (b'{"files":{},"files":{}}', b'{}{}', b'[]', b'bad'):
             with self.assertRaises(runtime.Refused):
@@ -216,10 +290,37 @@ class StageTests(unittest.TestCase):
 
     def test_missing_marker_probe_is_readonly_and_stop_refuses(self):
         creds = {"instance_id": "1" * 64, "control_token": "2" * 64}
-        self.assertEqual(runtime.probe_owned(creds), {"ok": True, "alive": False})
-        with self.assertRaises(runtime.Refused):
-            runtime.stop(creds)
+        script = self.home / ".dsh-wsl-desktop/speech/service" / ("a" * 64) / "server.py"
+        parent = self.home
+        for component in (".dsh-wsl-desktop", "speech", "service", "owned", None):
+            with self.subTest(missing=component), mock.patch.object(runtime.os, "mkdir") as mkdir, \
+                 mock.patch.object(runtime.os, "killpg") as kill:
+                self.assertEqual(runtime.probe_owned(creds), {"ok": True, "alive": False})
+                with self.assertRaises(runtime.Refused):
+                    runtime.stop(creds)
+                with self.assertRaises(FileNotFoundError):
+                    runtime.validate_bundle(str(script))
+                mkdir.assert_not_called()
+                kill.assert_not_called()
+                self.assertEqual(list(parent.iterdir()), [])
+            if component is not None:
+                parent = parent / component
+                parent.mkdir(mode=0o700)
         self.assertFalse((self.home / ".local").exists())
+
+    def test_legacy_service_directory_is_not_reused_or_migrated(self):
+        legacy = self.home / ".local/share/dsh-pet/speech-service"
+        legacy.mkdir(parents=True, mode=0o700)
+        sentinel = legacy / "sentinel"
+        sentinel.write_bytes(b"legacy service data")
+        result = runtime.stage(self.request)
+        self.assertEqual(Path(result["script_path"]).parent.parent,
+                         self.home / ".dsh-wsl-desktop/speech/service")
+        self.assertEqual(list(legacy.iterdir()), [sentinel])
+        self.assertEqual(sentinel.read_bytes(), b"legacy service data")
+        with self.assertRaises(runtime.Refused) as error:
+            runtime.validate_bundle(str(legacy / runtime.bundle_digest(self.files) / "server.py"))
+        self.assertEqual(error.exception.code, "not_staged")
 
     def test_marker_cleanup_requires_same_inode_and_private_context(self):
         fd = runtime.marker_dir(create=True)
@@ -227,7 +328,7 @@ class StageTests(unittest.TestCase):
         runtime.put_file(fd, instance + ".json", b"{}", 100)
         os.close(fd)
         _, inode = runtime.marker_read(instance)
-        path = self.home / ".local/share/dsh-pet/speech-service/owned" / (instance + ".json")
+        path = self.home / ".dsh-wsl-desktop/speech/service/owned" / (instance + ".json")
         runtime.marker_remove(instance, (inode[0], inode[1] + 1))
         self.assertTrue(path.exists())
         path.chmod(0o644)
@@ -356,7 +457,7 @@ class ProcessTests(unittest.TestCase):
         return {key: launch[key] for key in ("instance_id", "control_token")}
 
     def marker_path(self, launch):
-        return self.home / ".local/share/dsh-pet/speech-service/owned" / (launch["instance_id"] + ".json")
+        return self.home / ".dsh-wsl-desktop/speech/service/owned" / (launch["instance_id"] + ".json")
 
     def test_detached_launch_stop_and_secret_channel(self):
         launch, report = self.start()
@@ -473,7 +574,7 @@ class ProcessTests(unittest.TestCase):
         self.assertEqual(child.wait(timeout=4), 0)
         self.assertTrue(until(lambda: not running(pids["model_pid"])))
         self.assertFalse(running(pids["service_pid"]))
-        owned = self.home / ".local/share/dsh-pet/speech-service/owned"
+        owned = self.home / ".dsh-wsl-desktop/speech/service/owned"
         self.assertEqual(list(owned.iterdir()), [])
         self.assertEqual(child.stderr.read(), b"")
 
@@ -481,7 +582,7 @@ class ProcessTests(unittest.TestCase):
         child, model, _ = self.held_start(read_reply=False)
         child.stdin.close()
         self.assertEqual(child.wait(timeout=4), 0)
-        owned = self.home / ".local/share/dsh-pet/speech-service/owned"
+        owned = self.home / ".dsh-wsl-desktop/speech/service/owned"
         self.assertFalse(owned.exists() and list(owned.iterdir()))
         if (model / "report.json").exists():
             pids = json.loads((model / "report.json").read_text())
@@ -526,7 +627,7 @@ class ProcessTests(unittest.TestCase):
         try:
             self.assertEqual(child.wait(timeout=8), 0)
             self.assertEqual(child.stderr.read(), b"")
-            owned = self.home / ".local/share/dsh-pet/speech-service/owned"
+            owned = self.home / ".dsh-wsl-desktop/speech/service/owned"
             self.assertEqual(list(owned.iterdir()), [])
             if (model / "report.json").exists():
                 pids = json.loads((model / "report.json").read_text())
@@ -624,6 +725,13 @@ os._exit(1)
         self.assertEqual(events, [{"kind": "progress", "progress": 25},
             {"kind": "result", "environment_ok": True, "models_ok": True,
              "gpu_name": "AMD fixture", "error_code": None}])
+
+    def test_inspect_cuda_result_and_auto_device_reach_the_staged_checker(self):
+        checker = "import json,sys; assert sys.argv[sys.argv.index('--device')+1]=='auto'; print(json.dumps({'kind':'result','environment_ok':True,'models_ok':True,'gpu_name':'NVIDIA fixture','error_code':None,'backend':'cuda','device':'CUDA0'}),flush=True)"
+        child, _ = self.inspect_start(checker)
+        events = self.inspect_finish(child)
+        self.assertTrue(events[-1]["environment_ok"])
+        self.assertEqual((events[-1]["backend"], events[-1]["device"]), ("cuda", "CUDA0"))
 
     def inspect_sleep_checker(self):
         return r"""

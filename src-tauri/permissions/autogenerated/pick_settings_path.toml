@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-pick-settings-path"
+description = "Enables the pick_settings_path command without any pre-configured scope."
+commands.allow = ["pick_settings_path"]
+
+[[permission]]
+identifier = "deny-pick-settings-path"
+description = "Denies the pick_settings_path command without any pre-configured scope."
+commands.deny = ["pick_settings_path"]

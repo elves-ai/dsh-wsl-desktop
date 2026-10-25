@@ -55,6 +55,17 @@ test('resource busy blocks save, check, start and audition without blocking canc
  f.event('launcher-speech-state',ready({revision:4}));assert.equal(blocked,true);f.settings.dispose();
 });
 
+test('resource initialization busy blocks ready audition and polling but not later draft input or preferences',async()=>{
+ let busy=false;const locks=[];
+ const f=fixture({initial:ready(),resources(){return{isBusy:()=>busy,setVisible(){},setBlocked:v=>locks.push(v),dispose(){}};}});f.show();await tick();
+ assert.equal(f.node('test').disabled,false);busy=true;f.node('resources').emit('speech-resources-busy');
+ assert.equal(f.node('test').disabled,true);f.click('test');f.click('refresh');await f.poll();
+ assert.equal(f.calls.some(c=>c.name==='test_speech'||c.args?.action==='refresh'),false);
+ f.fill('model_dir','/newer/draft');assert.equal(f.node('model_dir').disabled,false);assert.equal(f.node('save').disabled,true);
+ assert.equal(f.node('auto').disabled,false);busy=false;f.node('resources').emit('speech-resources-busy');
+ assert.equal(f.node('model_dir').value,'/newer/draft');assert.equal(f.node('test').disabled,false);f.settings.dispose();
+});
+
 test('preview stays unknown, disabled and entirely non-mutating even for synthetic events',async()=>{
  const f=fixture({native:false});f.show();for(const id of ['save','refresh','check','start','stop','test','copy']){assert.equal(f.node(id).disabled,true);f.click(id);}f.fill('model_dir','/new');f.node('auto').checked=true;f.node('auto').emit('change');await tick();assert.deepEqual(f.calls,[]);assert.equal(f.listeners.size,0);assert.equal(f.timers.size,0);assert.equal(f.node('model_state').textContent,'未知');assert.match(f.node('message').textContent,/浏览器预览/);f.settings.dispose();
 });

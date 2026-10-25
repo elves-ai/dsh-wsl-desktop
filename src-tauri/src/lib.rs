@@ -17,6 +17,7 @@ pub mod pet_notifications;
 pub mod pet_settings;
 pub mod power;
 pub mod protocol;
+pub mod settings_path;
 pub mod setup;
 pub mod speech_resources;
 pub mod speech_settings;

@@ -26,7 +26,7 @@ import time
 import unicodedata
 
 VERSION = "1.0.0"
-DEFAULT_STATE = Path.home() / ".local/state/dsh-wsl-desktop"
+DEFAULT_STATE = Path.home() / ".dsh-wsl-desktop/state"
 MAX_RECORD = 65536
 LOG_WINDOW = 128 * 1024
 STOP_TIMEOUT = 8.0

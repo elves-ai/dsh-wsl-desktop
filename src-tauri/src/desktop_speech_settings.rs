@@ -1,9 +1,7 @@
 //! Narrow trusted settings facade; runtime paths never become JS commands.
 use super::{assert_local, settings_page, Controller};
 use crate::{
-    speech_resources::{
-        Directory, Discovery, DownloadStatus, Manager as ResourceManager, PathKind,
-    },
+    speech_resources::{Discovery, DownloadStatus, Initialization, Manager as ResourceManager},
     speech_settings::{
         Manager as SpeechManager, PreferencesPatch, SpeechAction, SpeechConfig, SpeechPreferences,
         SpeechSnapshot,
@@ -171,6 +169,27 @@ fn resource_controls(app: &tauri::AppHandle) -> Result<Arc<ResourceManager>, Str
         .clone()
 }
 #[tauri::command]
+pub(super) async fn initialize_speech_environment(
+    view: Webview,
+    config: SpeechConfig,
+) -> Result<Initialization, String> {
+    assert_page(&view, true)?;
+    let resources = resource_controls(view.app_handle())?;
+    let speech = controls(view.app_handle())?;
+    tauri::async_runtime::spawn_blocking(move || resources.initialize(config, &speech))
+        .await
+        .map_err(|_| "语音初始化任务未完成。".to_string())?
+}
+#[tauri::command]
+pub(super) async fn cancel_speech_initialization(view: Webview) -> Result<(), String> {
+    assert_page(&view, false)?;
+    let resources = resource_controls(view.app_handle())?;
+    tauri::async_runtime::spawn_blocking(move || resources.cancel_initialization())
+        .await
+        .map_err(|_| "语音初始化取消尚未完成。".to_string())?;
+    Ok(())
+}
+#[tauri::command]
 pub(super) async fn discover_speech_resources(view: Webview) -> Result<Discovery, String> {
     assert_page(&view, true)?;
     let resources = resource_controls(view.app_handle())?;
@@ -179,17 +198,16 @@ pub(super) async fn discover_speech_resources(view: Webview) -> Result<Discovery
         .await
         .map_err(|_| "资源发现任务未完成。".to_string())?
 }
-#[tauri::command]
-pub(super) async fn browse_speech_path(
-    view: Webview,
-    path: Option<String>,
-    kind: PathKind,
-) -> Result<Directory, String> {
-    assert_page(&view, true)?;
-    let resources = resource_controls(view.app_handle())?;
-    tauri::async_runtime::spawn_blocking(move || resources.browse(path, kind))
-        .await
-        .map_err(|_| "目录浏览任务未完成。".to_string())?
+pub(super) fn assert_picker_available(app: &tauri::AppHandle) -> Result<(), String> {
+    let state = controls(app)?.get_snapshot();
+    if resource_controls(app)?.is_busy()
+        || (state.busy && state.operation.as_deref() != Some("refresh"))
+        || state.service_state == crate::speech_settings::ServiceState::Running
+        || state.ownership == crate::speech_settings::Ownership::Managed
+    {
+        return Err("请先结束语音操作并停止服务，再选择路径。".into());
+    }
+    Ok(())
 }
 #[tauri::command]
 pub(super) fn get_speech_download(view: Webview) -> Result<DownloadStatus, String> {

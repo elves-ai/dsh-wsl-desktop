@@ -106,11 +106,11 @@ def cache(create=True):
     try:
         info = os.fstat(fd)
         require(info.st_uid == os.getuid() and not info.st_mode & 0o022, "unsafe_cache")
-        for component in (".local", "share", "dsh-pet", "speech-service"):
-            child = _dir(fd, component, component == "speech-service", create)
+        for component in (".dsh-wsl-desktop", "speech", "service"):
+            child = _dir(fd, component, component == "service", create)
             os.close(fd)
             fd = child
-        return fd, home / ".local/share/dsh-pet/speech-service"
+        return fd, home / ".dsh-wsl-desktop/speech/service"
     except BaseException:
         os.close(fd)
         raise
@@ -462,7 +462,7 @@ def supervise(request):
         child = subprocess.Popen([
             request["python_path"], request["script_path"],
             "--model-dir", request["model_dir"], "--native-lib", request["native_lib"],
-            "--device", "ROCm0", "--port", "18765", "--managed-stdin"],
+            "--device", "auto", "--port", "18765", "--managed-stdin"],
             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             env=env, close_fds=True)
         child.stdin.write(encoded({"instance_id": instance, "control_token": token}) + b"\n")
@@ -575,7 +575,15 @@ def check_event(line):
             progress = value["progress"]
             require(type(progress) in (int, float) and 0 <= progress <= 100)
         else:
-            exact(value, ("kind", "environment_ok", "models_ok", "gpu_name", "error_code"))
+            fields = ("kind", "environment_ok", "models_ok", "gpu_name", "error_code")
+            # Older check fixtures omit this pair; new staged checkers always send
+            # the actual GPU backend/device, never a generic auto/CPU readiness.
+            exact(value, fields + (("backend", "device") if "backend" in value or "device" in value else ()))
+            if "backend" in value:
+                backend, device = value["backend"], value["device"]
+                require((backend is None and device is None and not value["environment_ok"])
+                    or (backend in {"cuda", "rocm"} and isinstance(device, str)
+                        and re.fullmatch(("CUDA" if backend == "cuda" else "ROCm") + r"(?:0|[1-9][0-9]?)", device) is not None))
             require(value["kind"] == "result")
             require(type(value["environment_ok"]) is bool and type(value["models_ok"]) is bool)
             name, error = value["gpu_name"], value["error_code"]
@@ -585,7 +593,9 @@ def check_event(line):
                 "wsl2_gpu_bridge_required", "rocm_sdk_not_installed", "gpu_probe_timeout",
                 "gpu_probe_failed", "gpu_compute_failed", "gpu_device_unavailable",
                 "environment_unavailable", "native_unavailable", "models_changed",
-                "models_hash_mismatch", "models_unavailable", "invalid_config", "check_failed"})
+                "cuda_libraries_unavailable", "gpu_backend_mismatch", "gpu_runtime_unavailable",
+                "models_hash_mismatch", "models_unavailable", "invalid_config", "check_failed",
+                "missing_talker", "missing_codec", "hash_mismatch_talker", "hash_mismatch_codec"})
         return value
     except (Refused, ValueError, TypeError, KeyError):
         raise Refused("invalid_check_output") from None
@@ -641,7 +651,7 @@ def inspect_check():
                 env["LD_LIBRARY_PATH"] = "/usr/lib/wsl/lib" + (":" + old if old else "")
         child = subprocess.Popen([
             request["python_path"], checker, "--models", request["model_dir"],
-            "--native-lib", request["native_lib"], "--progress"],
+            "--native-lib", request["native_lib"], "--device", "auto", "--progress"],
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             start_new_session=True, close_fds=True, env=env)
         start_time = process_info(child.pid)["start_time"]

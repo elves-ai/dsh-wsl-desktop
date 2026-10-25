@@ -10,6 +10,8 @@ const qwen = url(compile(await read('pet/qwen-speech.ts')));
 const { SpeechSettings } = await import(url(compile(await read('speech-settings.ts')).replace("'./pet/qwen-speech'", JSON.stringify(qwen))));
 const { SpeechResources } = await import(url(compile(await read('speech-resources.ts')).replace("import './speech-resources.css';", '')));
 const tick = () => new Promise(resolve => setImmediate(resolve));
+const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
+const initialized = { config: { python_path: '/home/user/.dsh-wsl-desktop/speech/runtime/venv/bin/python', model_dir: '/home/user/.dsh-wsl-desktop/speech/models/qwen3-tts-q8', native_lib: '' }, config_path: '/home/user/.dsh-wsl-desktop/speech/config.json', reused_python: false, created_venv: true };
 
 /** Minimal DOM, but both controllers, their nested mount and events are production code. */
 class Node extends EventTarget {
@@ -35,7 +37,7 @@ class Node extends EventTarget {
   click() { if (!this.disabled) this.emit('click'); }
 }
 
-async function fixture() {
+async function fixture({ initialize = () => initialized, cancel = () => undefined, pick = () => '/home/user' } = {}) {
   const document = { nodes: new Map(), createElement(tag) { return new Node(tag, this); } };
   const root = new Node('div', document), listeners = new Map(), calls = [], timers = new Map();
   let timer = 0, resolveRefresh, resources;
@@ -49,11 +51,14 @@ async function fixture() {
     async listen(name, callback) { listeners.set(name, callback); return () => listeners.delete(name); },
     async invoke(name, args) {
       calls.push({ name, args });
+      if (name === 'initialize_speech_environment') return initialize(args);
+      if (name === 'cancel_speech_initialization') return cancel();
+      if (name === 'set_speech_preferences') return { revision: 1, initialized: true, auto_read: args.patch.auto_read, volume: 100 };
       if (name === 'get_speech_settings') return snapshot;
       if (name === 'get_speech_preferences') return { revision: 0, initialized: true, auto_read: false, volume: 100 };
       if (name === 'get_speech_download') return { id: 0, status: 'idle', model_dir: '', file: null, downloaded_bytes: 0, total_bytes: null, error: null };
-      if (name === 'discover_speech_resources') return { python_environments: [{ path: '/env/bin/python', version: '3.12.0', ready: true }], model_dir: '/models/q8', native_lib: '/lib/qwen.so' };
-      if (name === 'browse_speech_path') return { path: args.path || '/home/user', parent: '/', entries: [{ name: 'models', path: '/home/user/models', directory: true }], truncated: false };
+      if (name === 'discover_speech_resources') return { python_environments: [{ path: '/env/bin/python', version: '3.12.0', ready: true, status: 'ready' }], model_dir: '/models/q8', native_lib: '/lib/qwen.so', gpu: { vendor: 'amd', names: ['AMD Radeon'] } };
+      if (name === 'pick_settings_path') return pick(args);
       if (name === 'speech_action' && args.action === 'refresh') {
         publish({ busy: true, operation: 'refresh' });
         return new Promise(resolve => { resolveRefresh = resolve; });
@@ -91,38 +96,84 @@ test('actual nested resource controls stay enabled through repeated background r
   } finally { f.settings.dispose(); }
 });
 
-test('actual path browser and download confirmation survive polling without losing selection or target', async () => {
-  const f = await fixture();
+test('actual system picker locks parent actions and selected draft survives polling until explicit download confirmation', async () => {
+  const pending = deferred(); const f = await fixture({ pick: () => pending.promise });
   try {
     f.node('speech-resource-model-browse').click(); await tick();
-    f.node('speech-resource-path').value = '/typed/target';
+    assert.equal(f.resources.isBusy(), true); assert.equal(f.node('speech-save').disabled, true);
     await f.poll();
-    assert.equal(f.node('speech-resource-browser').hidden, false);
-    assert.equal(f.node('speech-resource-path').value, '/typed/target');
-    assert.equal(f.node('speech-resource-choose').disabled, false);
-    await f.finishRefresh();
-    f.node('speech-resource-choose').click();
-    assert.equal(f.node('speech-model_dir').value, '/home/user');
-    f.node('speech-resource-download').click();
-    assert.equal(f.node('speech-resource-confirm').hidden, false);
-    await f.poll();
+    pending.resolve('/home/user'); await tick();
+    assert.equal(f.resources.isBusy(), false); assert.equal(f.node('speech-model_dir').value, '/home/user');
+    assert.equal(f.calls.some(call => call.name === 'save_speech_config'), false);
+    f.node('speech-resource-download').click(); await f.poll();
     assert.equal(f.node('speech-resource-confirm').hidden, false);
     assert.equal(f.node('speech-resource-target').textContent, '/home/user');
     f.node('speech-resource-confirm-yes').click(); await tick();
     assert.ok(f.calls.some(call => call.name === 'download_speech_model' && call.args.modelDir === '/home/user'));
-    assert.equal(f.node('speech-resource-download-cancel').disabled, false);
-    await f.finishRefresh();
-    assert.equal(f.node('speech-resource-download-cancel').disabled, false);
+    await f.finishRefresh(); assert.equal(f.node('speech-resource-download-cancel').disabled, false);
   } finally { f.settings.dispose(); }
 });
 
-test('actual resource browser still closes and blocks for real validation, never for passive refresh', async () => {
+test('explicit initialization locks parent actions without recursive setBlocked and preserves later edits', async () => {
+  const pending = deferred(); const f = await fixture({ initialize: () => pending.promise });
+  try {
+    f.node('speech-resource-defaults').click(); f.publish({ configured: true });
+    const draft = { python_path: f.node('speech-python_path').value, model_dir: f.node('speech-model_dir').value, native_lib: f.node('speech-native_lib').value };
+    const count = f.calls.length; f.node('speech-resource-initialize').click();
+    assert.equal(f.resources.isBusy(), true);
+    for (const id of ['save', 'check', 'start', 'test', 'refresh']) { assert.equal(f.node('speech-' + id).disabled, true, id); f.node('speech-' + id).emit('click'); }
+    for (const id of ['initialize', 'discover', 'python-browse', 'model-browse', 'native-browse', 'download', 'download-cancel']) assert.equal(f.node('speech-resource-' + id).disabled, true, id);
+    assert.equal(f.node('speech-resource-initialize-cancel').disabled, false);
+    assert.equal(f.node('speech-model_dir').disabled, false);
+    f.node('speech-model_dir').value = '/later/models'; f.node('speech-model_dir').emit('input');
+    await f.poll();
+    assert.deepEqual(f.calls.slice(count), [{ name: 'initialize_speech_environment', args: { config: draft } }]);
+    pending.resolve(initialized); await tick();
+    assert.equal(f.resources.isBusy(), false); assert.equal(f.node('speech-resource-initialize').disabled, false);
+    assert.equal(f.node('speech-model_dir').value, '/later/models'); assert.equal(f.node('speech-python_path').value, initialized.config.python_path);
+    assert.equal(f.node('speech-native_lib').value, ''); assert.match(f.node('speech-draft').textContent, /未保存/);
+    assert.equal(f.node('speech-save').disabled, false); assert.equal(f.node('speech-auto').checked, false);
+    assert.match(f.node('speech-resource-message').textContent, /speech\/config.json/);
+    assert.equal(f.calls.some(call => ['save_speech_config', 'test_speech', 'set_speech_preferences'].includes(call.name) || ['check', 'start'].includes(call.args?.action)), false);
+    f.publish({}); assert.equal(f.node('speech-model_dir').value, '/later/models');
+  } finally { f.settings.dispose(); }
+});
+
+test('opening, refreshing and toggling auto-read never implicitly initialize or cancel', async () => {
   const f = await fixture();
+  try {
+    await f.poll(); await f.finishRefresh();
+    f.node('speech-auto').checked = true; f.node('speech-auto').emit('change'); await tick();
+    assert.equal(f.node('speech-auto').checked, true);
+    assert.equal(f.calls.some(call => ['initialize_speech_environment', 'cancel_speech_initialization', 'save_speech_config', 'download_speech_model'].includes(call.name) || ['check', 'start'].includes(call.args?.action)), false);
+    f.settings.setVisible(false); f.settings.setVisible(true); await tick();
+    assert.equal(f.calls.some(call => call.name === 'initialize_speech_environment'), false);
+  } finally { f.settings.dispose(); }
+});
+
+test('parent hide cancels initialization and old success does not refill or unlock the next visit', async () => {
+  const first = deferred(), second = deferred(); let runs = 0;
+  const f = await fixture({ initialize: () => ++runs === 1 ? first.promise : second.promise });
+  try {
+    f.node('speech-resource-initialize').click(); f.settings.setVisible(false);
+    assert.equal(f.calls.filter(call => call.name === 'cancel_speech_initialization').length, 1);
+    f.settings.setVisible(true); await tick(); f.node('speech-resource-initialize').click();
+    first.resolve(initialized); await tick();
+    assert.equal(f.node('speech-python_path').value, ''); assert.equal(f.resources.isBusy(), true);
+    assert.equal(f.node('speech-resource-discover').disabled, true);
+    second.resolve(initialized); await tick(); assert.equal(f.resources.isBusy(), false);
+    assert.equal(f.node('speech-python_path').value, initialized.config.python_path);
+  } finally { f.settings.dispose(); }
+});
+
+test('actual system picker rejects late reply after real validation begins', async () => {
+  const pending = deferred(); const f = await fixture({ pick: () => pending.promise });
   try {
     f.node('speech-resource-model-browse').click(); await tick();
     f.publish({ busy: true, operation: 'check', environment_state: 'checking' });
     assert.equal(f.node('speech-resource-model-browse').disabled, true);
-    assert.equal(f.node('speech-resource-browser').hidden, true);
+    pending.resolve('/stale/models'); await tick();
+    assert.equal(f.node('speech-model_dir').value, '');
     f.publish({ busy: false, operation: null, environment_state: 'passed' });
     assert.equal(f.node('speech-resource-model-browse').disabled, false);
   } finally { f.settings.dispose(); }

@@ -3,7 +3,7 @@ fn fixture() -> Config {
     Config::parse(br#"{"Distribution":"Ubuntu","LinuxUser":"user","LinuxLauncher":"/home/user/dsh","LinuxConfig":"/home/user/config.json"}"#).unwrap()
 }
 #[test]
-fn status_is_not_model_readiness_and_non_rocm_is_not_ready() {
+fn status_is_not_model_readiness_and_non_gpu_is_not_ready() {
     let identity = json!({"service":"dsh-pet-qwen","protocol":1,"voice_id":"pet-airhead-v1"});
     let old = WslSpeechRuntime::parse_status(&identity);
     assert!(old.identity_valid);
@@ -26,6 +26,83 @@ fn status_is_not_model_readiness_and_non_rocm_is_not_ready() {
     cpu["gpu_name"] = json!("bad\nname");
     assert_eq!(WslSpeechRuntime::parse_status(&cpu).gpu_name, None);
 }
+#[test]
+fn cuda_and_rocm_statuses_require_exact_backend_device_pairs() {
+    let mut value = json!({"service":"dsh-pet-qwen","protocol":1,"voice_id":"pet-airhead-v1",
+        "status_protocol":1,"backend":"cuda","device":"CUDA0","model_state":"ready",
+        "instance_id":"fixture","gpu_name":"NVIDIA fixture"});
+    for (backend, device) in [
+        ("cuda", "CUDA0"),
+        ("cuda", "CUDA99"),
+        ("rocm", "ROCm0"),
+        ("rocm", "ROCm12"),
+    ] {
+        value["backend"] = json!(backend);
+        value["device"] = json!(device);
+        let status = WslSpeechRuntime::parse_status(&value);
+        assert_eq!(status.model_state, ModelState::Ready);
+        assert_eq!(status.instance_id.as_deref(), Some("fixture"));
+    }
+    for (backend, device) in [
+        ("cuda", "ROCm0"),
+        ("rocm", "CUDA0"),
+        ("cpu", "CPU"),
+        ("cuda", "auto"),
+        ("cuda", "CUDA00"),
+        ("cuda", "CUDA-1"),
+        ("cuda", "CUDA100"),
+        ("cuda", "CUDA1\n"),
+        ("cuda", "CUDA１"),
+        ("CUDA", "CUDA0"),
+        ("rocm", "ROCm"),
+    ] {
+        value["backend"] = json!(backend);
+        value["device"] = json!(device);
+        let status = WslSpeechRuntime::parse_status(&value);
+        assert_eq!(
+            status.model_state,
+            ModelState::Unknown,
+            "{backend}/{device}"
+        );
+        assert_eq!(status.instance_id, None);
+        assert_eq!(status.gpu_name, None);
+    }
+}
+
+#[test]
+fn inspection_readiness_requires_a_concrete_matching_gpu_backend() {
+    let mut value = json!({"kind":"result","environment_ok":true,"models_ok":true,
+        "backend":"cuda","device":"CUDA0","gpu_name":"NVIDIA fixture","error_code":null});
+    assert!(
+        WslSpeechRuntime::parse_inspection(&value)
+            .unwrap()
+            .environment_ok
+    );
+    value["backend"] = json!("rocm");
+    assert!(WslSpeechRuntime::parse_inspection(&value).is_err());
+    value["device"] = json!("ROCm0");
+    assert!(
+        WslSpeechRuntime::parse_inspection(&value)
+            .unwrap()
+            .environment_ok
+    );
+    value.as_object_mut().unwrap().remove("device");
+    assert!(WslSpeechRuntime::parse_inspection(&value).is_err());
+    value["environment_ok"] = json!(false);
+    value["backend"] = Value::Null;
+    value["device"] = Value::Null;
+    for code in [
+        "cuda_libraries_unavailable",
+        "gpu_backend_mismatch",
+        "gpu_runtime_unavailable",
+    ] {
+        value["error_code"] = json!(code);
+        let result = WslSpeechRuntime::parse_inspection(&value).unwrap();
+        assert!(!result.environment_ok);
+        assert!(result.error.is_some());
+    }
+}
+
 #[test]
 fn helper_modes_are_closed_and_launcher_values_are_separate_args() {
     let mut config = fixture();

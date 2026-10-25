@@ -47,14 +47,14 @@ export function speechDiagnostics(s?: SpeechSnapshot, p?: SpeechPreferences): st
     busy: s?.busy ?? false, error_present: !!s?.error, preferences_revision: p?.revision ?? null }, null, 2);
 }
 export const speechSettingsMarkup = `<div class="setting-group"><h2>本地千问语音</h2>
-<p class="setting-help">宠物朗读 · WSL · Q8 / ROCm · 固定音色。可选择已有模型或手动确认下载；打开本页不会加载模型或安装依赖。</p>
+<p class="setting-help">宠物朗读 · WSL · Q8 · 固定音色。环境要求会按检测到的显卡类型提示。可选择已有模型或手动确认下载；打开本页、刷新状态或切换自动朗读均不会隐式安装、创建环境或加载模型；仅显式点击“初始化语音环境”才准备离线环境与本地配置。</p>
 <dl class="connection-info"><div><dt>当前 WSL 发行版</dt><dd id="speech-distribution">未知</dd></div></dl>
-<label for="speech-model_dir">模型目录（WSL 绝对路径）</label><input id="speech-model_dir" type="text" maxlength="4096" autocomplete="off" spellcheck="false" disabled>
-<label for="speech-python_path">Python 可执行文件（WSL）</label><input id="speech-python_path" type="text" maxlength="4096" autocomplete="off" spellcheck="false" disabled>
+<label for="speech-model_dir">模型目录（WSL 绝对路径）</label><input id="speech-model_dir" type="text" maxlength="4096" autocomplete="off" spellcheck="false" readonly aria-readonly="true" disabled>
+<label for="speech-python_path">Python 可执行文件（WSL）</label><input id="speech-python_path" type="text" maxlength="4096" autocomplete="off" spellcheck="false" readonly aria-readonly="true" disabled>
 <div id="speech-resources"></div>
 <details class="speech-paths"><summary>高级：原生库路径</summary>
-<label for="speech-native_lib">原生库文件</label><input id="speech-native_lib" type="text" maxlength="4096" autocomplete="off" spellcheck="false" disabled>
-<p class="setting-help">使用已编译的 Q8 / ROCm 原生库；下载模型不会安装 Python 依赖或编译此库。</p></details>
+<label for="speech-native_lib">原生库文件</label><input id="speech-native_lib" type="text" maxlength="4096" autocomplete="off" spellcheck="false" readonly aria-readonly="true" disabled>
+<p class="setting-help">需使用匹配显卡后端的 Q8 原生库：AMD 使用 ROCm，NVIDIA 使用 CUDA；自动模式优先 CUDA0，再尝试 ROCm0，仍需实际 GPU 验证。下载模型不会安装 Python 依赖或编译此库。</p></details>
 <p id="speech-draft" class="setting-help"></p><button id="speech-save" class="button primary" disabled>保存并检测候选路径</button></div>
 <div class="setting-group"><h2>运行状态</h2><dl class="connection-info">
 <div><dt>环境</dt><dd id="speech-environment_state">未知</dd></div><div><dt>模型文件</dt><dd id="speech-models_state">未知</dd></div>
@@ -224,7 +224,7 @@ export class SpeechSettings {
     if (!this.native || !this.visible || !this.subscribed || this.disposed) return;
     if (action === 'refresh') {
       // The native manager rejects refresh during an operation; polling must not turn real loading into an error.
-      if (this.refreshing || this.pending || this.snapshot?.busy) return;
+      if (this.refreshing || this.pending || this.snapshot?.busy || this.resources?.isBusy()) return;
       this.refreshing = true;
     }
     else if (!interrupt && (this.pending || this.operationBusy() || this.resources?.isBusy() || this.player?.state.phase !== 'idle')) return;
@@ -317,7 +317,7 @@ export class SpeechSettings {
     this.node('audio-message').textContent = ({ unplayed: '最近试听：未试听', generating: '最近试听：生成中', playing: '最近试听：播放中', completed: '最近试听：播放完成', stopped: '最近试听：已停止', failed: '最近试听：失败。请点击试听允许本页音频，并检查服务状态。' })[this.audition];
     for (const key of ['model_dir', 'python_path', 'native_lib']) this.input(key).disabled = !enabled;
     this.button('save').disabled = !enabled || busy || !this.dirty || this.pathsLocked();
-    this.button('refresh').disabled = !enabled || this.refreshing || !!this.pending || !!s?.busy;
+    this.button('refresh').disabled = !enabled || this.refreshing || !!this.pending || !!s?.busy || !!this.resources?.isBusy();
     this.button('check').disabled = !enabled || busy || !s?.configured;
     this.button('start').disabled = !enabled || busy || !s?.configured || s.ownership === 'external' || s.service_state === 'running' && s.model_state === 'ready';
     this.button('stop').disabled = !enabled || !this.canStop() || s?.service_state === 'stopping' || this.pendingAction === 'stop';

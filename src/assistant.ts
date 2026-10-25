@@ -43,7 +43,7 @@ root.innerHTML = view === 'pet' ?
 <section id="setup" class="setup" hidden><span class="setup-icon" aria-hidden="true">⌂</span><h2>给鲸鱼娘一个独立的空间</h2>
 <p>启用后会在 WSL 中创建独立目录并注册 DSH 项目，与已有项目分开。聊天记录保存在 DSH 中，确认后才会执行。</p>
 <form id="enable-form"><label for="workspace">WSL 目录</label>
-<input id="workspace" name="workspace" value="~/DSH-Assistant" placeholder="~/DSH-Assistant" autocomplete="off" spellcheck="false" required />
+<input id="workspace" name="workspace" value="~/.dsh-wsl-desktop/assistant" placeholder="~/.dsh-wsl-desktop/assistant" autocomplete="off" spellcheck="false" required />
 <label class="consent"><input id="consent" type="checkbox" required />我确认使用此目录，允许助手在这里工作</label>
 <button id="enable" class="primary" type="submit">确认并启用</button></form></section>
 <section id="conversation" class="conversation" role="log" aria-label="对话消息" aria-live="polite" aria-relevant="additions text"></section>
@@ -131,7 +131,7 @@ function accept(payload: unknown) {
   const changedSession = next.session_id !== state.session_id || next.workspace_id !== state.workspace_id;
   if (changedSession) saveDraft();
   if (state.enabled && !next.enabled) {
-    if (workspace) workspace.value = next.workspace_path ?? state.workspace_path ?? '~/DSH-Assistant';
+    if (workspace) workspace.value = next.workspace_path ?? state.workspace_path ?? '~/.dsh-wsl-desktop/assistant';
     const consent = el<HTMLInputElement>('consent'); if (consent) consent.checked = false;
   }
   state = next;
@@ -521,7 +521,7 @@ el('enable-form')?.addEventListener('submit', event => {
   event.preventDefault();
   const path = workspace?.value.trim() ?? '';
   if (!el<HTMLInputElement>('consent')?.checked) return;
-  if (!(path.startsWith('/') || path.startsWith('~/')) || path === '/' || path.includes('\\') || /[\u0000-\u001f]/.test(path) || path.split('/').includes('..')) { setNotice('请填写独立的 WSL 目录，例如 ~/DSH-Assistant。'); return; }
+  if (!(path.startsWith('/') || path.startsWith('~/')) || path === '/' || path.includes('\\') || /[\u0000-\u001f]/.test(path) || path.split('/').includes('..')) { setNotice('请填写独立的 WSL 目录，例如 ~/.dsh-wsl-desktop/assistant。'); return; }
   void exclusive('enable', { path });
 }, { signal: cleanup.signal });
 async function send() {

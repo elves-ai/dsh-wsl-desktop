@@ -110,7 +110,7 @@ class ManagerUnitTests(unittest.TestCase):
 
     def test_version_default_state_and_source_argv(self):
         self.assertEqual(manager.VERSION, "1.0.0")
-        self.assertEqual(manager.DEFAULT_STATE, Path.home() / ".local/state/dsh-wsl-desktop")
+        self.assertEqual(manager.DEFAULT_STATE, Path.home() / ".dsh-wsl-desktop/state")
         self.assertEqual(manager._argv(self.config), [sys.executable, "--import", "tsx/esm",
                          "apps/cli/src/bin.ts", "web", "--host", "127.0.0.1", "--port",
                          str(self.config["port"]), "--no-open"])
@@ -120,6 +120,47 @@ class ManagerUnitTests(unittest.TestCase):
         self.assertEqual(manager.probe(self.config), {"state": "stopped", "managed": False})
         self.assertEqual(manager.logs(self.config), {"state": "logs"})
         self.assertFalse(self.state.exists())
+
+    def test_default_state_probe_and_logs_create_no_hidden_root(self):
+        with mock.patch.object(manager.Path, "home", return_value=self.root):
+            isolated = load(HELPER, "manager_default_state_under_test")
+        expected = self.root / ".dsh-wsl-desktop/state"
+        config = {key:value for key, value in self.config.items() if key != "state_directory"}
+        self.assertEqual(isolated.DEFAULT_STATE, expected)
+        self.assertEqual(isolated._state(config), expected)
+        with mock.patch.object(isolated, "listener", return_value=("absent", None)), \
+             mock.patch.object(isolated.os, "mkdir") as mkdir:
+            self.assertEqual(isolated.probe(config), {"state": "stopped", "managed": False})
+            self.assertEqual(isolated.logs(config), {"state": "logs"})
+            mkdir.assert_not_called()
+        self.assertFalse((self.root / ".dsh-wsl-desktop").exists())
+        self.assertFalse((self.root / ".local").exists())
+
+    def test_saved_config_respects_explicit_legacy_state_directory(self):
+        legacy = self.root / ".local/share/dsh-wsl-desktop"
+        state = self.root / ".local/state/dsh-wsl-desktop/old-profile"
+        state.mkdir(parents=True, mode=0o700)
+        log = state / "web.log"
+        log.write_text("legacy log remains private")
+        log.chmod(0o600)
+        config_path = legacy / "profiles/old-profile/config.json"
+        config_path.parent.mkdir(parents=True)
+        config = dict(self.config, state_directory=str(state),
+                      linux_launcher=str(legacy / "manager-1.0.0.py"), linux_config=str(config_path))
+        config_path.write_text(json.dumps(config))
+        before = config_path.read_bytes()
+        with mock.patch.object(manager, "DEFAULT_STATE", self.root / ".dsh-wsl-desktop/state"), \
+             mock.patch.object(manager, "listener", return_value=("absent", None)), \
+             mock.patch.object(manager.os, "mkdir") as mkdir:
+            loaded = manager._load_config(str(config_path))
+            self.assertEqual(loaded, config)
+            self.assertEqual(manager._state(loaded), state)
+            self.assertEqual(manager.probe(loaded), {"state": "stopped", "managed": False})
+            self.assertEqual(manager.logs(loaded), {"state": "logs", "service_log": str(log)})
+            mkdir.assert_not_called()
+        self.assertEqual(config_path.read_bytes(), before)
+        self.assertEqual(log.read_text(), "legacy log remains private")
+        self.assertFalse((self.root / ".dsh-wsl-desktop").exists())
 
     def test_confirmation_precedes_config_read_and_never_echoes_arguments(self):
         output = io.StringIO()

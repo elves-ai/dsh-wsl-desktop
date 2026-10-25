@@ -1,4 +1,4 @@
-"""Pinned qwentts.cpp ABI 6, buffered ROCm-only Base voice cloning.
+"""Pinned qwentts.cpp ABI 6, buffered CUDA/ROCm Base voice cloning.
 
 Importing this module uses only the standard library. The parent owns process
 isolation, admission control and the hard kill fallback; callbacks only request
@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from array import array
 import ctypes as C
+import os
 import hashlib
 import importlib
 import io
@@ -225,6 +226,63 @@ def _wav_bytes(audio):
     return result
 
 
+def _load_cuda_library(shortname, required=True, major=None):
+    """Locate already-installed system/toolkit/nvidia-wheel libraries, without torch."""
+    from ctypes.util import find_library  # lazy: Python 3.14 ctypes.util opens libc
+    candidates = []
+    found = find_library(shortname)
+    if found and (major is None or re.search(r"\.so\." + re.escape(major) + r"(?:\.|$)", found)):
+        candidates.append(found)
+    versions = {"cuda": ("1",), "cudart": ("13", "12", "11.0"),
+                "cublas": ("13", "12", "11"), "cublasLt": ("13", "12", "11")}
+    selected = tuple(v for v in versions[shortname] if major is None or v.split(".")[0] == major)
+    names = ["lib" + shortname + ".so." + v for v in selected]
+    if major is None:
+        names.append("lib" + shortname + ".so")
+    candidates.extend(names)
+    toolkits = [Path("/usr/local/cuda")]
+    toolkits.extend(Path("/usr/local").glob("cuda-*"))
+    for key in ("CUDA_HOME", "CUDA_PATH", "CUDAToolkit_ROOT"):
+        if os.environ.get(key):
+            toolkits.append(Path(os.environ[key]))
+    roots = [Path("/usr/lib/wsl/lib")]
+    for toolkit in toolkits:
+        roots.extend((toolkit / "lib64", toolkit / "targets/x86_64-linux/lib"))
+    package = "cuda_runtime" if shortname == "cudart" else "cublas"
+    for entry in sys.path:
+        roots.append(Path(entry) / "nvidia" / package / "lib")
+    for root in roots:
+        candidates.extend(str(root / name) for name in names)
+    for candidate in dict.fromkeys(candidates):
+        try:
+            library = C.CDLL(candidate, mode=C.RTLD_GLOBAL)
+            _LIBRARIES.append(library)
+            return library
+        except OSError:
+            pass
+    if required:
+        raise NativeQ8Error(503, "cuda_libraries_unavailable")
+    return None
+
+
+def preload_backend(backend):
+    """Preload only the selected backend; never initialize or load a TTS model."""
+    if backend == "cuda":
+        driver = _load_cuda_library("cuda")
+        for major in ("13", "12", "11"):
+            _load_cuda_library("cublasLt", required=False, major=major)
+            blas = _load_cuda_library("cublas", required=False, major=major)
+            if blas is not None:
+                _load_cuda_library("cudart", required=False, major=major)
+                return driver, blas
+        raise NativeQ8Error(503, "cuda_libraries_unavailable")
+    if backend == "rocm":
+        sdk = importlib.import_module("rocm_sdk")
+        sdk.initialize_process(preload_shortnames=["amdhip64", "hipblas"])
+        return None
+    raise NativeQ8Error(503, "unsupported_device")
+
+
 class NativeQ8Engine:
     def __init__(self, model_dir, native_lib, device="ROCm0", *, reference_wav,
                  reference_text, expected_reference_sha256):
@@ -235,8 +293,8 @@ class NativeQ8Engine:
         self._closed = False
         with _NATIVE_LOCK:
             try:
-                if not isinstance(device, str) or not re.fullmatch(r"ROCm(?:0|[1-9][0-9]?)", device):
-                    raise NativeQ8Error(503, "explicit ROCm device required")
+                if not isinstance(device, str) or not re.fullmatch(r"(?:ROCm|CUDA)(?:0|[1-9][0-9]?)", device):
+                    raise NativeQ8Error(503, "explicit GPU device required")
                 if reference_text != REFERENCE_TEXT:
                     raise NativeQ8Error(503, "selected voice assets do not match")
                 model_dir, library = Path(model_dir).resolve(), Path(native_lib).resolve()
@@ -248,8 +306,7 @@ class NativeQ8Engine:
                         raise NativeQ8Error(503, "native Q8 model assets do not match")
                 samples = _reference_samples(Path(reference_wav), expected_reference_sha256)
                 # Lazy import: no ROCm/model/framework initialization at import.
-                sdk = importlib.import_module("rocm_sdk")
-                sdk.initialize_process(preload_shortnames=["amdhip64", "hipblas"])
+                preload_backend("cuda" if device.startswith("CUDA") else "rocm")
                 self._lib = C.CDLL(str(library))
                 _signature(self._lib, "qt_version", C.c_char_p)
                 if self._lib.qt_version() != NATIVE_VERSION:
@@ -275,7 +332,7 @@ class NativeQ8Engine:
                 params.max_batch = 1
                 self._context = self._lib.qt_init(C.byref(params))
                 if not self._context or observer.backends != [device.encode("ascii")]:
-                    raise NativeQ8Error(503, "native ROCm backend unavailable")
+                    raise NativeQ8Error(503, "gpu_backend_mismatch")
                 if (self._lib.qt_model_type(self._context) != b"base"
                         or self._lib.qt_num_codebooks(self._context) != 16):
                     raise NativeQ8Error(503, "unsupported native Q8 model")
