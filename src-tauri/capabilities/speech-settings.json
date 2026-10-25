@@ -19,6 +19,7 @@
     "allow-get-speech-download",
     "allow-download-speech-model",
     "allow-cancel-speech-download",
+    "allow-check-speech-prerequisites",
     "allow-get-speech-install",
     "allow-install-speech",
     "allow-cancel-speech-install"

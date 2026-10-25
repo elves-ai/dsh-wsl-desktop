@@ -146,6 +146,21 @@ fn helper_modes_are_closed_and_launcher_values_are_separate_args() {
     assert!(BOOTSTRAP.len() < 4096);
 }
 #[test]
+fn preflight_is_fixed_and_does_not_require_service_ownership_or_speech_config() {
+    let command = WslSpeechRuntime::command(&fixture(), "--resources-preflight").unwrap();
+    let args: Vec<_> = command
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(args.last().unwrap(), "--resources-preflight");
+    assert!(args.iter().any(|s| s == "/usr/bin/python3"));
+    let runtime = WslSpeechRuntime::new(Arc::new(|| Err("WSL unavailable".into()))).unwrap();
+    let result = runtime.check_prerequisites().unwrap();
+    assert!(!result.ready);
+    assert_eq!(result.checks.len(), 4);
+    assert!(result.install_command.is_none());
+}
+#[test]
 #[ignore = "requires DSH_SPEECH_INTEROP_LIVE=1, explicit local runtime paths and a free18765"]
 fn live_wsl_owned_lifecycle() {
     assert_eq!(std::env::var("DSH_SPEECH_INTEROP_LIVE").as_deref(), Ok("1"));

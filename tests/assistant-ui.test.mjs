@@ -46,17 +46,31 @@ class Node {
   getClientRects() { return [{}]; }
   getBoundingClientRect() { return { x: 10, y: 20, left: 10, top: 20, right: 110, bottom: 120, width: 100, height: 100 }; }
 }
-function setup({ native = true, view = 'chat', speechSupported = false, autoRead = false, legacyAutoRead = false, storageDenied = false, getSpeechPreferences, setSpeechPreferences, listenGate, getSnapshot, getPreferences, getInbox, openNotification, getInteractions, submitInteraction, openInteraction, setTopmost, actionResult, getGeometry, movePet, dragPet } = {}) {
+function setup({ native = true, view = 'chat', speechSupported = false, autoRead = false, legacyAutoRead = false, storageDenied = false, getSpeechPreferences, setSpeechPreferences, listenGate, getSnapshot, getPreferences, getInbox, openNotification, getInteractions, submitInteraction, openInteraction, setTopmost, setSlingshot, actionResult, getGeometry, movePet, dragPet, now = () => performance.now() } = {}) {
   const nodes = new Map();
-  const ids = ['pet-read', 'pet-read-status', 'pet-auto-read', 'assistant-root', 'pet-dialogue', 'pet-speech', 'pet-speech-label', 'pet-speech-text', 'pet-speech-close', 'pet-speech-expand', 'pet-composer', 'pet-input-close', 'pet-enable', 'preview', 'pet', 'pet-media', 'pet-animation-trigger', 'pet-animation', 'pet-animation-list', 'pet-menu', 'pet-bubble', 'pet-interaction', 'pet-topmost', 'pet-fixed', 'notice', 'status', 'setup', 'conversation', 'sessions', 'new-session', 'session-bar', 'composer-footnote', 'reconfigure', 'runtime-message', 'draft-hint', 'retry', 'send', 'cancel', 'enable', 'workspace', 'consent', 'enable-form', 'send-form', 'draft'];
+  const ids = ['pet-read', 'pet-read-status', 'pet-auto-read', 'assistant-root', 'pet-dialogue', 'pet-speech', 'pet-speech-label', 'pet-speech-text', 'pet-speech-close', 'pet-speech-expand', 'pet-composer', 'pet-input-close', 'pet-enable', 'preview', 'pet', 'pet-media', 'pet-animation-trigger', 'pet-animation', 'pet-animation-list', 'pet-menu', 'pet-bubble', 'pet-interaction', 'pet-topmost', 'pet-slingshot', 'pet-fixed', 'notice', 'status', 'setup', 'conversation', 'sessions', 'new-session', 'session-bar', 'composer-footnote', 'runtime-message', 'draft-hint', 'retry', 'send', 'cancel', 'enable', 'workspace', 'consent', 'enable-form', 'send-form', 'draft'];
   ids.forEach(id => nodes.set(id, new Node(id)));
   nodes.get('pet-menu').hidden = true;
   nodes.get('pet-menu').append(nodes.get('pet-animation-trigger'));
   nodes.get('pet-animation').append(nodes.get('pet-animation-list'));
   const root = nodes.get('assistant-root');
+  // Model the setup fields' HTML defaults rather than inventing a pre-consented form.
+  let markup = '';
+  Object.defineProperty(root, 'innerHTML', {
+    get: () => markup,
+    set(html) {
+      markup = html;
+      const input = html.match(/<input id="workspace"[^>]*>/)?.[0];
+      if (input) {
+        nodes.get('workspace').value = input.match(/value="([^"]*)"/)?.[1] ?? '';
+        nodes.get('workspace').readOnly = /\breadonly\b/.test(input);
+      }
+      nodes.get('consent').checked = false;
+    },
+  });
   const calls = []; const events = []; const petEvents = []; const storage = new Map(); const frames = new Map(); let frameId = 0;
   const listeners = new Map(); let stopped = 0;
-  let topmost = true; let petRevision = 0;
+  let topmost = true; let slingshot = true; let petRevision = 0;
   const window = new Node(); window.confirm = () => false;
   const preferences = new Map([['dsh-assistant:qwen-auto-read', String(autoRead)], ['dsh-assistant:auto-read', String(legacyAutoRead)]]);
   window.localStorage = { getItem:key=>{if(storageDenied)throw new Error('storage denied');return preferences.get(key)??null;},setItem:(key,value)=>{if(storageDenied)throw new Error('storage denied');preferences.set(key,value);},removeItem:key=>preferences.delete(key) };
@@ -80,11 +94,16 @@ function setup({ native = true, view = 'chat', speechSupported = false, autoRead
     if (name === 'get_pet_geometry') return getGeometry ? getGeometry() : geometry();
     if (name === 'move_pet') return movePet ? movePet(args) : geometry();
     if (name === 'drag_pet') return dragPet ? dragPet(args) : geometry();
-    if (name === 'get_pet_preferences') return getPreferences ? getPreferences() : {visible:true,always_on_top:topmost,roaming_enabled:true,bubble_notifications:true,message:'',revision:petRevision};
+    if (name === 'get_pet_preferences') return getPreferences ? getPreferences() : {visible:true,always_on_top:topmost,slingshot_enabled:slingshot,roaming_enabled:true,bubble_notifications:true,message:'',revision:petRevision};
     if (name === 'set_pet_topmost') {
       if(setTopmost) return setTopmost(args.alwaysOnTop);
       topmost=args.alwaysOnTop; petRevision++;
-      return {visible:true,always_on_top:topmost,roaming_enabled:true,bubble_notifications:true,message:'',revision:petRevision};
+      return {visible:true,always_on_top:topmost,slingshot_enabled:slingshot,roaming_enabled:true,bubble_notifications:true,message:'',revision:petRevision};
+    }
+    if (name === 'set_pet_slingshot_enabled') {
+      if (setSlingshot) return setSlingshot(args.enabled);
+      slingshot=args.enabled; petRevision++;
+      return {visible:true,always_on_top:topmost,slingshot_enabled:slingshot,roaming_enabled:true,bubble_notifications:true,message:'',revision:petRevision};
     }
     if (name === 'get_pet_notifications') return getInbox ? getInbox() : [];
     if (name === 'open_pet_notification') return openNotification ? openNotification(args.id) : undefined;
@@ -143,6 +162,7 @@ function setup({ native = true, view = 'chat', speechSupported = false, autoRead
     },
     PetMotion: class {
       constructor(options) { this.options=options; petEvents.push(['motion-mounted',options]); }
+      setSlingshotEnabled(enabled) { petEvents.push(['slingshot-enabled',enabled]); }
       begin(sling) { petEvents.push(['motion-begin',sling]); this.options.onDragStart(); }
       end() { petEvents.push(['motion-end']); this.options.onDragEnd(); }
       stop() { petEvents.push(['motion-stop']); }
@@ -154,7 +174,7 @@ function setup({ native = true, view = 'chat', speechSupported = false, autoRead
     document,
     window, sessionStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
     AbortController, Option: class extends Node { constructor(text, value) { super(); this.textContent = text; this.value = value; } },
-    crypto: { randomUUID: () => 'request-' + calls.length }, Intl, performance,
+    crypto: { randomUUID: () => 'request-' + calls.length }, Intl, performance: { now },
     requestAnimationFrame: callback => { frames.set(++frameId, callback); return frameId; }, cancelAnimationFrame(id) { frames.delete(id); }, ResizeObserver: class { observe() {} disconnect() {} }, console,
   };
   vm.runInNewContext(script, context);
@@ -247,70 +267,76 @@ test('a deleted current session can recover through explicit history selection o
   ui.emit(ready(2, { connected: false, workspace_id: null }));
   assert.equal(ui.nodes.get('sessions').disabled, true); assert.equal(ui.nodes.get('new-session').disabled, true);
 });
-test('assistant setup defaults and validation hint use the unified WSL assistant directory', async () => {
-  const path = '~/.dsh-wsl-desktop/assistant';
-  const ui = setup(); await tick();
+test('assistant setup shows only the fixed readonly default and no project reconfiguration', async () => {
+  const ui = setup({ getSnapshot: () => ({ ...model.initialSnapshot(), phase: 'setup', revision: 1 }) }); await tick();
   const markup = ui.nodes.get('assistant-root').innerHTML;
   const input = markup.match(/<input id="workspace"[^>]*>/)[0];
-  assert.ok(input.includes('value="' + path + '"'));
-  assert.ok(input.includes('placeholder="' + path + '"'));
-  ui.emit(ready(2, { enabled: false, connected: false, phase: 'setup' }));
-  assert.equal(ui.nodes.get('workspace').value, path);
+  assert.match(input, /value="~\/\.dsh-wsl-desktop\/assistant"/);
+  assert.match(input, /\breadonly\b/);
+  assert.match(input, /aria-readonly="true"/);
+  assert.equal(ui.nodes.get('workspace').readOnly, true);
+  assert.equal(ui.nodes.get('workspace').value, '~/.dsh-wsl-desktop/assistant');
   assert.equal(ui.nodes.get('consent').checked, false);
-  assert.equal(ui.calls.filter(call => call.name === 'assistant_action').length, 0);
-  ui.nodes.get('consent').checked = true;
-  ui.nodes.get('workspace').value = 'relative';
+  assert.match(markup, /不能修改/);
+  assert.match(markup, /旧自定义目录及其对话历史不搬移、不删除/);
+  assert.doesNotMatch(source, /reconfigure|workspace\??\.value/);
   ui.nodes.get('enable-form').emit('submit'); await tick();
-  assert.ok(ui.nodes.get('notice').textContent.includes(path));
   assert.equal(ui.calls.filter(call => call.name === 'assistant_action').length, 0);
-  ui.nodes.get('workspace').value = path;
-  ui.nodes.get('enable-form').emit('submit'); await tick();
-  const request = ui.calls.find(call => call.name === 'assistant_action').args.request;
-  assert.equal(request.action, 'enable'); assert.equal(request.path, path);
 });
 
-test('new default never replaces a typed custom workspace during setup snapshots', async () => {
-  const ui = setup({ getSnapshot: () => ({ ...model.initialSnapshot(), revision: 1 }) }); await tick();
-  const path = '/home/me/custom assistant';
-  ui.nodes.get('workspace').value = path;
-  ui.emit({ ...model.initialSnapshot(), revision: 2 });
-  assert.equal(ui.nodes.get('workspace').value, path);
-  ui.nodes.get('enable-form').emit('submit'); await tick();
-  assert.equal(ui.calls.find(call => call.name === 'assistant_action').args.request.path, path);
+test('enable sends only the action even when the readonly DOM path is forged', async () => {
+  for (const path of ['~/.dsh-wsl-desktop/assistant', '/home/me/custom assistant', 'relative', '', 'C:\\forged']) {
+    const ui = setup({ getSnapshot: () => ({ ...model.initialSnapshot(), phase: 'setup', revision: 1 }) }); await tick();
+    ui.nodes.get('workspace').readOnly = false;
+    ui.nodes.get('workspace').value = path;
+    ui.nodes.get('consent').checked = true;
+    ui.nodes.get('enable-form').emit('submit'); await tick();
+    const requests = ui.calls.filter(call => call.name === 'assistant_action').map(call => call.args.request);
+    assert.deepEqual(JSON.parse(JSON.stringify(requests)), [{ action: 'enable' }]);
+  }
 });
 
-test('restored legacy and custom bindings keep their directory and session until explicit reconfiguration', async () => {
-  for (const path of ['/home/me/DSH-Assistant', '/home/me/custom assistant']) {
-    for (const snapshotPath of [path, null]) {
-      const ui = setup({ getSnapshot: () => ready(1, { workspace_path: path }) }); await tick();
-      assert.equal(ui.nodes.get('setup').hidden, true);
-      assert.equal(ui.nodes.get('sessions').value, 's');
-      assert.equal(ui.calls.filter(call => call.name === 'assistant_action').length, 0);
-      ui.emit(ready(2, { enabled: false, connected: false, phase: 'setup', workspace_path: snapshotPath }));
-      assert.equal(ui.nodes.get('workspace').value, path);
-      assert.equal(ui.nodes.get('consent').checked, false);
-      assert.equal(ui.calls.filter(call => call.name === 'assistant_action').length, 0);
+test('old custom snapshots never populate the default setup display or auto-enable', async () => {
+  for (const oldPath of ['/home/me/DSH-Assistant', '/home/me/custom assistant']) {
+    for (const snapshotPath of [oldPath, null]) {
+      for (const initiallyEnabled of [false, true]) {
+        const ui = setup({ getSnapshot: () => ready(1, { enabled: initiallyEnabled, phase: initiallyEnabled ? 'ready' : 'setup', workspace_path: oldPath }) }); await tick();
+        assert.equal(ui.nodes.get('workspace').value, '~/.dsh-wsl-desktop/assistant');
+        ui.nodes.get('consent').checked = true;
+        ui.emit(ready(2, { enabled: false, connected: false, phase: 'setup', workspace_path: snapshotPath }));
+        assert.equal(ui.nodes.get('setup').hidden, false);
+        assert.equal(ui.nodes.get('workspace').value, '~/.dsh-wsl-desktop/assistant');
+        assert.equal(ui.nodes.get('consent').checked, !initiallyEnabled);
+        assert.equal(ui.calls.filter(call => call.name === 'assistant_action').length, 0);
+      }
     }
   }
 });
 
-test('project reconfiguration only opens native setup and requires a fresh explicit confirmation', async () => {
-  const reply = ready(2, { enabled: false, phase: 'setup', connected: false, workspace_path: '/home/me/Existing-Assistant' });
-  const ui = setup({ actionResult: request => request.action === 'reconfigure' ? reply : undefined }); await tick();
-  const button = ui.nodes.get('reconfigure'); button.dataset.action = 'reconfigure';
-  ui.nodes.get('assistant-root').emit('click', { target: button }); await tick();
+test('re-entering setup requires fresh consent and hides history and composer', async () => {
+  const ui = setup({ getSnapshot: () => ({ ...model.initialSnapshot(), phase: 'setup', revision: 1 }) }); await tick();
+  ui.nodes.get('consent').checked = true;
+  ui.emit({ ...model.initialSnapshot(), phase: 'setup', revision: 2 });
+  assert.equal(ui.nodes.get('consent').checked, true, 'same setup refresh preserves the current confirmation');
+  ui.emit(ready(3));
+  ui.emit(ready(4, { enabled: false, connected: false, phase: 'setup', workspace_path: '/home/me/old' }));
   assert.equal(ui.nodes.get('setup').hidden, false);
-  assert.equal(ui.nodes.get('session-bar').hidden, true);
-  assert.equal(ui.nodes.get('send-form').hidden, true);
-  assert.equal(ui.nodes.get('composer-footnote').hidden, true);
-  assert.equal(ui.nodes.get('workspace').value, '/home/me/Existing-Assistant');
+  for (const id of ['session-bar', 'send-form', 'composer-footnote']) assert.equal(ui.nodes.get(id).hidden, true);
   assert.equal(ui.nodes.get('consent').checked, false);
-  assert.deepEqual(ui.calls.filter(c => c.name === 'assistant_action').map(c => c.args.request.action), ['reconfigure']);
   ui.nodes.get('enable-form').emit('submit'); await tick();
-  assert.equal(ui.calls.filter(c => c.name === 'assistant_action').length, 1);
-  ui.nodes.get('consent').checked = true; ui.nodes.get('enable-form').emit('submit'); await tick();
-  assert.equal(ui.calls.filter(c => c.name === 'assistant_action').at(-1).args.request.action, 'enable');
+  assert.equal(ui.calls.filter(call => call.name === 'assistant_action').length, 0);
+  ui.nodes.get('consent').checked = true;
+  ui.emit(ready(5, { enabled: false, connected: false, phase: 'error' }));
+  ui.emit(ready(6, { enabled: false, connected: false, phase: 'setup' }));
+  assert.equal(ui.nodes.get('consent').checked, false, 'disabled error to setup also starts a new confirmation');
+  ui.nodes.get('enable-form').emit('submit'); await tick();
+  assert.equal(ui.calls.filter(call => call.name === 'assistant_action').length, 0);
+  ui.nodes.get('consent').checked = true;
+  ui.nodes.get('enable-form').emit('submit'); await tick();
+  const requests = ui.calls.filter(call => call.name === 'assistant_action').map(call => call.args.request);
+  assert.deepEqual(JSON.parse(JSON.stringify(requests)), [{ action: 'enable' }]);
 });
+
 test('cancelling without a running turn retains an explicit retry recovery path', async () => {
   const ui = setup({ getSnapshot: () => ready(1, { phase: 'cancelling', running: false }) }); await tick();
   assert.equal(ui.nodes.get('cancel').disabled, true); assert.equal(ui.nodes.get('retry').hidden, false);
@@ -406,6 +432,52 @@ test('pet drag crosses threshold once and suppresses the trailing click', async 
   pet.emit('click', { detail: 0 }); await tick();
   assert.deepEqual(ui.calls.filter(c => c.name === 'assistant_action').map(c => c.args.request.action), ['pet_input']);
 });
+test('double-press slingshot follows native preferences without changing ordinary dragging', async () => {
+  let time = 1000;
+  const ui = setup({ view: 'pet', now: () => time }); await tick();
+  const pet = ui.nodes.get('pet');
+  const press = () => pet.emit('pointerdown', { button: 0, pointerId: 1, clientX: 0, clientY: 0 });
+  const release = () => pet.emit('pointerup', { pointerId: 1 });
+  const drag = () => pet.emit('pointermove', { pointerId: 1, clientX: 10, clientY: 0 });
+  const began = () => ui.petEvents.filter(e => e[0] === 'motion-begin').at(-1)[1];
+  const prefs = (revision, slingshot_enabled) => ({ revision, visible: true, roaming_enabled: true, slingshot_enabled });
+  press(); release(); time += 100; press(); drag(); assert.equal(began(), true); release();
+  ui.emitEvent('pet-settings-state', prefs(2, false));
+  press(); release(); time += 100; press(); drag(); assert.equal(began(), false); release();
+  ui.emitEvent('pet-settings-state', prefs(1, true));
+  time += 100; press(); drag(); assert.equal(began(), false); release();
+  ui.emitEvent('pet-settings-state', prefs(3, true));
+  time += 100; press(); drag(); assert.equal(began(), false, 'enabling does not reuse an old press'); release();
+  time += 100; press(); drag(); assert.equal(began(), true); release();
+  ui.window.emit('pagehide');
+});
+
+test('pending preferences and disabling an armed pull cannot launch a slingshot', async () => {
+  let time = 1000; const reply = deferred();
+  const ui = setup({ view: 'pet', now: () => time, getPreferences: () => reply.promise }); await tick();
+  const pet = ui.nodes.get('pet');
+  const press = () => pet.emit('pointerdown', { button: 0, pointerId: 1, clientX: 0, clientY: 0 });
+  const release = () => pet.emit('pointerup', { pointerId: 1 });
+  const drag = () => pet.emit('pointermove', { pointerId: 1, clientX: 10, clientY: 0 });
+  const prefs = (revision, slingshot_enabled) => ({ revision, visible: true, roaming_enabled: false, slingshot_enabled });
+  press(); release(); time += 100; press(); drag();
+  assert.equal(ui.petEvents.filter(e => e[0] === 'motion-begin').length, 0, 'native motion waits for preferences'); release();
+  ui.emitEvent('pet-settings-state', prefs(4, false));
+  reply.resolve(prefs(3, true)); await tick();
+  ui.emitEvent('pet-settings-state', prefs(5, true));
+  press(); release(); time += 100; press();
+  ui.emitEvent('pet-settings-state', prefs(6, false));
+  drag(); assert.equal(ui.petEvents.filter(e => e[0] === 'motion-begin').at(-1)[1], false); release();
+  const settings = ui.petEvents.filter(e => e[0] === 'slingshot-enabled');
+  assert.equal(settings.at(-1)[1], false, 'late initial read cannot re-enable slingshot');
+  ui.emitEvent('pet-settings-state', prefs(7, 'false'));
+  ui.emitEvent('pet-settings-state', { ...prefs(7, true), slingshot_enabled: undefined });
+  assert.equal(ui.petEvents.filter(e => e[0] === 'slingshot-enabled').length, settings.length);
+  ui.emitEvent('pet-settings-state', prefs(7, true));
+  assert.equal(ui.petEvents.filter(e => e[0] === 'slingshot-enabled').at(-1)[1], true);
+  ui.window.emit('pagehide');
+});
+
 test('all received messages and titles use text-only DOM sinks, never HTML interpolation', async () => {
   const hostile = '<img src=x onerror=alert(1)>';
   const ui = setup({ getSnapshot: () => ready(1, { messages: [{ id: 'x', role: 'assistant', text: hostile }], sessions: [{ id: 's', title: hostile }] }) }); await tick();
@@ -445,14 +517,14 @@ test('native pet visibility stops motion and rejects roaming until restored', as
 
 test('pet preference events beat a delayed initial read and same-state events do not restart actions', async () => {
   const reply=deferred();const ui=setup({view:'pet',getPreferences:()=>reply.promise});await tick();
-  ui.emitEvent('pet-settings-state',{visible:true,roaming_enabled:false,revision:3});
+  ui.emitEvent('pet-settings-state',{visible:true,slingshot_enabled:true,roaming_enabled:false,revision:3});
   const before=ui.petEvents.filter(e=>e[0]==='fixed').length;
-  reply.resolve({visible:true,roaming_enabled:true,revision:2});await tick();
+  reply.resolve({visible:true,slingshot_enabled:true,roaming_enabled:true,revision:2});await tick();
   assert.equal(ui.petEvents.filter(e=>e[0]==='fixed').length,before);
   assert.equal(ui.petEvents.filter(e=>e[0]==='fixed').at(-1)[1],true);
-  ui.emitEvent('pet-settings-state',{visible:true,roaming_enabled:false,revision:4});
+  ui.emitEvent('pet-settings-state',{visible:true,slingshot_enabled:true,roaming_enabled:false,revision:4});
   assert.equal(ui.petEvents.filter(e=>e[0]==='fixed').length,before);
-  ui.emitEvent('pet-settings-state',{visible:true,roaming_enabled:true,revision:5});
+  ui.emitEvent('pet-settings-state',{visible:true,slingshot_enabled:true,roaming_enabled:true,revision:5});
   assert.equal(ui.petEvents.filter(e=>e[0]==='fixed').at(-1)[1],false);
   ui.window.emit('pagehide');assert.equal(ui.stopped(),5);
 });
@@ -462,7 +534,7 @@ test('pet rejects reordered visibility events independently of roaming preferenc
   const hooks=ui.petEvents.find(e=>e[0]==='renderer-mounted')[1];
   ui.emitEvent('pet-visibility',{visible:false,revision:9});
   ui.emitEvent('pet-visibility',{visible:true,revision:8});
-  ui.emitEvent('pet-settings-state',{visible:true,roaming_enabled:false,revision:7});
+  ui.emitEvent('pet-settings-state',{visible:true,slingshot_enabled:true,roaming_enabled:false,revision:7});
   assert.equal(hooks.onMove('move',{},{}),false);
   ui.emitEvent('pet-visibility',{visible:true,revision:10});
   assert.equal(hooks.onMove('move',{},{}),true);
@@ -520,7 +592,7 @@ function clickTopmost(ui) {
   const button=ui.nodes.get('pet-topmost');button.dataset.petCommand='topmost';
   ui.nodes.get('assistant-root').emit('click',{target:button});
 }
-const petState=(revision,always_on_top)=>({visible:true,roaming_enabled:true,always_on_top,revision});
+const petState=(revision,always_on_top)=>({visible:true,slingshot_enabled:true,roaming_enabled:true,always_on_top,revision});
 
 test('right click reads actual topmost and its switch changes only the native pet window', async () => {
   const ui=setup({view:'pet'});await tick();
@@ -582,7 +654,178 @@ test('late topmost reply after unload cannot change the right-click switch', asy
 
 
 const bubbleMessage=id=>({id,kind:'completed',title:'本轮执行结束',body:'点击查看对应会话'});
-const bubblePreferences=(revision,enabled=true,visible=true)=>({visible,bubble_notifications:enabled,roaming_enabled:true,message:'',revision});
+function clickSlingshot(ui) {
+  const button=ui.nodes.get('pet-slingshot');button.dataset.petCommand='slingshot';
+  ui.nodes.get('assistant-root').emit('click',{target:button});
+}
+const slingshotState=(revision,slingshot_enabled)=>({...petState(revision,true),slingshot_enabled});
+
+test('pet slingshot menu item has an accessible switch and scoped command', () => {
+  const markup=source.match(/<button\b[^>]*\bid="pet-slingshot"[^>]*>/g) ?? [];
+  assert.equal(markup.length,1);
+  assert.match(markup[0],/role="switch"/);
+  assert.match(markup[0],/aria-label="允许弹弓"/);
+  assert.match(markup[0],/data-pet-command="slingshot"/);
+});
+
+test('right-click slingshot switch persists both directions without changing topmost or ordinary drag', async () => {
+  let time=1000;
+  const ui=setup({view:'pet',now:()=>time});await tick();
+  const button=ui.nodes.get('pet-slingshot'),pet=ui.nodes.get('pet');
+  assert.equal(button.getAttribute('aria-checked'),'true');
+  pet.emit('contextmenu');await tick();
+  assert.equal(ui.calls.filter(c=>c.name==='get_pet_preferences').length,2,'menu shares one preference refresh');
+  clickSlingshot(ui);await tick();
+  assert.equal(button.getAttribute('aria-checked'),'false');
+  assert.deepEqual(JSON.parse(JSON.stringify(ui.calls.find(c=>c.name==='set_pet_slingshot_enabled').args)),{enabled:false});
+  assert.equal(ui.nodes.get('pet-menu').hidden,true);
+  assert.equal(ui.nodes.get('pet-topmost').getAttribute('aria-checked'),'true');
+  const press=()=>pet.emit('pointerdown',{button:0,pointerId:1,clientX:0,clientY:0});
+  const release=()=>pet.emit('pointerup',{pointerId:1});
+  const drag=()=>pet.emit('pointermove',{pointerId:1,clientX:10,clientY:0});
+  press();release();time+=100;press();drag();release();
+  assert.equal(ui.petEvents.filter(e=>e[0]==='motion-begin').at(-1)[1],false);
+  clickTopmost(ui);await tick(); // another native setting must preserve the saved slingshot value/revision
+  assert.equal(button.getAttribute('aria-checked'),'false');
+  pet.emit('contextmenu');await tick();
+  assert.equal(button.getAttribute('aria-checked'),'false','readback keeps the saved preference');
+  clickSlingshot(ui);await tick();
+  assert.equal(button.getAttribute('aria-checked'),'true');
+  assert.equal(ui.nodes.get('pet-topmost').getAttribute('aria-checked'),'false');
+  assert.deepEqual(ui.calls.filter(c=>c.name==='set_pet_slingshot_enabled').map(c=>c.args.enabled),[false,true]);
+  time+=100;press();drag();release();
+  assert.equal(ui.petEvents.filter(e=>e[0]==='motion-begin').at(-1)[1],false,'enabling does not reuse an old press');
+  time+=100;press();drag();release();
+  assert.equal(ui.petEvents.filter(e=>e[0]==='motion-begin').at(-1)[1],true);
+  assert.equal(ui.calls.filter(c=>c.name==='assistant_action').length,0);
+  ui.window.emit('pagehide');
+});
+
+test('slingshot save disables repeat clicks without optimistic switch or motion updates', async () => {
+  const reply=deferred();const ui=setup({view:'pet',setSlingshot:()=>reply.promise});await tick();
+  const button=ui.nodes.get('pet-slingshot');
+  const changes=ui.petEvents.filter(e=>e[0]==='slingshot-enabled').length;
+  clickSlingshot(ui);clickSlingshot(ui);
+  assert.equal(button.disabled,true);
+  assert.equal(button.getAttribute('aria-checked'),'true');
+  assert.equal(ui.petEvents.filter(e=>e[0]==='slingshot-enabled').length,changes);
+  assert.equal(ui.calls.filter(c=>c.name==='set_pet_slingshot_enabled').length,1);
+  reply.resolve(slingshotState(1,false));await tick();
+  assert.equal(button.disabled,false);assert.equal(button.getAttribute('aria-checked'),'false');
+  assert.equal(ui.petEvents.filter(e=>e[0]==='slingshot-enabled').at(-1)[1],false);
+});
+
+test('unknown slingshot click only retries reading and pending read prevents duplicate writes', async () => {
+  const reply=deferred();let reads=0;
+  const ui=setup({view:'pet',getPreferences:()=>++reads===1?Promise.reject(new Error('read failed')):reply.promise});await tick();
+  const button=ui.nodes.get('pet-slingshot');
+  assert.equal(button.getAttribute('aria-checked'),undefined);
+  assert.equal(button.getAttribute('data-state'),'unknown');assert.equal(button.disabled,false);
+  clickSlingshot(ui);clickSlingshot(ui);
+  assert.equal(button.disabled,true);
+  assert.equal(ui.calls.filter(c=>c.name==='get_pet_preferences').length,2);
+  assert.equal(ui.calls.filter(c=>c.name==='set_pet_slingshot_enabled').length,0);
+  reply.resolve(slingshotState(0,false));await tick();
+  assert.equal(button.disabled,false);assert.equal(button.getAttribute('aria-checked'),'false');
+  assert.equal(ui.calls.filter(c=>c.name==='set_pet_slingshot_enabled').length,0,'successful retry is not an implicit toggle');
+});
+
+test('failed slingshot write reports failure and requires same-revision read before another write', async () => {
+  const reply=deferred();let first=true;
+  const ui=setup({view:'pet',setSlingshot:value=>{if(first){first=false;return reply.promise;}return slingshotState(1,value);}});await tick();
+  const button=ui.nodes.get('pet-slingshot');clickSlingshot(ui);
+  reply.reject(new Error('native failed'));await tick();
+  assert.equal(button.disabled,false);assert.equal(button.getAttribute('aria-checked'),undefined);
+  assert.equal(button.getAttribute('data-state'),'unknown');
+  assert.equal(ui.nodes.get('pet-speech').hidden,false);assert.match(ui.nodes.get('pet-speech-text').textContent,/弹弓/);
+  clickSlingshot(ui);await tick();
+  assert.equal(button.getAttribute('aria-checked'),'true','same-revision read restores known state');
+  assert.equal(ui.calls.filter(c=>c.name==='set_pet_slingshot_enabled').length,1);
+  clickSlingshot(ui);await tick();
+  assert.equal(button.getAttribute('aria-checked'),'false');
+  assert.equal(ui.calls.filter(c=>c.name==='set_pet_slingshot_enabled').length,2);
+});
+
+test('newer pet settings beat delayed slingshot write and invalid booleans cannot alter switch', async () => {
+  const reply=deferred();const ui=setup({view:'pet',setSlingshot:()=>reply.promise});await tick();
+  const button=ui.nodes.get('pet-slingshot');clickSlingshot(ui);
+  ui.emitEvent('pet-settings-state',slingshotState(8,false));
+  reply.resolve(slingshotState(2,true));await tick();
+  assert.equal(button.getAttribute('aria-checked'),'false');assert.equal(button.disabled,false);
+  ui.emitEvent('pet-settings-state',slingshotState(7,true));
+  for(const invalid of ['true',null,undefined]) ui.emitEvent('pet-settings-state',slingshotState(9,invalid));
+  assert.equal(button.getAttribute('aria-checked'),'false');
+  ui.emitEvent('pet-settings-state',slingshotState(9,true));
+  assert.equal(button.getAttribute('aria-checked'),'true','invalid state must not consume revision');
+});
+
+test('newer pet settings keep slingshot known when an older write fails', async () => {
+  const reply=deferred();const ui=setup({view:'pet',setSlingshot:()=>reply.promise});await tick();
+  const button=ui.nodes.get('pet-slingshot');clickSlingshot(ui);
+  ui.emitEvent('pet-settings-state',slingshotState(8,false));
+  reply.reject(new Error('reply lost'));await tick();
+  assert.equal(button.getAttribute('aria-checked'),'false');assert.equal(button.disabled,false);
+  assert.equal(ui.nodes.get('pet-speech').hidden,false);assert.match(ui.nodes.get('pet-speech-text').textContent,/弹弓/);
+  const reads=ui.calls.filter(c=>c.name==='get_pet_preferences').length;
+  clickSlingshot(ui);await tick();
+  assert.equal(ui.calls.filter(c=>c.name==='get_pet_preferences').length,reads,'newer event avoids unnecessary recovery read');
+  assert.equal(ui.calls.filter(c=>c.name==='set_pet_slingshot_enabled').length,2);
+});
+
+test('newer pet settings beat delayed initial and menu preference reads for slingshot', async () => {
+  const initial=deferred(),refresh=deferred();let reads=0;
+  const ui=setup({view:'pet',getPreferences:()=>++reads===1?initial.promise:refresh.promise});await tick();
+  const button=ui.nodes.get('pet-slingshot');
+  assert.equal(button.getAttribute('aria-checked'),undefined);
+  ui.emitEvent('pet-settings-state',slingshotState(8,false));
+  initial.resolve(slingshotState(2,true));await tick();
+  assert.equal(button.getAttribute('aria-checked'),'false');
+  ui.nodes.get('pet').emit('contextmenu');await tick();
+  ui.emitEvent('pet-settings-state',slingshotState(9,true));
+  refresh.resolve(slingshotState(8,false));await tick();
+  assert.equal(button.getAttribute('aria-checked'),'true');
+});
+
+test('malformed slingshot write response leaves unknown state and read-only retry', async () => {
+  const ui=setup({view:'pet',setSlingshot:()=>slingshotState(1,'false')});await tick();
+  const button=ui.nodes.get('pet-slingshot');clickSlingshot(ui);await tick();
+  assert.equal(button.getAttribute('aria-checked'),undefined);assert.equal(button.getAttribute('data-state'),'unknown');
+  assert.equal(ui.nodes.get('pet-speech').hidden,false);assert.match(ui.nodes.get('pet-speech-text').textContent,/弹弓/);
+  clickSlingshot(ui);await tick();
+  assert.equal(button.getAttribute('aria-checked'),'true');
+  assert.equal(ui.calls.filter(c=>c.name==='set_pet_slingshot_enabled').length,1);
+});
+
+test('slingshot switch is disabled and never invokes or subscribes IPC in browser preview', async () => {
+  const ui=setup({view:'pet',native:false});await tick();
+  const button=ui.nodes.get('pet-slingshot');
+  assert.equal(button.disabled,true);assert.equal(button.getAttribute('aria-checked'),undefined);
+  clickSlingshot(ui);ui.nodes.get('pet').emit('contextmenu');clickSlingshot(ui);await tick();
+  assert.equal(ui.calls.length,0);assert.equal(ui.events.length,0);
+});
+
+for(const outcome of ['resolve','reject']) test('late slingshot '+outcome+' after unload cannot write DOM', async () => {
+  const reply=deferred();const ui=setup({view:'pet',setSlingshot:()=>reply.promise});await tick();
+  clickSlingshot(ui);ui.window.emit('pagehide');
+  const state=()=>['pet-slingshot','notice'].map(id=>{const node=ui.nodes.get(id);return [node.textContent,[...node.attributes],{...node.dataset},node.disabled,node.hidden,node.title];});
+  const before=state();const count=ui.calls.length;
+  if(outcome==='resolve') reply.resolve(slingshotState(1,false));else reply.reject(new Error('late failure'));
+  ui.emitEvent('pet-settings-state',slingshotState(9,false));await tick();
+  clickSlingshot(ui);await tick();
+  assert.deepEqual(state(),before);assert.equal(ui.calls.length,count);
+});
+
+test('late slingshot preference retry after unload cannot write DOM', async () => {
+  const reply=deferred();let reads=0;
+  const ui=setup({view:'pet',getPreferences:()=>++reads===1?Promise.reject(new Error('read failed')):reply.promise});await tick();
+  clickSlingshot(ui);ui.window.emit('pagehide');
+  const button=ui.nodes.get('pet-slingshot');
+  const before=[button.textContent,[...button.attributes],button.disabled,button.title];
+  reply.resolve(slingshotState(1,true));await tick();
+  assert.deepEqual([button.textContent,[...button.attributes],button.disabled,button.title],before);
+});
+
+const bubblePreferences=(revision,enabled=true,visible=true)=>({visible,bubble_notifications:enabled,slingshot_enabled:true,roaming_enabled:true,message:'',revision});
 
 test('bubble host subscribes before pulling inbox and opens only opaque native ids', async () => {
   const ui=setup({view:'pet',getInbox:()=>{assert.ok(ui.events.includes('pet-notification'));return [];}});await tick();

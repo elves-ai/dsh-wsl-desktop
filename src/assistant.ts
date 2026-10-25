@@ -35,7 +35,8 @@ root.innerHTML = view === 'pet' ?
 <hr class="pet-menu-separator">
 <button id="pet-auto-read" type="button" role="switch" aria-label="自动朗读回复" aria-checked="false" data-pet-command="auto-read" title="仅自动朗读新完成的短回复，使用本地千问音色"><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m11 5-5 4H3v6h3l5 4ZM15 8a6 6 0 0 1 0 8M18 5a10 10 0 0 1 0 14"/></svg><span class="pet-menu-label">自动朗读</span><span class="pet-menu-indicator" aria-hidden="true"></span></button>
 <button id="pet-animation-trigger" type="button" aria-haspopup="menu" aria-controls="pet-animation" aria-expanded="false"><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m9 5 11 7-11 7Z"/></svg><span class="pet-menu-label">选择动作</span><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m9 6 6 6-6 6"/></svg></button>
-<button id="pet-topmost" type="button" role="switch" aria-label="窗口置顶" data-pet-command="topmost"><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M8 3h8l-1 6 4 4v2H5v-2l4-4ZM12 15v6"/></svg><span class="pet-menu-label">窗口置顶</span><span class="pet-menu-indicator" aria-hidden="true"></span></button>
+<button id="pet-slingshot" type="button" role="switch" aria-label="允许弹弓" data-pet-command="slingshot" disabled><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m5 3 7 7 7-7M12 10v11M5 3l2 10 5 4 5-4 2-10"/></svg><span class="pet-menu-label">允许弹弓</span><span class="pet-menu-indicator" aria-hidden="true"></span></button>'
+'<button id="pet-topmost" type="button" role="switch" aria-label="窗口置顶" data-pet-command="topmost"><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M8 3h8l-1 6 4 4v2H5v-2l4-4ZM12 15v6"/></svg><span class="pet-menu-label">窗口置顶</span><span class="pet-menu-indicator" aria-hidden="true"></span></button>
 <hr class="pet-menu-separator">
 <button type="button" data-action="pet_settings"><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3" fill="var(--ui-bg)"/><circle cx="15" cy="17" r="3" fill="var(--ui-bg)"/></svg><span class="pet-menu-label">宠物设置</span></button>
 <button type="button" data-action="hide"><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 3l18 18M10 5a11 11 0 0 1 11 7 14 14 0 0 1-3 4M6 6a14 14 0 0 0-3 6 11 11 0 0 0 14 6M10 10a3 3 0 0 0 4 4"/></svg><span class="pet-menu-label">隐藏宠物</span></button>
@@ -50,14 +51,13 @@ root.innerHTML = view === 'pet' ?
 <div id="preview" class="preview" hidden>浏览器预览 · 未连接原生助手，不会执行操作</div>
 <div id="session-bar" class="session-bar"><label class="sr-only" for="sessions">历史对话</label>
 <select id="sessions" aria-label="历史对话"><option value="">暂无对话</option></select>
-<button id="new-session" data-action="new_session" class="quiet">＋ 新对话</button>
-<button id="reconfigure" data-action="reconfigure" class="quiet" title="重新选择独立 WSL 项目目录">项目</button></div>
+<button id="new-session" data-action="new_session" class="quiet">＋ 新对话</button></div>
 <div id="notice" class="notice" role="alert" hidden></div>
 <section id="setup" class="setup" hidden><span class="setup-icon" aria-hidden="true">⌂</span><h2>给鲸鱼娘一个独立的空间</h2>
-<p>启用后会在 WSL 中创建独立目录并注册 DSH 项目，与已有项目分开。聊天记录保存在 DSH 中，确认后才会执行。</p>
-<form id="enable-form"><label for="workspace">WSL 目录</label>
-<input id="workspace" name="workspace" value="~/.dsh-wsl-desktop/assistant" placeholder="~/.dsh-wsl-desktop/assistant" autocomplete="off" spellcheck="false" required />
-<label class="consent"><input id="consent" type="checkbox" required />我确认使用此目录，允许助手在这里工作</label>
+<p id="workspace-help">工作目录固定为下方默认值，不能修改。确认启用后才会在 WSL 中准备目录并注册 DSH 项目；旧自定义目录及其对话历史不搬移、不删除，历史仍由 DSH 保存。</p>
+<form id="enable-form"><label for="workspace">固定 WSL 工作目录（只读）</label>
+<input id="workspace" value="~/.dsh-wsl-desktop/assistant" readonly aria-readonly="true" aria-describedby="workspace-help" spellcheck="false" />
+<label class="consent"><input id="consent" type="checkbox" required />我确认使用固定默认目录，允许助手在这里工作</label>
 <button id="enable" class="primary" type="submit">确认并启用</button></form></section>
 <section id="conversation" class="conversation" role="log" aria-label="对话消息" aria-live="polite" aria-relevant="additions text"></section>
 <footer class="composer-area"><p id="runtime-message" class="runtime-message"></p>
@@ -123,6 +123,9 @@ let petNotificationActive = false;
 let bubbleActivityEpoch = 0;
 let petPreferenceRevision = -1;
 let roamingEnabled: boolean | undefined;
+let slingshotEnabled = false;
+let slingshotKnown = false;
+let slingshotPending = false;
 let unlistenPetPreferences: UnlistenFn | undefined;
 let petVisible = true;
 let petVisibilityRevision = -1;
@@ -131,7 +134,6 @@ let petTopmostRevision = -1;
 let petTopmostPending = false;
 let unlistenPetVisibility: UnlistenFn | undefined;
 const draft = el<HTMLTextAreaElement>('draft');
-const workspace = el<HTMLInputElement>('workspace');
 const storageKey = () => 'dsh-assistant:draft:' + (state.workspace_id ?? 'unassigned') + ':' + (state.session_id ?? 'new');
 function loadDraft() { try { if (draft) draft.value = sessionStorage.getItem(storageKey()) ?? ''; } catch { /* restricted storage: keep memory draft */ } }
 function saveDraft() { try { if (draft) { if (draft.value) sessionStorage.setItem(storageKey(), draft.value); else sessionStorage.removeItem(storageKey()); } } catch { /* never discard in-memory input */ } }
@@ -143,8 +145,8 @@ function accept(payload: unknown) {
   if (next === state) return;
   const changedSession = next.session_id !== state.session_id || next.workspace_id !== state.workspace_id;
   if (changedSession) saveDraft();
-  if (state.enabled && !next.enabled) {
-    if (workspace) workspace.value = next.workspace_path ?? state.workspace_path ?? '~/.dsh-wsl-desktop/assistant';
+  if (!next.enabled && (state.enabled || (next.phase === 'setup' && state.phase !== 'setup'))) {
+    // Entering setup always requires fresh consent, including disabled legacy bindings.
     const consent = el<HTMLInputElement>('consent'); if (consent) consent.checked = false;
   }
   state = next;
@@ -501,7 +503,6 @@ function render() {
   const cancel = el<HTMLButtonElement>('cancel'); if (cancel) { cancel.hidden = !state.running && !state.waiting && !['sending', 'cancelling'].includes(state.phase); cancel.disabled = !native || pending || state.phase === 'cancelling'; }
   const enable = el<HTMLButtonElement>('enable'); if (enable) enable.disabled = !native || pending || state.phase === 'loading';
   const newSession = el<HTMLButtonElement>('new-session'); if (newSession) newSession.disabled = !native || pending || !state.enabled || !state.workspace_id || state.running || state.waiting;
-  const reconfigure = el<HTMLButtonElement>('reconfigure'); if (reconfigure) reconfigure.disabled = !native || pending || state.running || state.waiting;
   renderPetConversation();
   root.querySelectorAll<HTMLButtonElement>('[data-action]').forEach(button => {
     if (!native) button.disabled = true;
@@ -517,6 +518,7 @@ root.addEventListener('click', event => {
     if (command === 'auto-read') { toggleAutoRead(); return; }
     if (command === 'talk') { petMenu?.close(); void openPetInput(); return; }
     if (command === 'replay') { petMenu?.close(); dismissedSpeechKey = undefined; petSpeechVisible = true; renderPetConversation(); return; }
+    if (command === 'slingshot') { petMenu?.close(); void togglePetSlingshot(); return; }
     if (command === 'topmost') { petMenu?.close(); void togglePetTopmost(); return; }
     if (command === 'close-menu') petMenu?.close();
     else petMenu?.toggle();
@@ -535,10 +537,9 @@ el<HTMLSelectElement>('sessions')?.addEventListener('change', event => {
 }, { signal: cleanup.signal });
 el('enable-form')?.addEventListener('submit', event => {
   event.preventDefault();
-  const path = workspace?.value.trim() ?? '';
-  if (!el<HTMLInputElement>('consent')?.checked) return;
-  if (!(path.startsWith('/') || path.startsWith('~/')) || path === '/' || path.includes('\\') || /[\u0000-\u001f]/.test(path) || path.split('/').includes('..')) { setNotice('请填写独立的 WSL 目录，例如 ~/.dsh-wsl-desktop/assistant。'); return; }
-  void exclusive('enable', { path });
+  if (state.enabled || state.phase === 'loading' || !el<HTMLInputElement>('consent')?.checked) return;
+  // The native boundary chooses the fixed directory; never read a path from the DOM.
+  void exclusive('enable');
 }, { signal: cleanup.signal });
 async function send() {
   if (!native || !draft || composing || transportFailed || !canSend(state, draft.value, pending)) return;
@@ -705,6 +706,7 @@ function mountPet() {
   });
   mountPetConversation();
   mountPetNarration();
+  renderPetSlingshot();
   for (const surface of [menu, panel]) surface?.addEventListener('contextmenu', event => { event.preventDefault(); petMenu?.close(); }, { signal: cleanup.signal });
   const bubble = el('pet-bubble');
   if (bubble) {
@@ -771,6 +773,40 @@ function mountPet() {
       group.append(button);
     }
   }
+}
+function renderPetSlingshot() {
+  if (disposed) return;
+  const button = el<HTMLButtonElement>('pet-slingshot');
+  if (!button) return;
+  button.disabled = !native || slingshotPending;
+  button.setAttribute('aria-busy', String(slingshotPending));
+  if (slingshotKnown) button.setAttribute('aria-checked', String(slingshotEnabled));
+  else button.removeAttribute('aria-checked');
+  button.setAttribute('data-state', !native ? 'unavailable' : slingshotKnown ? 'ready' : 'unknown');
+  button.title = !native ? '仅桌面应用可用' : slingshotPending ? '正在读取/切换弹弓…' : !slingshotKnown ? '重新读取弹弓设置' : slingshotEnabled ? '弹弓已开启，快速连按再拖可蓄力弹射' : '弹弓已关闭，不影响普通拖拽和甩抛';
+  button.setAttribute('aria-description', button.title);
+}
+async function togglePetSlingshot() {
+  if (!native || view !== 'pet' || disposed || slingshotPending) return;
+  const baseline = petPreferenceRevision;
+  const desired = slingshotKnown ? !slingshotEnabled : undefined;
+  slingshotPending = true; renderPetSlingshot();
+  try {
+    const snapshot = desired === undefined
+      ? await invoke('get_pet_preferences')
+      : await invoke('set_pet_slingshot_enabled', { enabled: desired });
+    if (disposed) return;
+    const confirmed = snapshot as { slingshot_enabled?: boolean; roaming_enabled?: boolean; revision?: number } | null;
+    if (!confirmed || typeof confirmed.slingshot_enabled !== 'boolean' || typeof confirmed.roaming_enabled !== 'boolean' || !Number.isSafeInteger(confirmed.revision) || confirmed.revision! < 0) throw new Error('原生端未返回有效弹弓设置。');
+    applyPetPreferences(snapshot);
+    if (!slingshotKnown) throw new Error('原生端未返回有效弹弓设置。');
+    if (localError.startsWith('无法读取或切换宠物弹弓：')) setNotice('');
+  } catch (error) {
+    if (!disposed) {
+      if (petPreferenceRevision <= baseline) slingshotKnown = false;
+      setNotice('无法读取或切换宠物弹弓：' + errorText(error));
+    }
+  } finally { if (!disposed) { slingshotPending = false; renderPetSlingshot(); } }
 }
 function renderPetTopmost() {
   if (disposed) return;
@@ -840,14 +876,23 @@ function applyPetPreferences(value: unknown) {
   applyPetTopmost(value);
   applyPetBubblePreferences(value);
   if (!value || typeof value !== 'object') return;
-  const incoming = value as { revision?: number; roaming_enabled?: boolean };
-  if (!Number.isSafeInteger(incoming.revision) || incoming.revision! <= petPreferenceRevision || typeof incoming.roaming_enabled !== 'boolean') return;
+  const incoming = value as { revision?: number; roaming_enabled?: boolean; slingshot_enabled?: boolean };
+  if (!Number.isSafeInteger(incoming.revision) || incoming.revision! < petPreferenceRevision || (incoming.revision === petPreferenceRevision && slingshotKnown) || typeof incoming.roaming_enabled !== 'boolean' || typeof incoming.slingshot_enabled !== 'boolean') return;
   petPreferenceRevision = incoming.revision!;
+  slingshotKnown = true;
+  if (slingshotEnabled !== incoming.slingshot_enabled) {
+    slingshotEnabled = incoming.slingshot_enabled;
+    petMotion?.setSlingshotEnabled(slingshotEnabled);
+    // Do not carry a double-press or armed pull across a preference change.
+    lastPress = -Infinity;
+    if (pointer) pointer.sling = false;
+  }
   if (roamingEnabled !== incoming.roaming_enabled) {
     roamingEnabled = incoming.roaming_enabled;
     petRenderer?.toggleFixed(!incoming.roaming_enabled);
     if (!incoming.roaming_enabled) petMotion?.stopRoam();
   }
+  renderPetSlingshot();
 }
 // Native geometry uses physical pixels; overlay layout and hit regions use CSS pixels.
 let petGeometryRequest = 0;
@@ -905,12 +950,13 @@ function mountPetMotion() {
     onBounce: () => petRenderer?.startSquash(),
     onError: error => { if (!disposed) setNotice('宠物移动失败：' + errorText(error)); },
   });
+  petMotion.setSlingshotEnabled(slingshotEnabled);
 }
 pet?.addEventListener('pointerdown', event => {
   if (event.button !== 0) return;
   suppressClick = false;
   const now = performance.now();
-  pointer = { id: event.pointerId, x: event.clientX, y: event.clientY, dragged: false, sling: now - lastPress < SLINGSHOT_DOUBLE_MS };
+  pointer = { id: event.pointerId, x: event.clientX, y: event.clientY, dragged: false, sling: slingshotEnabled && now - lastPress < SLINGSHOT_DOUBLE_MS };
   lastPress = now;
   petMotion?.stop();
   pet.setPointerCapture(event.pointerId);

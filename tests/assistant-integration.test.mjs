@@ -37,6 +37,34 @@ test('assistant gets dedicated bundled capabilities, not launcher or remote priv
   assert.ok(native.includes('deny_unknown_fields'));
 });
 
+test('pet workspace creation and restored bindings cannot select a custom directory', () => {
+  const native = read('src-tauri/src/desktop_assistant.rs');
+  const action = native.slice(native.indexOf('pub(super) enum Action {'), native.indexOf('fn action_allowed('));
+  assert.match(action, /Enable \{\}/);
+  assert.doesNotMatch(action, /Reconfigure|path: String/);
+  const directory = native.slice(native.indexOf('fn default_directory('), native.indexOf('fn id()'));
+  assert.match(directory, /config: &Config, create: bool/);
+  assert.match(directory, /if !create \{[\s\S]*?args\.push\("--inspect"/);
+  assert.doesNotMatch(directory, /path\.to_owned/);
+  const runAction = native.slice(native.indexOf('fn run_action('), native.indexOf('fn open_session('));
+  const enable = runAction.slice(runAction.indexOf('Action::Enable {} =>'), runAction.indexOf('Action::Retry =>'));
+  assert.ok(enable.includes('default_directory(&config, true)?'));
+  const checked = native.slice(native.indexOf('fn checked_binding('), native.indexOf('fn default_directory('));
+  assert.ok(checked.includes('require_default_workspace'));
+  assert.ok(checked.includes('default_directory(config, false)?'));
+  const follower = native.slice(native.indexOf('pub(super) fn start('), native.indexOf('// Independent status observation'));
+  assert.ok(follower.indexOf('require_default_workspace') < follower.indexOf('let rpc = client'));
+  assert.ok(follower.includes('follow_state.require_setup'));
+  const reset = native.slice(native.indexOf('fn require_setup('), native.indexOf('fn wait('));
+  assert.ok(reset.includes('data.generation != generation'));
+  assert.ok(reset.includes('data.projection.set_enabled(false)'));
+  assert.doesNotMatch(reset, /\.save\(|\.clear\(|fs::|workspace_create|session_create/);
+  const retry = runAction.slice(runAction.indexOf('Action::Retry =>'), runAction.indexOf('Action::NewSession =>'));
+  assert.ok(retry.includes('bound_workspace'));
+  assert.ok(retry.includes('state.require_setup'));
+  assert.doesNotMatch(retry, /default_directory\(&config, true\)|workspace_create/);
+});
+
 test('assistant is built, staged, and registered with generated command permissions', () => {
   assert.ok(read('vite.config.ts').includes("assistant: 'assistant.html'"));
   assert.ok(read('scripts/Build-Windows.ps1').includes("'assistant.html'"));
@@ -72,7 +100,7 @@ test('physical movement is pet-only and releases preserve upstream credit and re
   assert.equal(motion.local,true);
   assert.equal(motion.remote,undefined);
   assert.deepEqual(motion.webviews,['assistant-pet']);
-  assert.deepEqual(motion.permissions,['allow-get-pet-geometry','allow-move-pet','allow-drag-pet','allow-get-pet-preferences','allow-set-pet-topmost']);
+  assert.deepEqual(motion.permissions,['allow-get-pet-geometry','allow-move-pet','allow-drag-pet','allow-get-pet-preferences','allow-set-pet-topmost','allow-set-pet-slingshot-enabled']);
   const native=read('src-tauri/src/desktop_pet.rs');
   assert.ok(native.includes('assert_assistant(view)?'));
   assert.ok(native.includes('view.label() != "assistant-pet"'));
@@ -156,6 +184,40 @@ test('pet controls share actual visibility without inheriting DSH or service pri
   assert.ok(assistant.includes('set_visible(&app, false)'));
 });
 
+
+test('slingshot toggle is a narrow authenticated pet command and publishes durable shared settings', () => {
+  const source=read('src-tauri/src/desktop_pet_settings.rs');
+  const command=source.slice(source.indexOf('pub(super) async fn set_pet_slingshot_enabled('),source.indexOf('pub(super) async fn set_pet_topmost('));
+  assert.match(command,/enabled: bool,\s*\) -> Result<PetSettingsSnapshot, String>/);
+  assert.doesNotMatch(command,/(?:patch|label|url|path):/);
+  assert.ok(command.includes('assistant::assert_assistant(&view)?'));
+  assert.ok(command.includes('view.label() != "assistant-pet"'));
+  assert.ok(command.indexOf('assistant::assert_assistant(&view)?') < command.indexOf('state.inner().clone()'));
+  assert.ok(command.indexOf('view.label() != "assistant-pet"') < command.indexOf('state.inner().clone()'));
+  assert.match(command,/spawn_blocking\(move \|\| \{\s*state\.set_preferences\(\s*&app,\s*PetSettingsPatch \{\s*slingshot_enabled: Some\(enabled\),\s*\.\.Default::default\(\)\s*\},\s*\)\s*\}\)\s*\.await/);
+  const setter=source.slice(source.indexOf('fn set_preferences('),source.indexOf('fn set_visible_locked('));
+  assert.ok(setter.includes('self.publish(app)'));
+  assert.ok(setter.includes('Ok(self.snapshot())'));
+  assert.ok(source.includes('for label in ["launcher-settings", "dsh-settings", "assistant-pet"]'));
+  assert.ok(source.includes('"pet-settings-state", &snapshot'));
+  const generic=source.slice(source.indexOf('pub(super) async fn set_pet_settings('),source.indexOf('pub(super) async fn set_pet_visibility('));
+  assert.ok(generic.includes('assert_settings(&view)?'));
+  assert.ok(!generic.includes('assert_assistant'));
+  const cap=JSON.parse(read('src-tauri/capabilities/pet-motion.json'));
+  assert.equal(cap.local,true);assert.equal(cap.remote,undefined);assert.equal(cap.windows,undefined);
+  assert.deepEqual(cap.webviews,['assistant-pet']);
+  assert.ok(cap.permissions.includes('allow-set-pet-slingshot-enabled'));
+  assert.ok(!cap.permissions.includes('allow-set-pet-settings'));
+  for(const capability of ['assistant','launcher','pet-settings']) {
+    assert.ok(!read('src-tauri/capabilities/'+capability+'.json').includes('allow-set-pet-slingshot-enabled'));
+  }
+  const name='set_pet_slingshot_enabled';
+  assert.ok(read('src-tauri/build.rs').includes('"'+name+'"'));
+  assert.ok(read('src-tauri/src/desktop.rs').includes('pet_settings::'+name));
+  const permission=read('src-tauri/permissions/autogenerated/'+name+'.toml');
+  assert.ok(permission.includes('commands.allow = ["'+name+'"]'));
+  assert.ok(permission.includes('commands.deny = ["'+name+'"]'));
+});
 
 test('topmost bridge targets only the authenticated pet and reads back native state', () => {
   const source=read('src-tauri/src/desktop_pet_settings.rs');

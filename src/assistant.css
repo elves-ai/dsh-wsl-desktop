@@ -92,6 +92,9 @@ textarea::placeholder { color: #9dabbc; }
 .pet-menu button { border-radius: var(--ui-radius); background: transparent; color: inherit; transition: background var(--ui-duration), color var(--ui-duration); }
 .pet-menu-close { display: grid; place-items: center; width: 24px; height: 24px; flex-shrink: 0; padding: 0; }
 .pet-menu > button, .pet-submenu [role="menuitem"] { display: flex; align-items: center; gap: var(--ui-space-2); width: 100%; height: 26px; min-width: 0; padding: 0 var(--ui-space-2); text-align: left; font-size: 12px; line-height: 18px; }
+/* Fit all ten primary actions inside the unchanged 320px pet window. */
+.pet-menu:not(.pet-submenu) > button { height: 24px; }
+.pet-menu:not(.pet-submenu) > .pet-menu-separator { margin-block: 3px; }
 .pet-menu button:hover:not(:disabled) { background: var(--ui-hover); }
 .pet-menu button:active:not(:disabled) { background: var(--ui-selected); }
 .pet-menu button:disabled { color: var(--ui-muted); opacity: 1; cursor: default; }

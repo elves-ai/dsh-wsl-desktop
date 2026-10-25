@@ -25,6 +25,9 @@ test('readonly path, accurate history copy, preview and hidden controls have no 
   for (const native of [false, true]) {
     const f = fixture({ native });
     assert.match(f.markup, /id="pet-workspace-path"[^>]+readonly aria-readonly="true"/);
+    assert.ok(f.markup.includes('固定使用 ~/.dsh-wsl-desktop/assistant，不能修改'));
+    assert.match(f.markup, /手动确认启用默认目录/);
+    assert.match(f.markup, /旧目录及其对话历史不搬移、不删除/);
     assert.match(f.markup, /真实对话历史仍由 DSH 保存/);
     assert.doesNotMatch(source, /pick_settings_path|assistant_action|set_pet_workspace|session_create|localStorage/);
     f.click('open'); f.click('refresh'); await tick(); assert.equal(f.calls.length, 0);

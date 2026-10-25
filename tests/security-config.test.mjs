@@ -304,7 +304,12 @@ test('clickable Windows toasts retain native handles, escape text and clean up w
   assert.match(source, /native: ToastNotification/);
   assert.match(source, /activated: Option<i64>/);
   assert.ok(source.includes('CreateTextNode(&HSTRING::from(value))'));
-  assert.ok(source.includes('ms-winsoundevent:Notification.Default'));
+  assert.ok(source.includes('<audio silent="true"/>'));
+  assert.doesNotMatch(source, /ms-winsoundevent:|SystemNotification|SND_ALIAS/);
+  const acknowledged = source.slice(source.indexOf('match result.recv_timeout(timeout)'), source.indexOf('pub(super) fn shutdown'));
+  assert.match(acknowledged, /Ok\(result\) => \{\s*result\?;\s*play_notification_sound\(\)/);
+  assert.equal((acknowledged.match(/play_notification_sound\(\)/g) || []).length, 1);
+  assert.doesNotMatch(acknowledged.slice(acknowledged.indexOf('Err(_) =>')), /play_notification_sound/);
   assert.ok(source.includes('ToastDismissalReason::TimedOut'));
   assert.ok(source.includes('sender.send(Event::Clicked(id))'));
   assert.ok(source.includes('sender.send(Event::Closed(id))'));
@@ -333,12 +338,12 @@ test('focus policy saves before updating memory and does not reset notification 
   assert.ok(source.includes('listening_message(data.snapshot.notify_when_focused)'));
 });
 
-test('native notifications explicitly request the Windows default sound', () => {
+test('test notifications submit a silent card before the same embedded bowl sound', () => {
   const source = read('src-tauri/src/desktop_notifications.rs');
   const send = source.slice(source.indexOf('fn send('), source.indexOf('fn now_ms('));
-  assert.ok(send.includes('.sound("Default")'));
-  assert.ok(send.indexOf('.sound("Default")') < send.indexOf('.show()'));
-  assert.doesNotMatch(send, /PlaySound|SoundPlayer|Notification[.]Looping/);
+  assert.doesNotMatch(send, /[.]sound\(|PlaySound|SoundPlayer|Notification[.]Looping/);
+  assert.match(send, /[.]show\(\)[\s\S]*[.]map_err\([\s\S]*\?;\s*super::toasts::play_notification_sound\(\)/);
+  assert.equal((send.match(/play_notification_sound\(\)/g) || []).length, 1);
 });
 
 test('visible-pet notifications choose sound-only after shared guards without creating a toast', () => {
@@ -355,8 +360,11 @@ test('visible-pet notifications choose sound-only after shared guards without cr
   assert.match(delivery.slice(delivery.indexOf('SystemDelivery::Toast =>')), /state[.]toasts[.]show/);
   const source = read('src-tauri/src/desktop_toasts.rs');
   const sound = source.slice(source.indexOf('pub(super) fn play_notification_sound('), source.indexOf('type Click'));
-  for (const token of ['PlaySoundW', 'SystemNotification', 'SND_ALIAS', 'SND_ASYNC', 'SND_NODEFAULT', 'SND_SYSTEM']) assert.ok(sound.includes(token), token);
-  assert.doesNotMatch(sound, /ToastNotification|ToastNotifier|[.]Show[(]|[.]show[(]|Webview|Command::|thread::spawn|include_bytes!/);
+  for (const token of ['PlaySoundW', 'NOTIFICATION_SOUND.0.as_ptr().cast()', 'SND_MEMORY', 'SND_ASYNC', 'SND_NODEFAULT', 'SND_SYSTEM']) assert.ok(sound.includes(token), token);
+  assert.match(source, /#\[repr\(C, align\(4\)\)\]/);
+  assert.match(source, /static NOTIFICATION_SOUND:/);
+  assert.ok(source.includes('include_bytes!("assets/notification-basin.wav")'));
+  assert.doesNotMatch(sound, /SystemNotification|SND_ALIAS|SND_FILENAME|ToastNotification|ToastNotifier|[.]Show[(]|[.]show[(]|Webview|Command::|thread::spawn/);
 });
 
 test('notification commands stay local, fixed-purpose and independent of DSH IPC', () => {

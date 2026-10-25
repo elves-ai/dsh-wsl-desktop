@@ -22,6 +22,7 @@ pub mod protocol;
 pub mod settings_path;
 pub mod setup;
 pub mod speech_install;
+pub mod speech_prerequisites;
 pub mod speech_resources;
 pub mod speech_settings;
 #[cfg(any(windows, test))]

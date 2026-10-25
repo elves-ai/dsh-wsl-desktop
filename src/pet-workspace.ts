@@ -14,7 +14,7 @@ export function isWorkspaceSnapshot(value: unknown): value is WorkspaceSnapshot 
   return text(s.path, 4096) && s.path.startsWith('/') && !s.path.startsWith('//') && text(s.distribution, 256);
 }
 const markup = '<h2>对话工作目录</h2>'
-  + '<p id="pet-workspace-help">当前桌面宠物对话绑定的 WSL Workspace 工作目录，仅供查看，不能在此设置。真实对话历史仍由 DSH 保存，不是这个工作目录里的消息文件。</p>'
+  + '<p id="pet-workspace-help">桌面宠物对话固定使用 ~/.dsh-wsl-desktop/assistant，不能修改。下方仅查看当前绑定状态；旧自定义绑定停用后，需到“启用与历史”手动确认启用默认目录。旧目录及其对话历史不搬移、不删除；真实对话历史仍由 DSH 保存，不是这个工作目录里的消息文件。</p>'
   + '<dl class="connection-info"><div><dt>WSL 发行版</dt><dd id="pet-workspace-distribution">尚未读取</dd></div></dl>'
   + '<label class="visually-hidden" for="pet-workspace-path">当前绑定的对话工作目录（只读）</label>'
   + '<div class="setting-path"><input id="pet-workspace-path" type="text" readonly aria-readonly="true" aria-describedby="pet-workspace-help pet-workspace-message" placeholder="尚未读取" spellcheck="false"><button id="pet-workspace-open" class="button secondary" type="button" disabled>打开目录查看</button></div>'

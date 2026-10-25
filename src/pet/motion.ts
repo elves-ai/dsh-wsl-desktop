@@ -66,6 +66,7 @@ export class PetMotion {
   private draggingAnimation = false;
   private activeRequested = false;
   private sling = false;
+  private slingshotEnabled = true;
   private origin = { x: 0, y: 0 };
   private grab = { x: 0, y: 0 };
   private trail: DragSample[] = [];
@@ -85,13 +86,19 @@ export class PetMotion {
 
   get isActive(): boolean { return this.mode !== 'idle' && !this.disposed; }
 
+  /** Disable immediately, including a pending pull or an already released sling. */
+  setSlingshotEnabled(enabled: boolean): void {
+    this.slingshotEnabled = enabled;
+    if (!enabled && this.sling && this.isActive && this.mode !== 'roam') this.stop();
+  }
+
   begin(slingshot = false): void {
     if (this.disposed) return;
     this.stop();
     const token = this.token;
     this.mode = 'pending';
     this.released = false;
-    this.sling = slingshot;
+    this.sling = slingshot && this.slingshotEnabled;
     this.draggingAnimation = true;
     this.call(this.options.onDragStart);
     this.enqueue(token, async () => {
@@ -171,6 +178,7 @@ export class PetMotion {
     ++this.token;
     this.cancelTimer();
     this.mode = 'idle';
+    this.sling = false;
     this.roam = undefined;
     this.trail = [];
     this.state.vx = this.state.vy = 0;

@@ -35,20 +35,19 @@ fn strings<'a>(value: &'a Value, key: &str) -> Result<Vec<&'a str>, String> {
         .collect()
 }
 
-/// Returns selectable rows in Workspace manual order and the bound Session's live-running hint.
-/// A missing bound Session does NOT discard other rows: explicit recovery remains possible.
-/// The returned hint is metadata, not a newer-than-follow sequenced status update.
-pub fn catalog(
-    workspaces: &Value,
-    list: &Value,
-    binding: &Binding,
-) -> Result<(Vec<SessionRow>, bool), String> {
+/// Saved custom/legacy directories cannot override the native managed default.
+pub fn require_default_workspace(binding: &Binding, default_path: &str) -> Result<(), String> {
+    if !default_path.starts_with('/') || binding.workspace_path != default_path {
+        return Err("宠物工作区已固定为默认目录，请重新确认启用；旧目录和历史对话保留在 DSH 中，不会搬移或删除。".into());
+    }
+    Ok(())
+}
+
+/// Validate project identity/path independently of session recovery. No creation or mutation.
+pub fn bound_workspace<'a>(workspaces: &'a Value, binding: &Binding) -> Result<&'a Value, String> {
     if binding.workspace_id.is_empty() || binding.workspace_path.is_empty() {
         return Err("助手项目绑定无效。".into());
     }
-    let archived: BTreeSet<_> = strings(workspaces, "archivedSessionIds")?
-        .into_iter()
-        .collect();
     let mut matching = None;
     for item in array(workspaces, "items")? {
         let id = string(item, "workspaceId")?;
@@ -58,12 +57,28 @@ pub fn catalog(
                 return Err("DSH 项目标识重复。".into());
             }
             if path != binding.workspace_path {
-                return Err("助手项目目录已变化，请在 DSH 中检查后重新选择。".into());
+                return Err("助手项目目录已变化，请重试后重新确认默认工作区。".into());
             }
             matching = Some(item);
         }
     }
-    let workspace = matching.ok_or("助手项目已删除或不存在，请明确重新选择；不会自动创建项目。")?;
+    let workspace =
+        matching.ok_or("助手项目已删除或不存在，请重试后重新确认默认工作区；不会自动创建项目。")?;
+    Ok(workspace)
+}
+
+/// Returns selectable rows in Workspace manual order and the bound Session's live-running hint.
+/// A missing bound Session does NOT discard other rows: explicit recovery remains possible.
+/// The returned hint is metadata, not a newer-than-follow sequenced status update.
+pub fn catalog(
+    workspaces: &Value,
+    list: &Value,
+    binding: &Binding,
+) -> Result<(Vec<SessionRow>, bool), String> {
+    let workspace = bound_workspace(workspaces, binding)?;
+    let archived: BTreeSet<_> = strings(workspaces, "archivedSessionIds")?
+        .into_iter()
+        .collect();
     let ids = strings(workspace, "sessionIds")?;
     let mut summaries = BTreeMap::new();
     for item in array(list, "items")? {
@@ -169,6 +184,28 @@ mod tests {
             session_id: Some("s1".into()),
             session_pending: false,
         }
+    }
+    #[test]
+    fn fixed_default_rejects_custom_legacy_and_similar_paths_without_changing_binding() {
+        let default = "/home/alice/.dsh-wsl-desktop/assistant";
+        let mut b = binding();
+        for path in [
+            "/assistant",
+            "/home/alice/DSH-Assistant",
+            "/home/alice/custom",
+            "/home/alice/.dsh-wsl-desktop/assistant-other",
+            "/home/bob/.dsh-wsl-desktop/assistant",
+            "/home/alice/.dsh-wsl-desktop/assistant/..",
+            "",
+        ] {
+            b.workspace_path = path.into();
+            let previous = b.clone();
+            assert!(require_default_workspace(&b, default).is_err());
+            assert_eq!(b, previous);
+        }
+        b.workspace_path = default.into();
+        assert!(require_default_workspace(&b, default).is_ok());
+        assert!(require_default_workspace(&b, "").is_err());
     }
     fn workspaces() -> Value {
         json!({"items":[{"workspaceId":"w1","path":"/assistant","sessionIds":["s1","s2","archived","child","parented","missing"]}],"archivedSessionIds":["archived"]})

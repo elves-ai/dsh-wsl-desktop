@@ -50,6 +50,7 @@ async function fixture({ initial=installState(), invoke:custom, snapshot:initial
     if(name==='get_speech_settings')return snapshot;
     if(name==='get_speech_preferences')return{revision:0,initialized:true,auto_read:false,volume:100};
     if(name==='get_speech_install')return install;
+    if(name==='check_speech_prerequisites')return{ready:true,checks:['platform','python','tools','gpu'].map(id=>({id,status:'ready',detail:'已就绪'})),install_command:null};
     if(name==='install_speech'){install=installState({id:install.id+1,status:'installing',stage:'准备运行环境'});return install;}
     if(name==='cancel_speech_install'){install={...install,status:'cancelled',stage:'已取消'};return install;}
     if(name==='speech_action')return snapshot;
@@ -63,7 +64,7 @@ async function fixture({ initial=installState(), invoke:custom, snapshot:initial
 }
 
 test('actual parent and resource component single click installs without selecting paths or saving manually',async()=>{
- const f=await fixture();assert.deepEqual(f.calls.map(c=>c.name),['get_speech_settings','get_speech_preferences','get_speech_install']);
+ const f=await fixture();assert.deepEqual(f.calls.map(c=>c.name),['get_speech_settings','get_speech_preferences','get_speech_install','check_speech_prerequisites']);
  for(const name of ['speech-python_path','speech-model_dir','speech-native_lib','speech-save','speech-resource-model-browse','speech-resource-native-browse'])assert.equal(f.node(name),undefined,name);
  assert.equal(f.node('speech-resource-install').disabled,false);f.node('speech-resource-install').click();f.node('speech-resource-install').emit('click');
  assert.equal(f.calls.filter(c=>c.name==='install_speech').length,1);assert.deepEqual(f.calls.at(-1),{name:'install_speech',args:undefined});
@@ -85,7 +86,7 @@ test('parent follows already-running installation through cancellation, error an
  f.node('speech-start').emit('click');f.node('speech-check').emit('click');f.node('speech-resource-cancel').click();await tick();
  assert.equal(f.node('speech-start').disabled,false);assert.equal(f.node('speech-resource-install').textContent,'重新安装');
  f.node('speech-resource-install').click();await tick();f.publishInstall({status:'error',error:'磁盘空间不足'});
- assert.match(f.node('speech-resource-message').textContent,/磁盘空间不足/);assert.equal(f.node('speech-start').disabled,false);assert.equal(f.node('speech-resource-install').textContent,'重试安装');
+ assert.match(f.node('speech-resource-message').textContent,/磁盘空间不足/);assert.equal(f.node('speech-start').disabled,false);assert.equal(f.node('speech-resource-install').textContent,'重试安装');await tick();
  f.node('speech-resource-install').click();await tick();assert.equal(f.node('speech-start').disabled,true);assert.equal(f.calls.filter(c=>c.name==='install_speech').length,2);assert.equal(f.calls.some(c=>c.name==='speech_action'),false);f.settings.dispose();
 });
 test('leave during installer validation never cancels its check and reentry restores busy',async()=>{

@@ -11,6 +11,7 @@
     "allow-move-pet",
     "allow-drag-pet",
     "allow-get-pet-preferences",
-    "allow-set-pet-topmost"
+    "allow-set-pet-topmost",
+    "allow-set-pet-slingshot-enabled"
   ]
 }

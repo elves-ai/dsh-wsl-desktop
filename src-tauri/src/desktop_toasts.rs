@@ -23,25 +23,33 @@ const LIMIT: usize = 128;
 const GROUP: &str = "dsh-task";
 const SEND_ERROR: &str = "无法提交可点击的系统通知，请检查 Windows 通知设置。";
 
-/// Sound-only path: no toast or Notification Center entry is created.
+// Embed the approved three stainless-steel bowl strikes; no external file or codec.
+// PlaySound requires DWORD-aligned WAVE data that outlives asynchronous playback.
+#[repr(C, align(4))]
+struct NotificationSound<const N: usize>([u8; N]);
+static NOTIFICATION_SOUND: NotificationSound<
+    { include_bytes!("assets/notification-basin.wav").len() },
+> = NotificationSound(*include_bytes!("assets/notification-basin.wav"));
+
+/// Plays only the custom sound; creates no toast or Notification Center entry.
 /// The caller controls the app notification switch and foreground suppression.
 pub(super) fn play_notification_sound() -> Result<(), String> {
     use windows_sys::Win32::Media::Audio::{
-        PlaySoundW, SND_ALIAS, SND_ASYNC, SND_NODEFAULT, SND_SYSTEM,
+        PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT, SND_SYSTEM,
     };
 
-    // Use the current Windows sound scheme and system-sounds audio session.
-    // SAFETY: w! provides static, NUL-terminated UTF-16 storage for async playback;
-    // an alias needs no module handle, and Windows owns the playback lifetime.
+    // Keep the Windows system-sounds volume/mute, but never fall back to its scheme.
+    // SAFETY: with SND_MEMORY the argument is an aligned WAVE buffer, not UTF-16.
+    // Static storage remains valid until async playback completes; no module is used.
     let started = unsafe {
         PlaySoundW(
-            windows_sys::core::w!("SystemNotification"),
+            NOTIFICATION_SOUND.0.as_ptr().cast(),
             std::ptr::null_mut(),
-            SND_ALIAS | SND_ASYNC | SND_NODEFAULT | SND_SYSTEM,
+            SND_MEMORY | SND_ASYNC | SND_NODEFAULT | SND_SYSTEM,
         )
     };
     if started == 0 {
-        Err("无法播放系统通知声音，请检查 Windows 声音设置。".to_owned())
+        Err("无法播放敲盆通知音效，请检查 Windows 声音设置。".to_owned())
     } else {
         Ok(())
     }
@@ -104,7 +112,12 @@ impl Toasts {
             })
             .map_err(|_| SEND_ERROR.to_owned())?;
         match result.recv_timeout(timeout) {
-            Ok(result) => result,
+            // Play once, only after Windows accepted the silent toast and the
+            // request was acknowledged in time. Sound-only delivery skips this path.
+            Ok(result) => {
+                result?;
+                play_notification_sound()
+            }
             Err(_) => {
                 canceled.store(true, Ordering::SeqCst);
                 Err(SEND_ERROR.to_owned())
@@ -145,7 +158,7 @@ impl Entry {
         events: &mpsc::Sender<Event>,
     ) -> windows::core::Result<Self> {
         let doc = XmlDocument::new()?;
-        doc.LoadXml(&HSTRING::from(r#"<toast><visual><binding template="ToastGeneric"/></visual><audio src="ms-winsoundevent:Notification.Default"/></toast>"#))?;
+        doc.LoadXml(&HSTRING::from(r#"<toast><visual><binding template="ToastGeneric"/></visual><audio silent="true"/></toast>"#))?;
         let binding = doc
             .GetElementsByTagName(&HSTRING::from("binding"))?
             .Item(0)?;

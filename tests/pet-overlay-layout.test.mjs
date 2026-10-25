@@ -81,7 +81,7 @@ test('real browser keeps speech above, input below and controls inside either ed
             if (element.scrollHeight > element.clientHeight || element.scrollWidth > element.clientWidth) failures.push(['menu needs scrolling',left,right,element.scrollHeight,element.clientHeight]);
             if (getComputedStyle(element).overflowY !== 'auto') failures.push(['menu lacks tiny-bounds scrolling fallback']);
             for (const row of element.querySelectorAll(':scope > button, .pet-menu-animation')) {
-              if (row.getBoundingClientRect().height !== 26) failures.push(['menu row height', row.textContent]);
+              if (row.getBoundingClientRect().height !== 24) failures.push(['menu row height', row.textContent]);
             }
             for (const icon of element.querySelectorAll('.pet-menu-icon')) {
               const rect = icon.getBoundingClientRect();

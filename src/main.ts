@@ -67,11 +67,12 @@ interface PetSettingsSnapshot {
   visible: boolean;
   startup_visible: boolean;
   roaming_enabled: boolean;
+  slingshot_enabled: boolean;
   bubble_notifications: boolean;
   revision: number;
   message: string;
 }
-type PetSettingsPatch = Partial<Pick<PetSettingsSnapshot, 'startup_visible' | 'roaming_enabled' | 'bubble_notifications'>>;
+type PetSettingsPatch = Partial<Pick<PetSettingsSnapshot, 'startup_visible' | 'roaming_enabled' | 'slingshot_enabled' | 'bubble_notifications'>>;
 
 type Action = 'check' | 'open' | 'start' | 'stop' | 'restart' | 'logs' | 'quit' | 'exit';
 const native = isTauri();
@@ -117,6 +118,7 @@ app.innerHTML = settingsView ? `
         <div class="toggle-row"><div><h2>显示桌面宠物</h2><p id="pet-visible-help">立即显示或隐藏桌面宠物，不会停止 DSH 任务。</p></div><label class="switch"><input id="pet-visible" type="checkbox" aria-label="显示桌面宠物" aria-describedby="pet-visible-help pet-message" disabled><span></span></label></div>
         <div class="toggle-row"><div><h2>启动时显示</h2><p id="pet-startup-help">保存在本机，下次启动生效；不改变当前显示状态。</p></div><label class="switch"><input id="pet-startup-visible" type="checkbox" aria-label="启动时显示" aria-describedby="pet-startup-help pet-message" disabled><span></span></label></div>
         <div class="toggle-row"><div><h2>允许漫游</h2><p id="pet-roaming-help">保存在本机，即时生效。关闭后停止随机漫游，仍可拖拽、抛掷和点播动作。</p></div><label class="switch"><input id="pet-roaming-enabled" type="checkbox" aria-label="允许漫游" aria-describedby="pet-roaming-help pet-message" disabled><span></span></label></div>
+        <div class="toggle-row"><div><h2>允许弹弓</h2><p id="pet-slingshot-help">保存在本机，即时生效。开启后快速连按再拖可蓄力弹射；关闭不影响普通拖拽和甩抛。</p></div><label class="switch"><input id="pet-slingshot-enabled" type="checkbox" aria-label="允许弹弓" aria-describedby="pet-slingshot-help pet-message" disabled><span></span></label></div>
         <div class="toggle-row"><div><h2>气泡通知</h2><p id="pet-bubble-help">在宠物旁显示任务提醒，可直接回答问题、确认计划或处理授权。收起气泡不会授权或取消请求。</p><details class="setting-details"><summary>通知渠道与提醒规则</summary><p id="pet-bubble-policy" class="setting-help">需要回答、确认计划或授权时，可直接在气泡中选择、输入、允许一次或拒绝。不会自动授权或取消。气泡开关独立于系统通知开关。桌宠显示时不弹 Windows 通知卡片；系统通知开启时仍播放提示音，关闭气泡不影响提示音。桌宠隐藏时按系统通知开关显示通知卡片并播放提示音，不补历史气泡。普通任务提醒前台静默，沿用系统通知中的“窗口聚焦时也通知”选项；待答和授权交互会保留，直到处理或手动收起。</p></details></div><label class="switch"><input id="pet-bubble-notifications" type="checkbox" aria-label="气泡通知" aria-describedby="pet-bubble-help pet-bubble-policy pet-message" disabled><span></span></label></div>
         <p id="pet-message" class="setting-help" role="status" aria-live="polite">正在读取桌面宠物设置。</p><button class="button secondary" id="pet-refresh" type="button" disabled>重新读取</button>
       </div>
@@ -227,6 +229,7 @@ let powerDisposed = false;
 const petVisible = document.getElementById('pet-visible') as HTMLInputElement;
 const petStartupVisible = document.getElementById('pet-startup-visible') as HTMLInputElement;
 const petRoamingEnabled = document.getElementById('pet-roaming-enabled') as HTMLInputElement;
+const petSlingshotEnabled = document.getElementById('pet-slingshot-enabled') as HTMLInputElement;
 const petBubbleNotifications = document.getElementById('pet-bubble-notifications') as HTMLInputElement;
 const petRefreshButton = document.getElementById('pet-refresh') as HTMLButtonElement;
 let petSnapshot: PetSettingsSnapshot | undefined;
@@ -664,10 +667,11 @@ function renderPetSettings(): void {
   petVisible.checked = petSnapshot?.visible ?? false;
   petStartupVisible.checked = petSnapshot?.startup_visible ?? false;
   petRoamingEnabled.checked = petSnapshot?.roaming_enabled ?? false;
+  petSlingshotEnabled.checked = petSnapshot?.slingshot_enabled ?? false;
   petBubbleNotifications.checked = petSnapshot?.bubble_notifications ?? false;
   // Window/config controls are independent of DSH service readiness and task activity.
   const disabled = !native || !petSnapshot || !unlistenPet || petPending || petDisposed;
-  petVisible.disabled = petStartupVisible.disabled = petRoamingEnabled.disabled = petBubbleNotifications.disabled = disabled;
+  petVisible.disabled = petStartupVisible.disabled = petRoamingEnabled.disabled = petSlingshotEnabled.disabled = petBubbleNotifications.disabled = disabled;
   petRefreshButton.disabled = !native || petPending || petDisposed;
   petRefreshButton.textContent = petPending ? '读取或保存中…' : '重新读取';
   const message = element('pet-message');
@@ -678,7 +682,7 @@ function renderPetSettings(): void {
 function isPetSettingsSnapshot(state: unknown): state is PetSettingsSnapshot {
   if (!state || typeof state !== 'object') return false;
   const value = state as Record<string, unknown>;
-  return ['visible', 'startup_visible', 'roaming_enabled', 'bubble_notifications'].every(key => typeof value[key] === 'boolean')
+  return ['visible', 'startup_visible', 'roaming_enabled', 'slingshot_enabled', 'bubble_notifications'].every(key => typeof value[key] === 'boolean')
     && typeof value.revision === 'number' && Number.isSafeInteger(value.revision) && value.revision >= 0
     && typeof value.message === 'string';
 }
@@ -1011,6 +1015,7 @@ if (settingsView) {
   petVisible.addEventListener('change', () => { void performPetSettings('set_pet_visibility', { visible: petVisible.checked }); });
   petStartupVisible.addEventListener('change', () => { void performPetSettings('set_pet_settings', { patch: { startup_visible: petStartupVisible.checked } }); });
   petRoamingEnabled.addEventListener('change', () => { void performPetSettings('set_pet_settings', { patch: { roaming_enabled: petRoamingEnabled.checked } }); });
+  petSlingshotEnabled.addEventListener('change', () => { void performPetSettings('set_pet_settings', { patch: { slingshot_enabled: petSlingshotEnabled.checked } }); });
   petBubbleNotifications.addEventListener('change', () => { void performPetSettings('set_pet_settings', { patch: { bubble_notifications: petBubbleNotifications.checked } }); });
   petRefreshButton.addEventListener('click', () => { void performPetSettings('get_pet_settings'); void petWorkspace?.refresh(); void petMemory?.refresh(); });
   testNotificationButton.addEventListener('click', () => { void performNotification('test_notification'); });

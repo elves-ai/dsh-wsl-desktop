@@ -20,6 +20,7 @@ pub(super) struct SpeechControls {
     manager: Result<Arc<SpeechManager>, String>,
     resources: Result<Arc<ResourceManager>, String>,
     installer: Result<Arc<InstallManager>, String>,
+    runtime: Result<Arc<WslSpeechRuntime>, String>,
     tests: Mutex<HashMap<String, String>>,
 }
 impl SpeechControls {
@@ -40,8 +41,8 @@ impl SpeechControls {
         let install_app = app.clone();
         let mut installer = Err("语音安装器尚未初始化。".to_string());
         let mut resources = Err("语音资源尚未初始化。".to_string());
-        let result = WslSpeechRuntime::new(provider).and_then(|runtime| {
-            let runtime = Arc::new(runtime);
+        let runtime = WslSpeechRuntime::new(provider).map(Arc::new);
+        let result = runtime.clone().and_then(|runtime| {
             installer = Ok(Arc::new(InstallManager::new(
                 runtime.clone(),
                 Arc::new(move |snapshot| {
@@ -74,6 +75,7 @@ impl SpeechControls {
             manager: result,
             resources,
             installer,
+            runtime,
             tests: Mutex::new(HashMap::new()),
         }
     }
@@ -266,6 +268,21 @@ fn install_controls(app: &tauri::AppHandle) -> Result<Arc<InstallManager>, Strin
         .ok_or("语音安装器尚未初始化。")?
         .installer
         .clone()
+}
+#[tauri::command]
+pub(super) async fn check_speech_prerequisites(
+    view: Webview,
+) -> Result<crate::speech_prerequisites::SpeechPrerequisites, String> {
+    assert_page(&view, false)?;
+    let runtime = view
+        .app_handle()
+        .try_state::<Arc<SpeechControls>>()
+        .ok_or("语音检查尚未初始化。")?
+        .runtime
+        .clone()?;
+    tauri::async_runtime::spawn_blocking(move || runtime.check_prerequisites())
+        .await
+        .map_err(|_| "语音前置检查任务未完成。".to_string())?
 }
 #[tauri::command]
 pub(super) fn get_speech_install(view: Webview) -> Result<SpeechInstallStatus, String> {

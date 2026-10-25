@@ -95,6 +95,7 @@ impl WslSpeechRuntime {
             "--resources-browse",
             "--resources-download",
             "--resources-install",
+            "--resources-preflight",
         ]
         .contains(&mode)
         {
@@ -129,7 +130,7 @@ impl WslSpeechRuntime {
         Ok(c)
     }
     fn spawn(config: &Config, mode: &str, payload: &Value, hold: bool) -> Result<Spawned, String> {
-        let source = if mode == "--resources-install" {
+        let source = if matches!(mode, "--resources-install" | "--resources-preflight") {
             include_str!("../helpers/speech_install.py")
         } else if mode.starts_with("--resources-") {
             include_str!("../helpers/speech_resources.py")
@@ -301,6 +302,31 @@ impl WslSpeechRuntime {
             return Err(e);
         }
         final_value.ok_or("语音操作没有返回结果。".into())
+    }
+    /// Independent of service identity/status and all install/resource managers.
+    pub fn check_prerequisites(
+        &self,
+    ) -> Result<crate::speech_prerequisites::SpeechPrerequisites, String> {
+        use crate::speech_prerequisites::SpeechPrerequisites;
+        let Ok(config) = self.config() else {
+            return Ok(SpeechPrerequisites::transport_unavailable());
+        };
+        let result = match self.exchange(
+            &config,
+            "--resources-preflight",
+            json!({}),
+            true,
+            &Cancellation::default(),
+            Duration::from_secs(20),
+            &|_| {},
+        ) {
+            Ok(result) => result,
+            Err(_) => return Ok(SpeechPrerequisites::transport_unavailable()),
+        };
+        if result.get("ok").and_then(Value::as_bool) != Some(true) {
+            return Err("语音前置检查未完成，请重新检查。".into());
+        }
+        SpeechPrerequisites::parse(result.get("result").cloned().unwrap_or(Value::Null))
     }
     fn stage(&self, c: &Config, cancel: &Cancellation) -> Result<String, String> {
         let files = json!({

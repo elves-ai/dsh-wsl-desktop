@@ -27,6 +27,8 @@ import urllib.request
 QWEN_COMMIT = "5916bf7c79dbb4e66fc059cdc507a79a23a28bb4"
 GGML_COMMIT = "cc5df49a6b878db2b68b9a7b45976e279594627d"
 CUDA_VERSION = "12.8.1"
+CUDA_ARCHES = {50, 52, 53, 60, 61, 62, 70, 72, 75, 80, 86, 87, 89, 90, 100, 101, 120}
+INSTALL_COMMAND = "sudo apt-get update && sudo apt-get install -y python3 python3-venv git build-essential coreutils bash"
 CUDA_BASE = "https://developer.download.nvidia.com/compute/cuda/redist/"
 AMD_INDEX = "https://stable.repo.amd.com/rocm/whl-next/"
 PYPI = "https://pypi.org/simple"
@@ -104,10 +106,172 @@ def select_cuda(cancelled):
     try:
         result = json.loads(value)
         require(result["version"] >= 12080, "cuda_driver_old")
-        require(result["arch"] in {50, 52, 53, 60, 61, 62, 70, 72, 75, 80, 86, 87, 89, 90, 100, 101, 120}, "cuda_arch_unsupported")
+        require(result["arch"] in CUDA_ARCHES, "cuda_arch_unsupported")
         return str(result["arch"])
     except (ValueError, KeyError, TypeError):
         raise InstallError("gpu_probe_failed") from None
+
+def read_system(path, cap=16384):
+    """Bounded reads of fixed OS/kernel files; never source os-release as shell."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                return ""
+            data = os.read(fd, cap + 1)
+            return data.decode("ascii", "strict") if len(data) <= cap else ""
+        finally:
+            os.close(fd)
+    except (OSError, UnicodeError):
+        return ""
+
+
+def debian_or_ubuntu():
+    # ID_LIKE is deliberately not accepted: derivatives need their own guidance.
+    ids = re.findall(r'^ID=(?:"([a-z0-9_-]+)"|([a-z0-9_-]+))$',
+                     read_system("/etc/os-release"), re.MULTILINE)
+    return len(ids) == 1 and (ids[0][0] or ids[0][1]) in {"debian", "ubuntu"}
+
+
+def wsl_gpu_bridge():
+    try:
+        return stat.S_ISCHR(os.stat("/dev/dxg").st_mode)
+    except OSError:
+        return False
+
+
+def amd_gpu_arch():
+    # KFD topology is kernel evidence, not a marketing GPU name or ambient SDK.
+    # A CPU node, absent GPU id, another vendor or unknown ISA is not supported.
+    try:
+        with os.scandir("/sys/class/kfd/kfd/topology/nodes") as nodes:
+            for index, node in enumerate(nodes):
+                if index >= 64:
+                    break
+                if not re.fullmatch(r"[0-9]{1,4}", node.name):
+                    continue
+                props = read_system(node.path + "/properties")
+                fields = dict(re.findall(r"^([a-z_]+) ([0-9]+)$", props, re.MULTILINE))
+                gpu_id = read_system(node.path + "/gpu_id", 64).strip()
+                if (fields.get("gfx_target_version", "").isdigit()
+                        and int(fields["gfx_target_version"]) > 0
+                        and fields.get("vendor_id") == "4098"
+                        and fields.get("simd_count", "0").isdigit()
+                        and int(fields.get("simd_count", "0")) > 0
+                        and gpu_id.isdigit() and int(gpu_id) > 0):
+                    return int(fields["gfx_target_version"])
+    except OSError:
+        pass
+    return None
+
+
+def readonly_probe(code, cancelled, timeout=5):
+    """Only fixed isolated system-Python probes; bounded pipe, no temp files."""
+    require(not cancelled(), "cancelled")
+    try:
+        child = subprocess.Popen(["/usr/bin/python3", "-I", "-S", "-B", "-c", code],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            start_new_session=True, close_fds=True,
+            env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8",
+                 "LD_LIBRARY_PATH": "/usr/lib/wsl/lib"})
+    except OSError:
+        return None
+    data = bytearray()
+    try:
+        os.set_blocking(child.stdout.fileno(), False)
+        deadline = time.monotonic() + timeout
+        with selectors.DefaultSelector() as selector:
+            selector.register(child.stdout, selectors.EVENT_READ)
+            eof = False
+            while True:
+                require(not cancelled(), "cancelled")
+                if time.monotonic() >= deadline:
+                    return None
+                for key, _ in selector.select(.05):
+                    chunk = os.read(key.fd, 4097 - len(data))
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        eof = True
+                    else:
+                        data.extend(chunk)
+                        if len(data) > 4096:
+                            return None
+                if eof and os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None:
+                    break
+    finally:
+        # Keep the leader unreaped until its whole probe group has been stopped.
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        child.wait()
+        child.stdout.close()
+    require(not cancelled(), "cancelled")
+    if child.returncode != 0:
+        return None
+    try:
+        return data.decode("ascii", "strict").strip()
+    except UnicodeError:
+        return None
+
+
+PYTHON_PROBE = "import sys,venv;print('ready' if sys.version_info >= (3,10) else 'old')"
+
+
+def preflight(cancelled):
+    """Prerequisites to TRY installation, not model/inference/service readiness."""
+    require(not cancelled(), "cancelled")
+    checks = []
+    def check(id, status, detail):
+        checks.append({"id": id, "status": status, "detail": detail})
+    platform_ok = (platform.machine() == "x86_64"
+                   and "microsoft" in read_system("/proc/sys/kernel/osrelease").lower()
+                   and wsl_gpu_bridge())
+    check("platform", "ready" if platform_ok else "unsupported",
+          "已发现 x86_64 WSL GPU 桥接。" if platform_ok else
+          "需要 x86_64 WSL2 和 GPU 桥接；请更新 WSL 与 Windows 显卡驱动后重试。")
+    python_ok = readonly_probe(PYTHON_PROBE, cancelled) == "ready"
+    check("python", "ready" if python_ok else "action",
+          "系统 Python ≥ 3.10 且支持 venv。" if python_ok else
+          "请在当前 WSL 安装或更新系统 Python ≥ 3.10 和 python3-venv，再重新检查。")
+    missing = [tool for tool in ("git", "bash", "make", "cc", "c++", "realpath")
+               if shutil.which(tool, path="/usr/bin:/bin") is None]
+    check("tools", "action" if missing else "ready",
+          "请在当前 WSL 补齐构建工具：" + "、".join(missing) + "，再重新检查。" if missing else
+          "git、bash、make、C/C++ 编译器和 realpath 已就绪。")
+    if not platform_ok:
+        check("gpu", "unsupported", "请先启用 WSL2 GPU 桥接并更新 Windows 显卡驱动。")
+    else:
+        value = readonly_probe(CUDA_PROBE, cancelled, timeout=8)
+        try:
+            cuda = json.loads(value) if value else None
+        except (ValueError, TypeError):
+            cuda = None
+        if (isinstance(cuda, dict) and set(cuda) == {"version", "arch"}
+                and type(cuda["version"]) is int and type(cuda["arch"]) is int):
+            if cuda["version"] < 12080:
+                check("gpu", "action", "请更新 Windows NVIDIA 驱动，使其支持 CUDA 12.8 或更新版本。")
+            elif cuda["arch"] not in CUDA_ARCHES:
+                check("gpu", "unsupported", "此 NVIDIA 架构不支持固定 CUDA 12.8 安装；请使用受支持显卡。")
+            else:
+                check("gpu", "ready", "NVIDIA 驱动和 GPU 架构符合 CUDA 12.8 安装要求。")
+        elif value is not None:
+            check("gpu", "action", "无法读取 GPU 驱动信息；请检查 Windows 显卡驱动与 WSL 后重新检查。")
+        else:
+            amd = amd_gpu_arch()
+            if amd == 120001:
+                check("gpu", "ready", "已发现 AMD gfx1201；安装组件时将验证 ROCm 10.1 支持。")
+            elif amd is not None:
+                check("gpu", "unsupported", "此 AMD 架构不支持固定 ROCm 10.1 安装；目前仅支持 gfx1201。")
+            else:
+                # WSL normally has no KFD topology, including known-working AMD.
+                # Ready only permits trying the installer, NOT verified GPU support.
+                # Its mandatory SDK/HIP probe still rejects unsupported hardware.
+                check("gpu", "ready", "WSL GPU 桥接已就绪，显卡兼容性待安装组件时验证（AMD 仅 gfx1201）。")
+    require(not cancelled(), "cancelled")
+    return {"ready": all(c["status"] == "ready" for c in checks), "checks": checks,
+            "install_command": INSTALL_COMMAND if (not python_ok or missing) and debian_or_ubuntu() else None}
+
 
 class OfficialRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -391,10 +555,10 @@ def main():
         line = sys.stdin.buffer.readline(262145)
         require(len(line) <= 262144 and line.endswith(b"\n"), "invalid_request")
         request = json.loads(line)
-        require(set(request) == {"resources", "build_script"}, "invalid_request")
-        resources = types.ModuleType("speech_resources")
-        exec(compile(base64.b64decode(request["resources"], validate=True), "<bundled-speech-resources>", "exec"), resources.__dict__)
-        build = base64.b64decode(request["build_script"], validate=True)
+        mode = sys.argv[1:]
+        require(mode in (["--resources-install"], ["--resources-preflight"], []), "invalid_request")
+        readonly = mode == ["--resources-preflight"]
+        require(isinstance(request, dict) and set(request) == (set() if readonly else {"resources", "build_script"}), "invalid_request")
         def owner():
             try:
                 os.read(sys.stdin.fileno(), 1)
@@ -403,7 +567,13 @@ def main():
         threading.Thread(target=owner, daemon=True).start()
         signal.signal(signal.SIGTERM, lambda *_: cancel.set())
         signal.signal(signal.SIGINT, lambda *_: cancel.set())
-        result = install(resources, build, cancel.is_set, emit)
+        if readonly:
+            result = preflight(cancel.is_set)
+        else:
+            resources = types.ModuleType("speech_resources")
+            exec(compile(base64.b64decode(request["resources"], validate=True), "<bundled-speech-resources>", "exec"), resources.__dict__)
+            build = base64.b64decode(request["build_script"], validate=True)
+            result = install(resources, build, cancel.is_set, emit)
         emit({"ok": True, "result": result})
     except BaseException as error:
         code = str(error) if isinstance(error, (InstallError, getattr(locals().get("resources"), "Refused", InstallError))) else "install_failed"

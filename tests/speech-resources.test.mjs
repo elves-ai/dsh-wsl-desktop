@@ -4,7 +4,9 @@ import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
 const raw = await readFile(new URL('../src/speech-resources.ts', import.meta.url), 'utf8');
 const compiled = ts.transpileModule(raw, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText.replace("import './speech-resources.css';", '');
-const { SpeechResources, isSpeechInstallStatus } = await import('data:text/javascript;base64,' + Buffer.from(compiled).toString('base64'));
+const { SpeechResources, isSpeechInstallStatus, isSpeechPrerequisites } = await import('data:text/javascript;base64,' + Buffer.from(compiled).toString('base64'));
+const systemCommand = 'sudo apt-get update && sudo apt-get install -y python3 python3-venv git build-essential coreutils bash';
+const prerequisites = (patch = {}) => ({ ready: true, checks: ['platform', 'python', 'tools', 'gpu'].map(id => ({ id, status: 'ready', detail: '已就绪' })), install_command: null, ...patch });
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
 const state = (extra = {}) => ({ id: 0, status: 'idle', stage: '', downloaded_bytes: 0, total_bytes: null, error: null, ...extra });
@@ -14,13 +16,14 @@ class Node extends EventTarget {
   removeAttribute(key) { if (key === 'value') this.value = undefined; }
   emit(type) { this.dispatchEvent(new Event(type)); }
 }
-function fixture({ native = true, initial = state(), invoke: custom, listen: customListen } = {}) {
+function fixture({ native = true, initial = state(), invoke: custom, listen: customListen, clipboard } = {}) {
   const nodes = new Map(), calls = [], listeners = new Map(), root = new Node();
   let unlistens = 0, busyEvents = 0, completedEvents = 0;
   Object.defineProperty(root, 'innerHTML', { set(html) { for (const m of html.matchAll(/id="(speech-resource-[^"]+)"/g)) nodes.set(m[1], new Node()); } });
   root.querySelector = selector => nodes.get(selector.slice(1));
   const fallback = name => {
     if (name === 'get_speech_install') return initial;
+    if (name === 'check_speech_prerequisites') return prerequisites();
     if (name === 'install_speech') return installing();
     if (name === 'cancel_speech_install') return state({ id: 1, status: 'cancelled' });
     throw Error('Unexpected RPC: ' + name);
@@ -31,12 +34,79 @@ function fixture({ native = true, initial = state(), invoke: custom, listen: cus
   };
   root.addEventListener('speech-resources-busy', () => busyEvents++);
   root.addEventListener('speech-resources-completed', () => completedEvents++);
-  const resources = new SpeechResources(root, {}, native, bridge);
+  const resources = new SpeechResources(root, { navigator: { clipboard } }, native, bridge);
   const node = id => nodes.get('speech-resource-' + id);
   return { resources, root, node, calls, listeners, get unlistens() { return unlistens; }, get busyEvents() { return busyEvents; }, get completedEvents() { return completedEvents; },
     show() { resources.setVisible(true); }, hide() { resources.setVisible(false); }, click(id) { node(id).emit('click'); }, event(payload) { listeners.get('launcher-speech-install')?.({ payload }); } };
 }
 
+test('missing system packages offer a command, recheck gates installation, and copy never executes it', async () => {
+  let result = prerequisites({ ready: false, install_command: systemCommand, checks: prerequisites().checks.map(c => c.id === 'tools' ? { ...c, status: 'action', detail: '缺少 Git、Make 和 C/C++ 编译器。' } : c) });
+  const copied = [], f = fixture({ clipboard: { async writeText(command) { copied.push(command); } }, invoke: (name, args, fallback) => name === 'check_speech_prerequisites' ? result : fallback(name) });
+  f.show(); await tick();
+  assert.equal(f.node('install').disabled, true); assert.equal(f.node('system-install').hidden, false);
+  assert.equal(f.node('prerequisite-tools').hidden, false); assert.match(f.node('prerequisite-tools').textContent, /缺少 Git/);
+  assert.equal(f.node('prerequisite-python').hidden, true); assert.equal(f.node('command').textContent, systemCommand);
+  f.click('install'); assert.equal(f.calls.some(c => c.name === 'install_speech'), false);
+  f.click('copy-command'); await tick(); assert.deepEqual(copied, [systemCommand]); assert.match(f.node('copy-message').textContent, /已复制/);
+  assert.ok(f.calls.every(c => ['get_speech_install', 'check_speech_prerequisites'].includes(c.name)));
+  result = prerequisites(); f.click('check'); f.click('check'); await tick();
+  assert.equal(f.calls.filter(c => c.name === 'check_speech_prerequisites').length, 2);
+  assert.equal(f.node('system-install').hidden, true); assert.equal(f.node('install').disabled, false);
+  assert.equal(f.node('step-environment').textContent, '已就绪'); assert.equal(f.calls.some(c => c.name === 'install_speech'), false);
+  f.click('install'); await tick(); assert.equal(f.calls.filter(c => c.name === 'install_speech').length, 1); f.resources.dispose();
+});
+test('driver issues show an action without pretending apt can install a Windows driver', async () => {
+  const f = fixture({ invoke: (name, args, fallback) => name === 'check_speech_prerequisites' ? prerequisites({ ready: false, checks: prerequisites().checks.map(c => c.id === 'gpu' ? { ...c, status: 'action', detail: '请更新 Windows 显卡驱动后重新检查。' } : c) }) : fallback(name) });
+  f.show(); await tick(); assert.equal(f.node('install').disabled, true); assert.equal(f.node('system-install').hidden, true);
+  assert.equal(f.node('prerequisite-gpu').textContent, '请更新 Windows 显卡驱动后重新检查。'); f.resources.dispose();
+});
+test('failed prerequisite check is retryable, keeps install disabled and never leaks backend errors', async () => {
+  let reads = 0; const f = fixture({ invoke: (name, args, fallback) => { if (name === 'check_speech_prerequisites' && ++reads === 1) throw Error('private token'); return fallback(name); } });
+  f.show(); await tick(); assert.equal(f.node('install').disabled, true); assert.equal(f.resources.isBusy(), false);
+  assert.match(f.node('step-environment').textContent, /检查失败/); assert.doesNotMatch(f.node('step-environment').textContent, /private|token/);
+  f.click('check'); await tick(); assert.equal(f.node('install').disabled, false); f.resources.dispose();
+});
+test('late prerequisite response cannot unlock a reopened view or override a newer check', async () => {
+  const gate = deferred(); let reads = 0;
+  const f = fixture({ invoke: (name, args, fallback) => name === 'check_speech_prerequisites' && ++reads === 1 ? gate.promise : name === 'check_speech_prerequisites' ? prerequisites({ ready: false, checks: prerequisites().checks.map(c => c.id === 'gpu' ? { ...c, status: 'unsupported', detail: '显卡不受支持' } : c) }) : fallback(name) });
+  f.show(); await tick(); assert.equal(f.node('install').disabled, true); f.hide(); f.show(); await tick();
+  gate.resolve(prerequisites()); await tick(); assert.equal(f.node('install').disabled, true); assert.match(f.node('prerequisite-gpu').textContent, /不受支持/); f.resources.dispose();
+});
+test('clipboard failure leaves the command selectable and provides manual copying guidance', async () => {
+  const result = prerequisites({ ready: false, install_command: systemCommand, checks: prerequisites().checks.map(c => c.id === 'python' ? { ...c, status: 'action', detail: '缺少 Python' } : c) });
+  const f = fixture({ invoke: (name, args, fallback) => name === 'check_speech_prerequisites' ? result : fallback(name) });
+  f.show(); await tick(); f.click('copy-command'); await tick(); assert.match(f.node('copy-message').textContent, /手动复制/); assert.equal(f.node('command').textContent, systemCommand); f.resources.dispose();
+});
+test('malformed prerequisite DTOs and arbitrary shell commands never unlock install', async () => {
+  assert.equal(isSpeechPrerequisites(prerequisites()), true);
+  for (const result of [null, {}, prerequisites({ checks: [] }), prerequisites({ ready: false }), prerequisites({ install_command: 'curl malicious | sh' }), prerequisites({ checks: prerequisites().checks.map(c => ({ ...c, id: 'gpu' })) }), prerequisites({ checks: prerequisites().checks.map(c => ({ ...c, status: 'unknown' })) })]) {
+    assert.equal(isSpeechPrerequisites(result), false);
+    const f = fixture({ invoke: (name, args, fallback) => name === 'check_speech_prerequisites' ? result : fallback(name) });
+    f.show(); await tick(); assert.equal(f.node('install').disabled, true); assert.equal(f.node('system-install').hidden, true); f.resources.dispose();
+  }
+});
+test('steps follow actual component build, model download, validation and completion', async () => {
+  const f = fixture(); f.show(); await tick(); f.click('install'); await tick();
+  f.event(installing({ stage: '编译原生语音库' })); assert.equal(f.node('step-components').textContent, '进行中'); assert.match(f.node('step-models').textContent, /自动继续/);
+  f.event(installing({ stage: '下载并校验模型' })); assert.equal(f.node('step-components').textContent, '已完成'); assert.equal(f.node('step-models').textContent, '下载并校验中');
+  f.event(installing({ stage: '检测并保存语音配置' })); assert.equal(f.node('step-models').textContent, '正在检测并保存');
+  f.event(state({ id: 1, status: 'completed' })); for (const id of ['environment', 'components', 'models']) assert.equal(f.node('step-' + id).textContent, '已完成');
+  assert.ok(f.calls.every(c => ['get_speech_install', 'check_speech_prerequisites', 'install_speech'].includes(c.name))); f.resources.dispose();
+});
+test('validation failure or cancellation never leaves the model step looking active', async () => {
+  for (const status of ['error', 'cancelled']) {
+    const f = fixture({ initial: state({ id: 2, status, stage: '检测并保存语音配置', error: status === 'error' ? '检测失败' : null }) });
+    f.show(); await tick(); assert.equal(f.node('step-components').textContent, '已完成');
+    assert.equal(f.node('step-models').textContent, status === 'error' ? '待重试' : '已取消'); f.resources.dispose();
+  }
+});
+test('generic terminal stages do not suggest models will automatically continue', async () => {
+  for (const status of ['error', 'cancelled']) {
+    const f = fixture({ initial: state({ id: 3, status, stage: status === 'error' ? '安装失败' : '安装已取消' }) });
+    f.show(); await tick(); assert.equal(f.node('step-models').textContent, status === 'error' ? '待重试' : '已取消'); f.resources.dispose();
+  }
+});
 test('preview disables all controls and ignores synthetic clicks', async () => {
   const f = fixture({ native: false }); f.show();
   for (const id of ['install', 'cancel']) { assert.equal(f.node(id).disabled, true); f.click(id); }
@@ -44,30 +114,32 @@ test('preview disables all controls and ignores synthetic clicks', async () => {
 });
 test('opening and reopening only read installation status, with no path or save controls', async () => {
   const f = fixture(); assert.equal(f.calls.length, 0); f.show(); await tick();
-  assert.deepEqual(f.calls.map(c => c.name), ['get_speech_install']); assert.equal(f.node('install').disabled, false);
-  assert.match(f.node('message').textContent, /已有可用资源将复用/);
+  assert.deepEqual(f.calls.map(c => c.name), ['get_speech_install', 'check_speech_prerequisites']); assert.equal(f.node('install').disabled, false);
+  assert.match(f.node('message').textContent, /环境已就绪/);
   assert.doesNotMatch(raw, /pick_settings_path|save_speech_config|speech_action|initialize_speech_environment|download_speech_model|<input|<select/);
-  assert.match(raw, /联网.*较大的 Q8 模型/); assert.match(raw, /无需选择目录或手动保存/);
+  assert.match(raw, /检查系统环境/); assert.match(raw, /安装语音组件/); assert.match(raw, /下载并校验模型/);
+  assert.doesNotMatch(raw, /安装前需准备：|两个较大的 Q8 模型|点击“一键安装”/);
   f.hide(); assert.equal(f.unlistens, 1); f.show(); await tick();
-  assert.deepEqual(f.calls.map(c => c.name), ['get_speech_install', 'get_speech_install']); f.resources.dispose();
+  assert.deepEqual(f.calls.map(c => c.name), ['get_speech_install', 'check_speech_prerequisites', 'get_speech_install', 'check_speech_prerequisites']); f.resources.dispose();
 });
 test('single click invokes install with no arguments and no selector or manual save; duplicate clicks are guarded', async () => {
   const gate = deferred(), f = fixture({ invoke: (name, args, fallback) => name === 'install_speech' ? gate.promise : fallback(name) });
   f.show(); await tick(); f.click('install'); f.click('install');
   assert.deepEqual(f.calls.at(-1), { name: 'install_speech', args: undefined });
   assert.equal(f.calls.filter(c => c.name === 'install_speech').length, 1); assert.equal(f.resources.isBusy(), true); assert.equal(f.node('cancel').disabled, false);
-  gate.resolve(installing()); await tick(); f.click('install'); assert.equal(f.calls.length, 2);
+  gate.resolve(installing()); await tick(); f.click('install'); assert.equal(f.calls.length, 3);
   f.event(installing({ stage: '下载并校验模型', downloaded_bytes: 75, total_bytes: 100 }));
   assert.equal(f.node('message').textContent, '下载并校验模型'); assert.equal(f.node('progress').value, 75); assert.match(f.node('progress-label').textContent, /75%/);
   f.event(state({ id: 1, status: 'completed' })); assert.equal(f.completedEvents, 1); assert.equal(f.resources.isBusy(), false);
   assert.match(f.node('message').textContent, /已检测并保存/); assert.equal(f.node('install').textContent, '已安装'); assert.equal(f.node('install').disabled, true);
-  f.event(state({ id: 1, status: 'completed' })); assert.equal(f.completedEvents, 1); assert.equal(f.calls.length, 2); f.resources.dispose();
+  f.event(state({ id: 1, status: 'completed' })); assert.equal(f.completedEvents, 1); assert.equal(f.calls.length, 3); f.resources.dispose();
 });
 test('error has bounded plain text and a single-click retry with a newer id', async () => {
   let id = 0; const f = fixture({ invoke: (name, args, fallback) => name === 'install_speech' ? installing({ id: ++id }) : fallback(name) });
   f.show(); await tick(); f.click('install'); await tick();
   f.event(state({ id: 1, status: 'error', error: '<img src=x>下载失败\n' + '错误'.repeat(400) }));
   assert.match(f.node('message').textContent, /<img src=x>下载失败/); assert.ok(f.node('message').textContent.length < 420);
+  assert.equal(f.node('install').disabled, true); await tick();
   assert.equal(f.node('install').textContent, '重试安装'); assert.equal(f.node('install').disabled, false);
   f.click('install'); f.click('install'); await tick(); assert.equal(id, 2); assert.equal(f.resources.isBusy(), true);
   f.event(state({ id: 1, status: 'completed' })); assert.equal(f.completedEvents, 0); assert.equal(f.resources.isBusy(), true); f.resources.dispose();
@@ -93,7 +165,7 @@ test('events during the initial query and start RPC beat stale same-id replies',
   f.show(); await tick(); assert.equal(f.node('install').disabled, true); f.click('install'); assert.equal(f.calls.length, 1);
   f.event(installing({ stage: '编译原生库', downloaded_bytes: 80, total_bytes: 100 })); query.resolve(installing({ stage: '下载模型', downloaded_bytes: 20, total_bytes: 100 })); await tick();
   assert.equal(f.node('message').textContent, '编译原生库'); assert.equal(f.node('progress').value, undefined);
-  f.event(state({ id: 1, status: 'error', error: '失败' })); f.click('install');
+  f.event(state({ id: 1, status: 'error', error: '失败' })); await tick(); f.click('install');
   f.event(installing({ id: 2, stage: '检测并保存' })); start.resolve(installing({ id: 2, stage: '下载模型' })); await tick();
   assert.equal(f.node('message').textContent, '检测并保存'); f.resources.dispose();
 });
@@ -123,14 +195,14 @@ test('existing completed state is read without installing or loading and remains
 test('unknown or failed read locks conflicting work; retry reads only and recovers', async () => {
   let reads = 0; const f = fixture({ invoke: (name, args, fallback) => { if (name === 'get_speech_install' && ++reads === 1) throw Error('private'); return fallback(name); } });
   f.show(); await tick(); assert.equal(f.resources.isBusy(), true); assert.equal(f.node('install').textContent, '重试读取状态');
-  f.click('install'); f.click('install'); await tick(); assert.deepEqual(f.calls.map(c => c.name), ['get_speech_install', 'get_speech_install']); assert.equal(f.listeners.size, 1); assert.equal(f.resources.isBusy(), false); f.resources.dispose();
+  f.click('install'); f.click('install'); await tick(); assert.deepEqual(f.calls.map(c => c.name), ['get_speech_install', 'get_speech_install', 'check_speech_prerequisites']); assert.equal(f.listeners.size, 1); assert.equal(f.resources.isBusy(), false); f.resources.dispose();
 });
 test('late callback from a failed read subscription cannot contaminate its retry', async () => {
   let reads = 0, old;
   const f = fixture({ listen: (name, callback) => { old ??= callback; }, invoke: (name, args, fallback) => { if (name === 'get_speech_install' && ++reads === 1) throw Error('failed read'); return fallback(name); } });
   f.show(); await tick(); f.click('install'); await tick();
   old({ payload: state({ id: 999, status: 'completed' }) });
-  assert.equal(f.completedEvents, 0); assert.equal(f.node('install').textContent, '一键安装'); f.resources.dispose();
+  assert.equal(f.completedEvents, 0); assert.equal(f.node('install').textContent, '安装语音组件与模型'); f.resources.dispose();
 });
 test('transport failure reconciles state before any second install request', async () => {
   let reads = 0; const f = fixture({ invoke: (name, args, fallback) => { if (name === 'install_speech') throw Error('raw private token'); if (name === 'get_speech_install' && ++reads > 1) return installing(); return fallback(name); } });
@@ -183,7 +255,7 @@ test('cancel and retry discard old download progress while awaiting confirmation
   f.event(installing({ stage: '正在取消并清理', downloaded_bytes: 90, total_bytes: 100 }));
   cancel.resolve(installing({ stage: '正在取消并清理', downloaded_bytes: 90, total_bytes: 100 })); await tick();
   assert.equal(f.node('progress').value, undefined); assert.match(f.node('progress-label').textContent, /正在取消/);
-  f.event(state({ id: 1, status: 'cancelled', downloaded_bytes: 90, total_bytes: 100 }));
+  f.event(state({ id: 1, status: 'cancelled', downloaded_bytes: 90, total_bytes: 100 })); await tick();
   assert.equal(f.node('progress').hidden, true); assert.equal(f.node('detail').hidden, true);
   f.click('install'); assert.equal(f.node('progress').hidden, false); assert.equal(f.node('progress').value, undefined);
   assert.match(f.node('detail').textContent, /启动安装任务/);
@@ -204,6 +276,6 @@ test('progress is accessible, visibly animated only when indeterminate and respe
   assert.match(css, /prefers-reduced-motion: reduce/); assert.match(css, /animation: none/);
 });
 test('owner blocking prevents synthetic install but never prevents cancellation of existing work', async () => {
-  const f = fixture(); f.show(); await tick(); f.resources.setBlocked(true); f.click('install'); assert.equal(f.calls.length, 1);
-  f.event(installing()); assert.equal(f.node('cancel').disabled, false); f.click('cancel'); await tick(); assert.equal(f.calls.at(-1).name, 'cancel_speech_install'); f.resources.dispose();
+  const f = fixture(); f.show(); await tick(); f.resources.setBlocked(true); f.click('install'); assert.equal(f.calls.length, 2);
+  f.event(installing()); assert.equal(f.node('cancel').disabled, false); f.click('cancel'); await tick(); assert.equal(f.calls.filter(c => c.name === 'cancel_speech_install').length, 1); f.resources.dispose();
 });

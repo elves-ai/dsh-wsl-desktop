@@ -126,6 +126,24 @@ impl Assistant {
         self.publish(app);
         Ok(())
     }
+    /// Fail closed on a legacy/custom binding, without touching its files or DSH history.
+    fn require_setup(&self, app: &tauri::AppHandle, generation: u64, message: &str) {
+        let mut data = self.data.lock().unwrap_or_else(|e| e.into_inner());
+        if data.generation != generation {
+            return;
+        }
+        data.cancel.store(true, Ordering::SeqCst);
+        data.generation = data.generation.wrapping_add(1);
+        data.binding = None;
+        data.pending_request = None;
+        data.projection.set_binding(None);
+        data.projection.set_enabled(false);
+        data.projection.set_connection(false, "setup", message);
+        // Keep the persisted binding intact until the user explicitly enables the default.
+        drop(data);
+        self.publish(app);
+        self.wake.notify_all();
+    }
     fn wait(&self, seconds: u64) {
         let data = self.data.lock().unwrap_or_else(|e| e.into_inner());
         drop(self.wake.wait_timeout(data, Duration::from_secs(seconds)));
@@ -157,11 +175,8 @@ pub(super) struct HitRegion {
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum Action {
-    Enable {
-        path: String,
-    },
+    Enable {},
     Retry,
-    Reconfigure,
     NewSession,
     SelectSession {
         #[serde(rename = "sessionId")]
@@ -197,10 +212,7 @@ fn action_allowed(label: &str, action: &Action) -> bool {
         Action::PetInput { .. } | Action::MotionActive { .. } | Action::HitRegions { .. } => {
             label == PET
         }
-        Action::Enable { .. }
-        | Action::Reconfigure
-        | Action::NewSession
-        | Action::SelectSession { .. } => label == CHAT,
+        Action::Enable { .. } | Action::NewSession | Action::SelectSession { .. } => label == CHAT,
         // Inline conversation shares the bound session, never project/session setup.
         Action::Send { .. } | Action::Cancel | Action::Retry => [PET, CHAT].contains(&label),
         Action::OpenDsh
@@ -277,7 +289,6 @@ pub(super) async fn assistant_action(
         let _memory_lease = if matches!(
             &request,
             Action::Enable { .. }
-                | Action::Reconfigure
                 | Action::NewSession
                 | Action::SelectSession { .. }
                 | Action::Send { .. }
@@ -350,27 +361,6 @@ pub(super) async fn assistant_action(
                 }
             }
             Action::OpenDsh => open_session(&app, &state)?,
-            Action::Reconfigure => {
-                if caller != CHAT {
-                    return Err("请在对话面板中重新绑定项目。".into());
-                }
-                let _lease = state
-                    .operation
-                    .try_lock()
-                    .map_err(|_| "助手正在处理操作，请稍候。")?;
-                let mut data = state.data.lock().unwrap_or_else(|e| e.into_inner());
-                data.cancel.store(true, Ordering::SeqCst);
-                data.generation = data.generation.wrapping_add(1);
-                data.projection.set_enabled(false);
-                data.projection.set_connection(
-                    false,
-                    "disabled",
-                    "请确认新的助手目录。旧项目与会话未删除。",
-                );
-                drop(data);
-                state.publish(&app);
-                state.wake.notify_all();
-            }
             action => {
                 let _lease = state
                     .operation
@@ -413,24 +403,25 @@ fn client(app: &tauri::AppHandle, config: &Config) -> Result<Client, String> {
 fn checked_binding(state: &Assistant, config: &Config) -> Result<Binding, String> {
     let binding = state.binding()?;
     if binding.backend != identity(config) {
-        return Err("DSH 服务配置已变化，请重新选择助手项目；未向旧会话发送消息。".into());
+        return Err("DSH 服务配置已变化，请重新确认默认工作区；未向旧会话发送消息。".into());
     }
+    crate::assistant_policy::require_default_workspace(
+        &binding,
+        &default_directory(config, false)?,
+    )?;
     Ok(binding)
 }
-fn prepare_directory(config: &Config, path: &str) -> Result<String, String> {
-    if path.len() > 4096
-        || path.chars().any(char::is_control)
-        || !(path.is_empty() || path.starts_with("~/") || path.starts_with('/'))
-    {
-        return Err("请填写 WSL 绝对路径或 ~/ 开头的目录。".into());
-    }
+/// Resolve only the managed WSL directory; no path comes from IPC or saved bindings.
+fn default_directory(config: &Config, create: bool) -> Result<String, String> {
     let mut args = config.wsl_args("probe")?;
     args.truncate(6);
     args.extend([
         "-c".to_owned(),
         include_str!("../helpers/assistant_directory.py").to_owned(),
-        path.to_owned(),
     ]);
+    if !create {
+        args.push("--inspect".to_owned());
+    }
     let output = NativeRunner
         .run_input(&args, None, Duration::from_secs(15))
         .map_err(|_| "无法准备助手工作目录，请检查 WSL 状态。")?;
@@ -533,9 +524,9 @@ fn run_action(app: &tauri::AppHandle, state: &Assistant, action: Action) -> Resu
     let config = config(app)?;
     let rpc = client(app, &config)?;
     match action {
-        Action::Enable { path } => {
-            // Enable is the only operation allowed to create a directory or Workspace.
-            let path = prepare_directory(&config, &path)?;
+        Action::Enable {} => {
+            // Enable alone may create the fixed default directory or Workspace.
+            let path = default_directory(&config, true)?;
             let value = rpc.workspace_create(&path).map_err(|e| e.to_string())?;
             let workspace = value.get("workspace").ok_or("DSH 未返回助手项目。")?;
             let workspace_id = value_id(workspace, "workspaceId")?;
@@ -574,6 +565,16 @@ fn run_action(app: &tauri::AppHandle, state: &Assistant, action: Action) -> Resu
         }
         Action::Retry => {
             let binding = checked_binding(state, &config)?;
+            let generation = state
+                .data
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .generation;
+            let workspaces = rpc.workspace_list().map_err(|e| e.to_string())?;
+            if crate::assistant_policy::bound_workspace(&workspaces, &binding).is_err() {
+                state.require_setup(app, generation, "默认工作区已删除或绑定失效，请重新确认启用；不会自动创建目录，旧历史对话未删除。");
+                return Ok(());
+            }
             if binding.session_pending || binding.session_id.is_none() {
                 create_session(app, state, &rpc, binding)?;
             } else {
@@ -969,7 +970,19 @@ pub(super) fn start(app: tauri::AppHandle, controller: Arc<Controller>, state: A
         let result = (|| -> Result<(), String> {
             let config = config(&follow_app)?;
             if binding.backend != identity(&config) {
-                return Err("DSH 配置已变化；请明确重新选择助手项目。".into());
+                follow_state.require_setup(
+                    &follow_app,
+                    generation,
+                    "DSH 配置已变化，请重新确认默认工作区；旧项目与历史对话未删除。",
+                );
+                return Ok(());
+            }
+            let default_path = default_directory(&config, false)?;
+            if let Err(message) =
+                crate::assistant_policy::require_default_workspace(&binding, &default_path)
+            {
+                follow_state.require_setup(&follow_app, generation, &message);
+                return Ok(());
             }
             let rpc = client(&follow_app, &config)?;
             if binding.session_pending || binding.session_id.is_none() {
@@ -1075,8 +1088,12 @@ pub(super) fn start(app: tauri::AppHandle, controller: Arc<Controller>, state: A
             let result = (|| -> Result<(Vec<SessionRow>, bool), String> {
                 let config = config(&status_app)?;
                 if binding.backend != identity(&config) {
-                    return Err("DSH 配置已变化，请重新选择助手项目。".into());
+                    return Err("DSH 配置已变化，请重新确认默认工作区。".into());
                 }
+                crate::assistant_policy::require_default_workspace(
+                    &binding,
+                    &default_directory(&config, false)?,
+                )?;
                 catalog(&client(&status_app, &config)?, &binding)
             })();
             {
@@ -1187,10 +1204,7 @@ mod tests {
             assert!(!action_allowed("dsh-main", &action));
         }
         for action in [
-            Action::Enable {
-                path: "/project".into(),
-            },
-            Action::Reconfigure,
+            Action::Enable {},
             Action::NewSession,
             Action::SelectSession {
                 session_id: "session".into(),
@@ -1213,6 +1227,19 @@ mod tests {
             serde_json::json!({"action":"pet_input"}),
             serde_json::json!({"action":"pet_input", "active":"true"}),
             serde_json::json!({"action":"pet_input", "active":true, "extra":1}),
+        ] {
+            assert!(serde_json::from_value::<Action>(payload).is_err());
+        }
+    }
+
+    #[test]
+    fn enable_accepts_no_custom_path_and_reconfigure_is_removed() {
+        assert!(serde_json::from_value::<Action>(serde_json::json!({"action":"enable"})).is_ok());
+        for payload in [
+            serde_json::json!({"action":"enable", "path":"/custom"}),
+            serde_json::json!({"action":"enable", "path":"~/.dsh-wsl-desktop/assistant"}),
+            serde_json::json!({"action":"enable", "workspaceId":"other"}),
+            serde_json::json!({"action":"reconfigure"}),
         ] {
             assert!(serde_json::from_value::<Action>(payload).is_err());
         }

@@ -198,6 +198,51 @@ test('native full-window clamp feedback, not requested or 16:9 stage position, s
   f.pet.dispose();
 });
 
+test('disabled slingshot uses ordinary drag and preserves forward release velocity', async () => {
+  const f = fixture(); await flush(); f.pet.setSlingshotEnabled(false); f.pet.begin(true); await flush();
+  f.g.cursor.x += 100; await f.clock.advance();
+  near(f.moves.at(-1).x, 200);
+  f.g.cursor.x += 100; f.g.cursor_down = false; await f.clock.advance();
+  const releaseX = f.g.position.x; await f.clock.advance();
+  assert.ok(f.g.position.x > releaseX, 'ordinary throw follows the cursor, not reverse sling pull');
+  f.pet.stop(); await flush(); f.pet.setSlingshotEnabled(true); f.g.cursor_down = true;
+  f.pet.begin(true); await flush(); const before = f.g.position.x;
+  f.g.cursor.x += 100; await f.clock.advance();
+  assert.notEqual(f.g.position.x, before + 100, 're-enabling restores elastic pulling');
+  f.pet.dispose(); await flush();
+});
+
+for (const phase of ['pending', 'pull', 'throw']) test('disabling slingshot cancels ' + phase + ' without stale movement', async () => {
+  const f = fixture(); await flush(); const pending = deferred();
+  const read = f.api.getGeometry;
+  if (phase === 'pending') f.api.getGeometry = () => pending.promise;
+  f.pet.begin(true); await flush();
+  if (phase !== 'pending') {
+    f.g.cursor.x += 150;
+    if (phase === 'throw') f.g.cursor_down = false;
+    await f.clock.advance();
+  }
+  f.pet.setSlingshotEnabled(false); f.pet.setSlingshotEnabled(false);
+  pending.resolve(structuredClone(f.g)); await flush();
+  const count = f.moves.length; await f.clock.advance(1000);
+  assert.equal(f.pet.isActive, false); assert.equal(f.moves.length, count); assert.equal(f.clock.tasks.size, 0);
+  assert.deepEqual(f.active, [true, false]); assert.deepEqual(f.events, ['start', 'end']);
+  f.api.getGeometry = read; f.g.cursor_down = true; f.pet.begin(); await flush();
+  f.g.cursor.x += 100; await f.clock.advance(); assert.equal(f.pet.isActive, true);
+  f.pet.dispose(); await flush();
+});
+
+test('slingshot preference changes do not stop ordinary drag, throw or roaming', async () => {
+  const f = fixture(); await flush(); f.pet.begin(); await flush();
+  f.pet.setSlingshotEnabled(false); assert.equal(f.pet.isActive, true);
+  f.g.cursor.x += 100; await f.clock.advance(); f.pet.end(); await flush();
+  f.pet.setSlingshotEnabled(true); f.pet.setSlingshotEnabled(false); assert.equal(f.pet.isActive, true);
+  f.pet.stop(); await flush();
+  assert.equal(f.pet.startRoam('walk', { minDist: 50, maxDist: 50, margin: 0 }), true);
+  f.pet.setSlingshotEnabled(true); f.pet.setSlingshotEnabled(false); assert.equal(f.pet.isActive, true);
+  f.pet.dispose(); await flush();
+});
+
 test('slingshot is reverse pull, distance based, uncapped, and uses upstream full-window floor', async () => {
   const f = fixture({ position: { x: 1500, y: 1400 }, cursor: { x: 1540, y: 1450 } });
   await flush(); f.pet.begin(true); await flush();

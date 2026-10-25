@@ -53,6 +53,7 @@ impl PetControls {
             startup_visible: data.preferences.startup_visible,
             roaming_enabled: data.preferences.roaming_enabled,
             bubble_notifications: data.preferences.bubble_notifications,
+            slingshot_enabled: data.preferences.slingshot_enabled,
             revision: data.revision,
             message: data.error.clone().unwrap_or_default(),
         }
@@ -295,6 +296,30 @@ pub(super) async fn set_pet_visibility(
     tauri::async_runtime::spawn_blocking(move || state.set_visible(&app, visible))
         .await
         .map_err(|_| "切换宠物显隐的线程异常结束。".to_owned())?
+}
+#[tauri::command]
+pub(super) async fn set_pet_slingshot_enabled(
+    view: Webview,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<PetControls>>,
+    enabled: bool,
+) -> Result<PetSettingsSnapshot, String> {
+    assistant::assert_assistant(&view)?;
+    if view.label() != "assistant-pet" {
+        return Err("只有桌宠页面可以修改弹弓开关。".into());
+    }
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        state.set_preferences(
+            &app,
+            PetSettingsPatch {
+                slingshot_enabled: Some(enabled),
+                ..Default::default()
+            },
+        )
+    })
+    .await
+    .map_err(|_| "保存宠物弹弓开关的线程异常结束。".to_owned())?
 }
 #[tauri::command]
 pub(super) async fn set_pet_topmost(

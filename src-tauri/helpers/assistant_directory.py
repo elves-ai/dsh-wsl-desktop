@@ -1,55 +1,61 @@
-"""Create only the explicitly selected assistant workspace; never run user code."""
+"""Prepare or inspect the fixed assistant workspace; never run user code."""
 import json
 import os
 import sys
 from pathlib import Path
 
 
-def prepare(raw):
-    if not isinstance(raw, str) or len(raw) > 4096 or any(ord(c) < 32 for c in raw):
-        raise ValueError("invalid path")
-    raw = raw.strip() or "~/.dsh-wsl-desktop/assistant"
-    if raw.startswith("~/"):
-        target = Path.home() / raw[2:]
-    elif raw.startswith("/") and not raw.startswith("//"):
-        target = Path(raw)
-    else:
-        raise ValueError("absolute WSL path required")
-    if ".." in target.parts or target == Path("/"):
-        raise ValueError("invalid path")
-    # Workspaces may be existing directories, but a linked final component is
-    # rejected so the confirmation never silently selects another project.
+def _default_target():
+    target = Path.home() / ".dsh-wsl-desktop" / "assistant"
+    if target.parent.is_symlink():
+        raise ValueError("linked data root")
     if target.is_symlink():
         raise ValueError("linked workspace")
-    if target == Path.home() / ".dsh-wsl-desktop" / "assistant":
-        # pathlib parents=True creates intermediate directories with default
-        # permissions, not mode. The shared managed root must start private so
-        # speech initialization can safely reuse it after assistant-first setup.
-        parent = target.parent
-        if parent.is_symlink():
-            raise ValueError("linked data root")
-        parent.mkdir(mode=0o700, exist_ok=True)
-        fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        try:
-            try:
-                os.mkdir("assistant", mode=0o700, dir_fd=fd)
-            except FileExistsError:
-                pass
-        finally:
-            os.close(fd)
-    else:
-        target.mkdir(mode=0o700, parents=True, exist_ok=True)
-    resolved = target.resolve(strict=True)
-    if not resolved.is_dir() or not os.access(resolved, os.R_OK | os.W_OK | os.X_OK):
+    return target
+
+
+def inspect():
+    """Return the canonical default path without creating or changing anything."""
+    target = _default_target()
+    for directory in (target.parent, target):
+        if directory.exists() and not directory.is_dir():
+            raise ValueError("workspace unavailable")
+    if target.exists() and not os.access(target, os.R_OK | os.W_OK | os.X_OK):
         raise ValueError("workspace unavailable")
-    return {"path": str(resolved)}
+    return {"path": str(target.resolve(strict=False))}
+
+
+def prepare():
+    """Create the fixed workspace on first enable, preserving existing contents."""
+    target = _default_target()
+    # parents=True would create the shared data root with default permissions.
+    # Both managed directories must instead start private, and neither may be
+    # replaced by a symlink between the initial checks and directory creation.
+    target.parent.mkdir(mode=0o700, exist_ok=True)
+    fd = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        try:
+            os.mkdir("assistant", mode=0o700, dir_fd=fd)
+        except FileExistsError:
+            pass
+        workspace_fd = os.open(
+            "assistant", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd
+        )
+        os.close(workspace_fd)
+    finally:
+        os.close(fd)
+    return inspect()
 
 
 if __name__ == "__main__":
     try:
-        if len(sys.argv) != 2:
+        if sys.argv[1:] == []:
+            result = prepare()
+        elif sys.argv[1:] == ["--inspect"]:
+            result = inspect()
+        else:
             raise ValueError("invalid arguments")
-        print(json.dumps(prepare(sys.argv[1]), ensure_ascii=False))
+        print(json.dumps(result, ensure_ascii=False))
     except (ValueError, OSError):
         print(json.dumps({"error": "workspace unavailable"}))
         sys.exit(1)

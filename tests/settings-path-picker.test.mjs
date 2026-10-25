@@ -13,7 +13,9 @@ test('project paths retain native pickers while speech installation needs no pat
   const speech = read('src/speech-settings.ts');
   assert.doesNotMatch(resource + speech, /pick_settings_path|browse_speech_path|speech-resource-(?:model-browse|native-browse|python-browse)|id="speech-(?:model_dir|python_path|native_lib|save)"/);
   assert.ok(resource.includes("invoke<unknown>('install_speech')"));
-  assert.match(resource, /一键安装/);
+  assert.match(resource, /检查系统环境/);
+  assert.match(resource, /安装语音组件与模型/);
+  assert.match(resource, /check_speech_prerequisites/);
   assert.doesNotMatch(resource + speech, /暂不支持 NVIDIA CUDA|当前语音后端仅实现 AMD ROCm/);
 });
 

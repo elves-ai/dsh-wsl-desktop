@@ -31,7 +31,7 @@ test('pet menu groups existing actions, exposes an action submenu and uses unifo
   assert.equal(groups.length, 3);
   const actions = group => [...group.matchAll(/data-(?:pet-command|action)="([^"]+)"/g)].map(match => match[1]);
   assert.deepEqual(actions(groups[0]), ['close-menu','talk','replay','toggle_chat','open_dsh']);
-  assert.deepEqual(actions(groups[1]), ['auto-read','topmost']);
+  assert.deepEqual(actions(groups[1]), ['auto-read','slingshot','topmost']);
   assert.deepEqual(actions(groups[2]), ['pet_settings','hide']);
   assert.ok(groups[1].includes('aria-haspopup="menu" aria-controls="pet-animation" aria-expanded="false"'));
   assert.ok(root.innerHTML.includes('id="pet-animation" class="pet-menu pet-submenu" role="menu"'));
@@ -39,7 +39,7 @@ test('pet menu groups existing actions, exposes an action submenu and uses unifo
   assert.ok(menu.includes('class="pet-menu-label">自动朗读</span>'));
   assert.ok(menu.includes('class="pet-menu-label">窗口置顶</span>'));
   const icons = [...menu.matchAll(/<svg [^>]*>/g)];
-  assert.equal(icons.length, 11); // Nine action rows, close, submenu chevron.
+  assert.equal(icons.length, 12); // Ten action rows, close, submenu chevron.
   for (const [icon] of icons) {
     for (const attribute of ['viewBox="0 0 24 24"','stroke-width="1.5"','stroke-linecap="round"','aria-hidden="true"','focusable="false"']) assert.ok(icon.includes(attribute));
   }
@@ -51,6 +51,7 @@ test('menu styles import shared tokens and constrain dimensions without moving t
   for (const rule of ['width: 196px', 'max-height: calc(100% - 12px)', 'overflow: auto', 'background: var(--ui-bg)', 'font: 12px/18px var(--ui-font)']) assert.ok(panel.includes(rule), rule);
   assert.doesNotMatch(panel, /gradient|backdrop-filter|transform/);
   assert.match(css, /\.pet-menu > button, \.pet-submenu \[role="menuitem"\] \{[^}]*height: 26px/);
+  assert.ok(css.includes('.pet-menu:not(.pet-submenu) > button { height: 24px; }'));
   assert.match(css, /\.pet-menu-icon \{[^}]*width: 16px; height: 16px/);
   assert.ok(css.includes(`.pet-menu [aria-checked="true"] .pet-menu-indicator::after { content: '开'; }`));
   assert.ok(css.includes(`.pet-menu [aria-checked="false"] .pet-menu-indicator::after { content: '关'; }`));
@@ -83,6 +84,27 @@ test('topmost keeps stable children and distinguishes unknown, pending, checked 
   context.renderPetTopmost();
   assert.equal(button.getAttribute('data-state'), 'unavailable');
   assert.equal(button.disabled, true);
+});
+
+test('slingshot preserves its icon and label across unknown, pending, checked and preview states', () => {
+  const button = toggleNode();
+  const context = vm.createContext({ disposed: false, native: true, slingshotPending: false, slingshotKnown: false, slingshotEnabled: false, el: () => button });
+  vm.runInContext(render('renderPetSlingshot'), context);
+  context.renderPetSlingshot();
+  assert.equal(button.getAttribute('data-state'), 'unknown');
+  assert.equal(button.getAttribute('aria-checked'), undefined);
+  assert.match(button.getAttribute('aria-description'), /重新读取/);
+  context.slingshotKnown = true; context.slingshotEnabled = true;
+  context.renderPetSlingshot();
+  assert.equal(button.getAttribute('aria-checked'), 'true');
+  context.slingshotPending = true; context.renderPetSlingshot();
+  assert.equal(button.disabled, true); assert.equal(button.getAttribute('aria-busy'), 'true');
+  assert.equal(button.getAttribute('aria-checked'), 'true');
+  context.slingshotPending = false; context.slingshotEnabled = false; context.renderPetSlingshot();
+  assert.equal(button.disabled, false); assert.equal(button.getAttribute('aria-checked'), 'false');
+  context.native = false; context.renderPetSlingshot();
+  assert.equal(button.disabled, true); assert.equal(button.getAttribute('data-state'), 'unavailable');
+  assert.match(menu, /id="pet-slingshot"[^>]+role="switch"[^>]+aria-label="允许弹弓"/);
 });
 
 test('auto-read retains confirmed check state and stable children through save failures and pending states', () => {

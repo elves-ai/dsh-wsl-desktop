@@ -19,9 +19,15 @@ pub struct PetPreferences {
     pub roaming_enabled: bool,
     #[serde(default = "default_bubble_notifications")]
     pub bubble_notifications: bool,
+    #[serde(default = "default_slingshot_enabled")]
+    pub slingshot_enabled: bool,
 }
 
 fn default_bubble_notifications() -> bool {
+    true
+}
+
+fn default_slingshot_enabled() -> bool {
     true
 }
 
@@ -31,6 +37,7 @@ impl Default for PetPreferences {
             startup_visible: false,
             roaming_enabled: true,
             bubble_notifications: true,
+            slingshot_enabled: true,
         }
     }
 }
@@ -48,6 +55,9 @@ impl PetPreferences {
         if let Some(value) = patch.bubble_notifications {
             self.bubble_notifications = value;
         }
+        if let Some(value) = patch.slingshot_enabled {
+            self.slingshot_enabled = value;
+        }
         *self != previous
     }
 }
@@ -61,6 +71,8 @@ pub struct PetSettingsPatch {
     pub roaming_enabled: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bubble_notifications: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slingshot_enabled: Option<bool>,
 }
 
 /// Native/web snapshot only: never pass this type to the preferences store.
@@ -72,6 +84,7 @@ pub struct PetSettingsSnapshot {
     pub startup_visible: bool,
     pub roaming_enabled: bool,
     pub bubble_notifications: bool,
+    pub slingshot_enabled: bool,
     pub revision: u64,
     pub message: String,
 }
@@ -105,7 +118,7 @@ impl PreferencesStore {
 
     /// Refuses to overwrite corrupt existing data, even after an ignored load
     /// error. Callers serialize saves and publish in-memory changes on success.
-    /// Persists exactly three bools, never current visibility or runtime messages.
+    /// Persists exactly four bools, never current visibility or runtime messages.
     pub fn save(&self, preferences: &PetPreferences) -> Result<(), String> {
         let existing = self.read_existing()?;
         let bytes = serde_json::to_vec_pretty(preferences)
@@ -401,6 +414,7 @@ mod tests {
             startup_visible: true,
             roaming_enabled: false,
             bubble_notifications: false,
+            slingshot_enabled: false,
         };
         let replacement = serde_json::to_vec_pretty(&second).unwrap();
         let (temporary, mut output) = create_temporary(&directory.0).unwrap();
@@ -447,6 +461,7 @@ mod tests {
                 startup_visible: false,
                 roaming_enabled: true,
                 bubble_notifications: true,
+                slingshot_enabled: true,
             }
         );
     }
@@ -468,6 +483,7 @@ mod tests {
             startup_visible: Some(false),
             roaming_enabled: None,
             bubble_notifications: None,
+            slingshot_enabled: None,
         }));
         assert!(!preferences.startup_visible);
         assert!(!preferences.roaming_enabled);
@@ -497,6 +513,43 @@ mod tests {
     }
 
     #[test]
+    fn slingshot_patch_preserves_other_fields_and_is_idempotent() {
+        let original = PetPreferences {
+            startup_visible: true,
+            roaming_enabled: false,
+            bubble_notifications: false,
+            slingshot_enabled: true,
+        };
+        let mut preferences = original;
+        let disabled: PetSettingsPatch =
+            serde_json::from_value(json!({"slingshot_enabled": false})).unwrap();
+        assert_eq!(
+            serde_json::to_value(disabled).unwrap(),
+            json!({"slingshot_enabled": false})
+        );
+        assert!(preferences.apply_patch(&disabled));
+        assert_eq!(
+            preferences,
+            PetPreferences {
+                slingshot_enabled: false,
+                ..original
+            }
+        );
+        assert!(!preferences.apply_patch(&disabled));
+        assert!(!preferences.apply_patch(&PetSettingsPatch::default()));
+        assert!(preferences.apply_patch(&PetSettingsPatch {
+            roaming_enabled: Some(true),
+            ..PetSettingsPatch::default()
+        }));
+        assert!(!preferences.slingshot_enabled);
+        let enabled: PetSettingsPatch =
+            serde_json::from_value(json!({"slingshot_enabled": true})).unwrap();
+        assert!(preferences.apply_patch(&enabled));
+        assert!(preferences.slingshot_enabled);
+        assert!(!preferences.apply_patch(&enabled));
+    }
+
+    #[test]
     fn empty_and_unchanged_patch_are_no_ops() {
         let mut preferences = PetPreferences::default();
         let empty: PetSettingsPatch = serde_json::from_str("{}").unwrap();
@@ -506,6 +559,7 @@ mod tests {
             startup_visible: Some(false),
             roaming_enabled: Some(true),
             bubble_notifications: Some(true),
+            slingshot_enabled: Some(true),
         }));
         assert_eq!(preferences, PetPreferences::default());
     }
@@ -523,6 +577,11 @@ mod tests {
             r#"{"bubble_notifications":{}}"#,
             r#"{"bubble_notifications":true,"bubble_notifications":false}"#,
             r#"{"startup_visible":true,"startup_visible":false}"#,
+            r#"{"slingshot_enabled":"false"}"#,
+            r#"{"slingshot_enabled":0}"#,
+            r#"{"slingshot_enabled":[]}"#,
+            r#"{"slingshot_enabled":{}}"#,
+            r#"{"slingshot_enabled":true,"slingshot_enabled":false}"#,
         ] {
             assert!(
                 serde_json::from_str::<PetSettingsPatch>(invalid).is_err(),
@@ -572,6 +631,7 @@ mod tests {
                 startup_visible: true,
                 roaming_enabled: false,
                 bubble_notifications: true,
+                slingshot_enabled: true,
             }
         );
         assert_eq!(fs::read(&store.path).unwrap(), legacy);
@@ -583,7 +643,80 @@ mod tests {
     }
 
     #[test]
-    fn first_explicit_legacy_change_saves_three_bool_fields() {
+    fn legacy_three_bool_file_defaults_slingshot_without_writing_back() {
+        let directory = TestDirectory::new();
+        let store = directory.store();
+        for bubbles in [false, true] {
+            let legacy = serde_json::to_vec(&json!({
+                "startup_visible": true,
+                "roaming_enabled": false,
+                "bubble_notifications": bubbles,
+            }))
+            .unwrap();
+            fs::write(&store.path, &legacy).unwrap();
+            let modified = fs::metadata(&store.path).unwrap().modified().unwrap();
+            let mut preferences = store.load().unwrap();
+            assert_eq!(
+                preferences,
+                PetPreferences {
+                    startup_visible: true,
+                    roaming_enabled: false,
+                    bubble_notifications: bubbles,
+                    slingshot_enabled: true,
+                }
+            );
+            assert!(!preferences.apply_patch(&PetSettingsPatch {
+                slingshot_enabled: Some(true),
+                ..PetSettingsPatch::default()
+            }));
+            assert_eq!(fs::read(&store.path).unwrap(), legacy);
+            assert_eq!(
+                fs::metadata(&store.path).unwrap().modified().unwrap(),
+                modified
+            );
+            assert_eq!(fs::read_dir(&directory.0).unwrap().count(), 1);
+        }
+    }
+
+    #[test]
+    fn slingshot_false_patch_persists_across_reload_without_redundant_save() {
+        let directory = TestDirectory::new();
+        let store = directory.store();
+        let legacy =
+            br#"{"startup_visible":true,"roaming_enabled":false,"bubble_notifications":false}"#;
+        fs::write(&store.path, legacy).unwrap();
+        let mut preferences = store.load().unwrap();
+        let patch: PetSettingsPatch =
+            serde_json::from_value(json!({"slingshot_enabled": false})).unwrap();
+        assert!(preferences.apply_patch(&patch));
+        store.save(&preferences).unwrap();
+        let bytes = fs::read(&store.path).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
+            json!({
+                "startup_visible": true,
+                "roaming_enabled": false,
+                "bubble_notifications": false,
+                "slingshot_enabled": false,
+            })
+        );
+        let reloaded_store = PreferencesStore::new(store.path.clone());
+        let mut reloaded = reloaded_store.load().unwrap();
+        assert_eq!(reloaded, preferences);
+        assert!(!reloaded.slingshot_enabled);
+        assert!(!reloaded.apply_patch(&patch));
+        let modified = fs::metadata(&store.path).unwrap().modified().unwrap();
+        reloaded_store.save(&reloaded).unwrap();
+        assert_eq!(fs::read(&store.path).unwrap(), bytes);
+        assert_eq!(
+            fs::metadata(&store.path).unwrap().modified().unwrap(),
+            modified
+        );
+        assert_eq!(fs::read_dir(&directory.0).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn first_explicit_legacy_change_saves_four_bool_fields() {
         let directory = TestDirectory::new();
         let store = directory.store();
         let legacy = br#"{"startup_visible":true,"roaming_enabled":false}"#;
@@ -600,7 +733,7 @@ mod tests {
             serde_json::from_slice(&fs::read(&store.path).unwrap()).unwrap();
         assert_eq!(
             saved,
-            json!({"startup_visible": true, "roaming_enabled": false, "bubble_notifications": false})
+            json!({"startup_visible": true, "roaming_enabled": false, "bubble_notifications": false, "slingshot_enabled": true})
         );
         assert_eq!(store.load().unwrap(), preferences);
         assert_eq!(fs::read_dir(&directory.0).unwrap().count(), 1);
@@ -626,6 +759,31 @@ mod tests {
     }
 
     #[test]
+    fn non_bool_or_duplicate_slingshot_preferences_are_rejected_and_preserved() {
+        let directory = TestDirectory::new();
+        let store = directory.store();
+        for invalid in [json!(null), json!("true"), json!(1), json!([]), json!({})] {
+            let bytes = serde_json::to_vec(&json!({
+                "startup_visible": false,
+                "roaming_enabled": true,
+                "bubble_notifications": true,
+                "slingshot_enabled": invalid,
+            }))
+            .unwrap();
+            fs::write(&store.path, &bytes).unwrap();
+            assert!(store.load().is_err(), "{invalid}");
+            assert!(store.save(&PetPreferences::default()).is_err(), "{invalid}");
+            assert_eq!(fs::read(&store.path).unwrap(), bytes);
+            assert_eq!(fs::read_dir(&directory.0).unwrap().count(), 1);
+        }
+        let duplicate = br#"{"startup_visible":false,"roaming_enabled":true,"slingshot_enabled":true,"slingshot_enabled":false}"#;
+        fs::write(&store.path, duplicate).unwrap();
+        assert!(store.load().is_err());
+        assert!(store.save(&PetPreferences::default()).is_err());
+        assert_eq!(fs::read(&store.path).unwrap(), duplicate);
+    }
+
+    #[test]
     fn oversized_file_is_preserved() {
         let directory = TestDirectory::new();
         let store = directory.store();
@@ -646,6 +804,7 @@ mod tests {
                 startup_visible: index % 2 == 0,
                 roaming_enabled: index % 2 != 0,
                 bubble_notifications: index % 3 == 0,
+                slingshot_enabled: index % 4 == 0,
             };
             store.save(&expected).unwrap();
             assert_eq!(store.load().unwrap(), expected);
@@ -670,11 +829,13 @@ mod tests {
             startup_visible: true,
             roaming_enabled: true,
             bubble_notifications: true,
+            slingshot_enabled: true,
         };
         let second = PetPreferences {
             startup_visible: false,
             roaming_enabled: false,
             bubble_notifications: false,
+            slingshot_enabled: false,
         };
         store.save(&first).unwrap();
         let first_bytes = serde_json::to_vec_pretty(&first).unwrap();
@@ -744,7 +905,7 @@ mod tests {
     }
 
     #[test]
-    fn persisted_shape_is_only_three_bools_not_runtime_state_or_secrets() {
+    fn persisted_shape_is_only_four_bools_not_runtime_state_or_secrets() {
         let directory = TestDirectory::new();
         let store = directory.store();
         store.save(&PetPreferences::default()).unwrap();
@@ -752,19 +913,39 @@ mod tests {
             serde_json::from_slice(&fs::read(&store.path).unwrap()).unwrap();
         assert_eq!(
             value,
-            json!({"startup_visible": false, "roaming_enabled": true, "bubble_notifications": true})
+            json!({"startup_visible": false, "roaming_enabled": true, "bubble_notifications": true, "slingshot_enabled": true})
         );
-        assert_eq!(value.as_object().unwrap().len(), 3);
+        assert_eq!(value.as_object().unwrap().len(), 4);
         let snapshot = PetSettingsSnapshot {
             visible: true,
             always_on_top: false,
             startup_visible: false,
             roaming_enabled: true,
             bubble_notifications: true,
+            slingshot_enabled: false,
             revision: 7,
             message: "runtime only".into(),
         };
         assert_ne!(snapshot.visible, store.load().unwrap().startup_visible);
+        let serialized = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(
+            serialized,
+            json!({
+                "visible": true,
+                "always_on_top": false,
+                "startup_visible": false,
+                "roaming_enabled": true,
+                "bubble_notifications": true,
+                "slingshot_enabled": false,
+                "revision": 7,
+                "message": "runtime only",
+            })
+        );
+        assert_eq!(serialized.as_object().unwrap().len(), 8);
+        assert_eq!(
+            serde_json::from_value::<PetSettingsSnapshot>(serialized).unwrap(),
+            snapshot
+        );
         assert_eq!(
             serde_json::to_value(TitlebarPetState {
                 visible: true,
