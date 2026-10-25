@@ -926,6 +926,7 @@ pub fn run() {
             pet::drag_pet,
             pet_memory::get_pet_memory,
             pet_memory::pet_memory_action,
+            pet_workspace::initialize_pet_workspace,
             pet_workspace::get_pet_workspace,
             pet_workspace::open_pet_workspace,
             pet_settings::get_pet_settings,

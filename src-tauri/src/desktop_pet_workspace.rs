@@ -1,4 +1,4 @@
-//! Settings-only read/open IPC. Never prepares a directory or contacts DSH.
+//! Settings-only workspace IPC. Read/open stay non-mutating; initialize explicitly prepares DSH.
 use super::{assistant::Assistant, pet_settings::assert_settings, Controller};
 use crate::{
     assistant::{BackendIdentity, Binding},
@@ -64,6 +64,20 @@ fn run_workspace(app: &tauri::AppHandle, open: bool) -> Result<WorkspaceSnapshot
             Ok(snapshot)
         }
     })?
+}
+
+#[tauri::command]
+pub(super) async fn initialize_pet_workspace(
+    view: Webview,
+    app: tauri::AppHandle,
+) -> Result<WorkspaceSnapshot, String> {
+    assert_settings(&view)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        super::assistant::initialize_workspace(&app)?;
+        run_workspace(&app, false)
+    })
+    .await
+    .map_err(|_| "初始化宠物目录的线程异常结束。".to_owned())?
 }
 
 #[tauri::command]

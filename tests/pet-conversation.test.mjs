@@ -13,7 +13,11 @@ test('speech never reuses an answer before the newest user message',()=>{
   assert.equal(conversationCue(state).text,'新回复');assert.equal(conversationCue(state).busy,true);
 });
 test('setup, disconnection, waiting and cancellation have explicit public cues',()=>{
-  assert.equal(conversationCue(initialSnapshot()).kind,'greeting');
+  assert.equal(conversationCue(initialSnapshot()).kind,'thinking');
+  assert.match(conversationCue({...initialSnapshot(),phase:'setup'}).text,/设置.*初始化/);
+  assert.match(conversationCue({...initialSnapshot(),phase:'loading',message:'等待 DSH 服务就绪'}).text,/等待 DSH/);
+  assert.match(conversationCue({...initialSnapshot(),phase:'error',message:'请先登录 DSH'}).text,/初始化未完成.*登录/);
+  assert.match(conversationCue(ready({phase:'workspace_missing',connected:false})).text,/目录.*丢失.*初始化/);
   assert.equal(conversationCue(ready({connected:false,message:'重连中'})).text,'重连中');
   assert.equal(conversationCue(ready({waiting:true})).kind,'waiting');
   assert.equal(conversationCue(ready({phase:'cancelling'})).busy,true);

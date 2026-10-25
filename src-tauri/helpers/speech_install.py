@@ -436,6 +436,19 @@ def bootstrap_pip(python, root, cancelled, env):
              str(path), "install", "--no-index", "--no-deps", str(path)], cancelled, "pip_missing", env)
 
 
+def install_rocm_dependencies(python, cancelled, env):
+    # AMD intentionally publishes the target-selecting rocm metapackage only as
+    # an sdist. Keep the actual SDK payloads wheel-only and on the AMD index.
+    # Its PEP 517 backend needs setuptools>=70.2.0. Prepare a pinned wheel
+    # from PyPI so an isolated build cannot choose a drifting backend from
+    # AMD's mirror; do not mix indexes for resolving the actual SDK payloads.
+    run([python, "-I", "-m", "pip", "install", "--index-url", PYPI, "--only-binary=:all:",
+         "setuptools==80.9.0"], cancelled, "dependencies_failed", env)
+    run([python, "-I", "-m", "pip", "install", "--index-url", AMD_INDEX, "--only-binary=:all:",
+         "--no-binary=rocm", "--no-build-isolation",
+         "rocm[libraries,devel,device-gfx1201]==10.1.0"], cancelled, "rocm_dependencies_failed", env)
+
+
 def install(resources, build_script, cancelled, emit):
     require(not cancelled(), "cancelled")
     require(platform.machine() == "x86_64" and sys.version_info >= (3, 10), "platform_unsupported")
@@ -492,8 +505,7 @@ def install(resources, build_script, cancelled, emit):
         run([python, "-I", "-m", "pip", "install", "--index-url", PYPI, "--only-binary=:all:",
              "pip==25.3", "cmake==3.31.6", "ninja==1.11.1.3"], cancelled, "dependencies_failed", env)
         if arch is None:
-            run([python, "-I", "-m", "pip", "install", "--index-url", AMD_INDEX, "--only-binary=:all:",
-                 "rocm[libraries,devel,device-gfx1201]==10.1.0"], cancelled, "rocm_dependencies_failed", env)
+            install_rocm_dependencies(python, cancelled, env)
             require(run([python, "-I", "-c", ROCM_PROBE], cancelled, "rocm_gpu_unsupported", env, timeout=30, optional=True) == "gfx1201", "rocm_gpu_unsupported")
             run([str(venv / "bin/rocm-sdk"), "init"], cancelled, "rocm_sdk_failed", env)
             sdk = run([str(venv / "bin/rocm-sdk"), "path", "--root"], cancelled, "rocm_sdk_failed", env)

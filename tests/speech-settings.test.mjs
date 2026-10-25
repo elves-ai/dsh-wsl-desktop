@@ -6,7 +6,7 @@ const compile = value => ts.transpileModule(value, { compilerOptions: { module: 
 const moduleUrl = value => 'data:text/javascript;base64,' + Buffer.from(value).toString('base64');
 const qwen = moduleUrl(compile(await readFile(new URL('../src/pet/qwen-speech.ts', import.meta.url), 'utf8')));
 const raw = await readFile(new URL('../src/speech-settings.ts', import.meta.url), 'utf8');
-const { SpeechSettings, speechDiagnostics, isSpeechSnapshot, isSpeechPreferences } = await import(moduleUrl(compile(raw).replace("'./pet/qwen-speech'", JSON.stringify(qwen))));
+const { SpeechSettings, speechSettingsMarkup, speechDiagnostics, isSpeechSnapshot, isSpeechPreferences } = await import(moduleUrl(compile(raw).replace("'./pet/qwen-speech'", JSON.stringify(qwen))));
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const deferred = () => { let resolve, reject; const promise = new Promise((a,b) => { resolve=a; reject=b; }); return { promise, resolve, reject }; };
 const config = { model_dir:'/models/q8', python_path:'/home/user/.dsh-wsl-desktop/speech/runtime/venv/bin/python', native_lib:'/lib/qwen.so' };
@@ -141,6 +141,14 @@ test('resource busy blocks all conflicting service and preference operations, in
  assert.deepEqual(f.calls.map(c=>c.name),['get_speech_settings','get_speech_preferences']);
  busy=false;f.node('resources').emit('speech-resources-busy');assert.equal(f.node('test').disabled,false);assert.equal(f.node('auto').disabled,false);f.settings.dispose();
 });
+test('local speech names the exact Base model, codec and quantization before installation controls',()=>{
+ const introduction=speechSettingsMarkup.split('<div id="speech-resources">')[0];
+ assert.match(introduction,/语音模型：<strong>Qwen3-TTS-12Hz-1\.7B-Base<\/strong>（GGUF · Q8_0）/);
+ assert.match(introduction,/音频编解码模型：Qwen3-TTS-Tokenizer-12Hz（GGUF · Q8_0）/);
+ assert.doesNotMatch(introduction,/<details|VoiceDesign|CustomVoice/);
+ assert.match(introduction,/打开本页仅查看状态，不会安装、加载模型或开启朗读/);
+});
+
 test('local speech settings contain neither editable/read-only paths nor a manual save flow',()=>{
  assert.doesNotMatch(raw,/speech-(?:python_path|model_dir|native_lib|save|draft)|save_speech_config|pick_settings_path|getDraft|pathsLocked/);
  assert.match(raw,/打开本页仅查看状态/);assert.match(raw,/安装结束自动检测并保存/);

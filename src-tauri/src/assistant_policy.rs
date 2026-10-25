@@ -38,7 +38,7 @@ fn strings<'a>(value: &'a Value, key: &str) -> Result<Vec<&'a str>, String> {
 /// Saved custom/legacy directories cannot override the native managed default.
 pub fn require_default_workspace(binding: &Binding, default_path: &str) -> Result<(), String> {
     if !default_path.starts_with('/') || binding.workspace_path != default_path {
-        return Err("宠物工作区已固定为默认目录，请重新确认启用；旧目录和历史对话保留在 DSH 中，不会搬移或删除。".into());
+        return Err("宠物工作区已固定为默认目录，请前往设置 > 桌面宠物 > 初始化宠物目录；旧目录和历史对话保留在 DSH 中，不会搬移或删除。".into());
     }
     Ok(())
 }
@@ -57,13 +57,13 @@ pub fn bound_workspace<'a>(workspaces: &'a Value, binding: &Binding) -> Result<&
                 return Err("DSH 项目标识重复。".into());
             }
             if path != binding.workspace_path {
-                return Err("助手项目目录已变化，请重试后重新确认默认工作区。".into());
+                return Err("助手项目目录已变化，请前往设置 > 桌面宠物 > 初始化宠物目录。".into());
             }
             matching = Some(item);
         }
     }
     let workspace =
-        matching.ok_or("助手项目已删除或不存在，请重试后重新确认默认工作区；不会自动创建项目。")?;
+        matching.ok_or("助手项目已删除或不存在，请前往设置 > 桌面宠物 > 初始化宠物目录；重试和发送不会自动创建项目。")?;
     Ok(workspace)
 }
 

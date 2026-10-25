@@ -22,7 +22,7 @@ def inspect():
             raise ValueError("workspace unavailable")
     if target.exists() and not os.access(target, os.R_OK | os.W_OK | os.X_OK):
         raise ValueError("workspace unavailable")
-    return {"path": str(target.resolve(strict=False))}
+    return {"path": str(target.resolve(strict=False)), "exists": target.is_dir()}
 
 
 def prepare():

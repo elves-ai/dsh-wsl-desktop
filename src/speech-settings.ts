@@ -53,7 +53,9 @@ export const speechSettingsMarkup = `<div class="setting-group"><div class="togg
 <p class="setting-help">试听仅允许本页播放，不代表桌宠已获得自动播放权限；请在桌宠点击朗读或开启自动朗读。</p>
 <p id="speech-audio-message" class="setting-help" role="status"></p></div>
 <div class="setting-group"><h2>本地千问语音</h2>
-<p class="setting-help">使用 WSL 中的 Q8 模型和固定音色朗读。打开本页仅查看状态，不会安装、加载模型或开启朗读。</p>
+<p class="setting-help">语音模型：<strong>Qwen3-TTS-12Hz-1.7B-Base</strong>（GGUF · Q8_0）。</p>
+<p class="setting-help">音频编解码模型：Qwen3-TTS-Tokenizer-12Hz（GGUF · Q8_0）。</p>
+<p class="setting-help">在 WSL 本地使用固定音色朗读。打开本页仅查看状态，不会安装、加载模型或开启朗读。</p>
 <div id="speech-resources"></div>
 <details><summary>技术信息</summary><dl class="connection-info"><div><dt>当前 WSL 发行版</dt><dd id="speech-distribution">未知</dd></div></dl><p class="setting-help">运行依赖、模型和原生库由启动器统一管理；安装结束自动检测并保存配置。</p></details></div>
 <div class="setting-group"><h2>运行状态</h2><dl class="connection-info">

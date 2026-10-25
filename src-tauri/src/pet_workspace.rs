@@ -8,6 +8,9 @@ use crate::{
 };
 use serde::Serialize;
 
+pub const MISSING_DIRECTORY_MESSAGE: &str =
+    "工作目录不存在，请前往设置 > 桌面宠物 > 初始化宠物目录；重试和发送不会重建目录。";
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkspaceStatus {
@@ -26,6 +29,35 @@ pub struct WorkspaceSnapshot {
     pub message: String,
 }
 
+/// Fail closed on a missing directory or malformed helper response before any DSH operation.
+pub fn directory_path(value: &serde_json::Value) -> Result<String, String> {
+    match value.get("exists").and_then(serde_json::Value::as_bool) {
+        Some(false) => return Err(MISSING_DIRECTORY_MESSAGE.into()),
+        Some(true) => {}
+        None => return Err("助手目录响应无效。".into()),
+    }
+    value
+        .get("path")
+        .and_then(serde_json::Value::as_str)
+        .filter(|path| path.starts_with('/'))
+        .map(str::to_owned)
+        .ok_or_else(|| "助手目录响应无效。".into())
+}
+
+/// Repeated initialization must retain the exact selected/pending Session, never reset it.
+pub fn reusable_binding(
+    previous: Option<&Binding>,
+    backend: &BackendIdentity,
+    workspace_id: &str,
+    path: &str,
+) -> Option<Binding> {
+    previous
+        .filter(|b| {
+            b.backend == *backend && b.workspace_id == workspace_id && b.workspace_path == path
+        })
+        .cloned()
+}
+
 /// Only native binding supplies the target; a changed user/origin also fails closed.
 pub fn inspect(
     binding: Option<&Binding>,
@@ -36,7 +68,9 @@ pub fn inspect(
         status: WorkspaceStatus::Unbound,
         distribution: None,
         path: None,
-        message: "尚未绑定对话工作目录；查看此页不会创建目录或启用聊天。".into(),
+        message:
+            "尚未初始化桌宠工作目录，请前往设置 > 桌面宠物 > 初始化宠物目录；查看此页不会创建目录。"
+                .into(),
     };
     let Some(binding) = binding else {
         return result;
@@ -63,7 +97,7 @@ pub fn inspect(
         ),
         Ok(false) => (
             WorkspaceStatus::Missing,
-            "工作目录不存在或不是文件夹；不会自动创建。".into(),
+            "工作目录不存在或不是文件夹，请前往设置 > 桌面宠物 > 初始化宠物目录；刷新和发送不会重建目录。".into(),
         ),
         Err(()) => (
             WorkspaceStatus::Unavailable,

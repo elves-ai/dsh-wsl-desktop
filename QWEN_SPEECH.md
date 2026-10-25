@@ -40,6 +40,16 @@ Python 固定使用 `runtime/venv/bin/python`，旧外部解释器不会执行�
 
 这个错误可能发生在组件安装器运行之前：安装流程须先确认没有运行中的语音服务，状态检查失败就不会修改依赖或下载模型。“检查系统环境已就绪”并不等于组件已安装。Windows 对未监听的本地端口返回连接拒绝可能需要略多于 2 秒；旧版的 2 秒连接期限会将正常的“服务未启动”误判为超时。源码已将连接期限调整为 5 秒、单次状态请求期限调整为 6 秒，但仍拒绝把真正的超时当作已停止。此修复需重新构建并更新 Windows 应用后生效；源码测试不代表已完成桌面端首次安装及 GPU 朗读验收。
 
+## ROCm 开发依赖安装失败
+
+若旧安装器在“安装语音组件”阶段提示 AMD ROCm 10.1 开发依赖失败，不要先认定是 Ubuntu 或 Python 版本不兼容。[AMD 官方索引](https://stable.repo.amd.com/rocm/core/whl-next/rocm/)的 `rocm==10.1.0` 元包有意只提供源码包，旧安装命令的 `--only-binary=:all:` 会将它排除，pip 因而报 `No matching distribution found for rocm==10.1.0`。
+
+安装器现只为 `rocm` 添加 `--no-binary=rocm` 例外，SDK 核心、库、开发组件和 gfx1201 设备包仍限定官方 wheel、固定 10.1.0。构建元包前从 PyPI 单独安装固定 `setuptools==80.9.0`，再使用 `--no-build-isolation`，避免隔离构建自行选取变化的构建工具；不会混用 SDK 包索引或安装系统驱动。此源码修复需要重新构建并更新 Windows 应用；对尚未补齐依赖的环境，仅反复点击旧版“重试安装”不会改变其安装命令。
+
+可用装有 pip 的测试 Python 运行 `python -m unittest discover -s tests -p test_speech_rocm_packaging.py -v`。该离线测试用本地假包验证旧命令失败、修正命令成功，以及 SDK 源码包仍被拒绝，不联网也不安装真实 GPU 包；没有 pip 时显式跳过，不代表完成实际安装。
+
+2026-10-25 已在本机 Ubuntu 26.04 / Python 3.14.4 的默认托管环境实际执行修正后的安装器：ROCm 依赖安装、gfx1201 原生库编译、两份模型 SHA256 校验全部通过；生产检测器确认 RX 9070 XT 的 GPU 真算、原生 ABI、模型检查均通过（`environment_ok=true`、`models_ok=true`）。此次通过 WSL 直接调用安装器，没有保存 Windows 应用配置或验收 Tauri 页面、声音播放；应用内仍需通过安装流程完成检测保存。
+
 ## 已核实的硬件与实验结果
 
 2026-10-24 的独立原生试听环境：RX 9070 XT（gfx1201）、Ubuntu 26.04.1 / WSL 2、内核 6.18.54.1、未改动的 Windows 驱动 32.0.32015.7029、ROCm 10.1.0 WSL Technical Preview。这不是其他显卡/驱动/发行版的兼容性承诺。

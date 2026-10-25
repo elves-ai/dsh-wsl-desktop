@@ -45,6 +45,7 @@ pub(super) struct Assistant {
     data: Mutex<Data>,
     operation: Mutex<()>,
     windows: Mutex<()>,
+    initialize_requested: AtomicBool,
     wake: Condvar,
     directory: PathBuf,
 }
@@ -78,6 +79,7 @@ impl Assistant {
             }),
             operation: Mutex::new(()),
             windows: Mutex::new(()),
+            initialize_requested: AtomicBool::new(false),
             wake: Condvar::new(),
             directory,
         }
@@ -99,11 +101,13 @@ impl Assistant {
         }
     }
     fn status(&self, app: &tauri::AppHandle, connected: bool, phase: &str, message: &str) {
-        self.data
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .projection
-            .set_connection(connected, phase, message);
+        {
+            let mut data = self.data.lock().unwrap_or_else(|e| e.into_inner());
+            if phase == "workspace_missing" {
+                data.cancel.store(true, Ordering::SeqCst);
+            }
+            data.projection.set_connection(connected, phase, message);
+        }
         self.publish(app);
     }
     fn bind(&self, app: &tauri::AppHandle, binding: Binding) -> Result<(), String> {
@@ -159,7 +163,7 @@ impl Assistant {
             .unwrap_or_else(|e| e.into_inner())
             .binding
             .clone()
-            .ok_or_else(|| "请先启用桌面助手。".into())
+            .ok_or_else(|| "请前往设置 > 桌面宠物 > 初始化宠物目录。".into())
     }
 }
 
@@ -212,7 +216,9 @@ fn action_allowed(label: &str, action: &Action) -> bool {
         Action::PetInput { .. } | Action::MotionActive { .. } | Action::HitRegions { .. } => {
             label == PET
         }
-        Action::Enable { .. } | Action::NewSession | Action::SelectSession { .. } => label == CHAT,
+        // Initialization is Settings-only; retain deserialization for old clients but deny execution.
+        Action::Enable { .. } => false,
+        Action::NewSession | Action::SelectSession { .. } => label == CHAT,
         // Inline conversation shares the bound session, never project/session setup.
         Action::Send { .. } | Action::Cancel | Action::Retry => [PET, CHAT].contains(&label),
         Action::OpenDsh
@@ -368,7 +374,12 @@ pub(super) async fn assistant_action(
                     .map_err(|_| "助手正在处理操作，请稍候。")?;
                 let result = run_action(&app, &state, action);
                 if let Err(message) = &result {
-                    state.status(&app, false, "error", message);
+                    state.status(
+                        &app,
+                        false,
+                        workspace_error_phase(message, "error"),
+                        message,
+                    );
                 }
                 result?;
             }
@@ -403,7 +414,10 @@ fn client(app: &tauri::AppHandle, config: &Config) -> Result<Client, String> {
 fn checked_binding(state: &Assistant, config: &Config) -> Result<Binding, String> {
     let binding = state.binding()?;
     if binding.backend != identity(config) {
-        return Err("DSH 服务配置已变化，请重新确认默认工作区；未向旧会话发送消息。".into());
+        return Err(
+            "DSH 服务配置已变化，请前往设置 > 桌面宠物 > 初始化宠物目录；未向旧会话发送消息。"
+                .into(),
+        );
     }
     crate::assistant_policy::require_default_workspace(
         &binding,
@@ -427,14 +441,9 @@ fn default_directory(config: &Config, create: bool) -> Result<String, String> {
         .map_err(|_| "无法准备助手工作目录，请检查 WSL 状态。")?;
     let value: Value = serde_json::from_slice(&output.stdout).map_err(|_| "助手目录响应无效。")?;
     if !output.success {
-        return Err("助手目录不可用；请检查路径、权限或是否为符号链接。".into());
+        return Err("助手目录不可用；请检查路径、权限或是否为符号链接，并前往设置 > 桌面宠物 > 初始化宠物目录。".into());
     }
-    value
-        .get("path")
-        .and_then(Value::as_str)
-        .filter(|p| p.starts_with('/'))
-        .map(str::to_owned)
-        .ok_or_else(|| "助手目录响应无效。".into())
+    crate::pet_workspace::directory_path(&value)
 }
 fn id() -> String {
     let seed = format!(
@@ -520,49 +529,88 @@ fn catalog(rpc: &Client, binding: &Binding) -> Result<(Vec<SessionRow>, bool), S
 fn require_session(rows: &[SessionRow], binding: &Binding) -> Result<(), String> {
     crate::assistant_policy::require_session(rows, binding)
 }
+/// Lock order: memory operation -> assistant operation -> short data/backend locks.
+/// No filesystem or RPC work holds data/backend locks, and initialization never sends a model message.
+pub(super) fn initialize_workspace(app: &tauri::AppHandle) -> Result<(), String> {
+    let _memory = crate::pet_memory::operation_mutex()
+        .try_lock()
+        .map_err(|_| "正在处理记忆或会话操作，请稍后重试。")?;
+    let state = app.state::<Arc<Assistant>>();
+    let _operation = state
+        .operation
+        .try_lock()
+        .map_err(|_| "助手正在处理操作，请稍候。")?;
+    state.initialize_requested.store(false, Ordering::SeqCst);
+    let result = initialize_locked(app, &state);
+    if let Err(message) = &result {
+        state.status(app, false, workspace_error_phase(message, "error"), message);
+    }
+    result
+}
+
+fn initialize_locked(app: &tauri::AppHandle, state: &Assistant) -> Result<(), String> {
+    let backend = config(app)?;
+    let rpc = client(app, &backend)?;
+    // Only explicit Settings initialization or a pet-show request may create the directory.
+    let previous = state
+        .store()
+        .load()
+        .map_err(|_| "助手绑定无法读取，请检查配置目录；未覆盖原配置。")?;
+    let path = default_directory(&backend, true)?;
+    if identity(&config(app)?) != identity(&backend) {
+        return Err("后端已变化，请前往设置 > 桌面宠物 > 初始化宠物目录。".into());
+    }
+    let value = rpc.workspace_create(&path).map_err(|e| e.to_string())?;
+    let workspace = value.get("workspace").ok_or("DSH 未返回助手项目。")?;
+    let workspace_id = value_id(workspace, "workspaceId")?;
+    if value.get("created").and_then(Value::as_bool) == Some(true) {
+        let _ = rpc.workspace_rename(&workspace_id, "桌面助手");
+    }
+    if identity(&config(app)?) != identity(&backend) {
+        return Err("后端已变化，请在设置 > 桌面宠物重新初始化宠物目录。".into());
+    }
+    // Use the durable binding even after setup invalidation; preserve the active Session.
+    if let Some(binding) = crate::pet_workspace::reusable_binding(
+        previous.as_ref(),
+        &identity(&backend),
+        &workspace_id,
+        &path,
+    ) {
+        if binding.session_pending || binding.session_id.is_none() {
+            create_session(app, state, &rpc, binding)?;
+        } else {
+            let (rows, _) = catalog(&rpc, &binding)?;
+            require_session(&rows, &binding)?;
+            if identity(&config(app)?) != binding.backend {
+                return Err("后端已变化，请在设置 > 桌面宠物重新初始化宠物目录。".into());
+            }
+            // Do not reset a live follower, pending send, or selected session on repeated show.
+            if state.with_workspace_binding(|current| current != Some(&binding)) {
+                state.bind(app, binding)?;
+            } else {
+                state.wake.notify_all();
+            }
+        }
+    } else {
+        let binding = Binding {
+            backend: identity(&backend),
+            workspace_id,
+            workspace_path: path,
+            session_id: None,
+            session_pending: false,
+        };
+        state.bind(app, binding.clone())?;
+        create_session(app, state, &rpc, binding)?;
+    }
+
+    Ok(())
+}
+
 fn run_action(app: &tauri::AppHandle, state: &Assistant, action: Action) -> Result<(), String> {
     let config = config(app)?;
     let rpc = client(app, &config)?;
     match action {
-        Action::Enable {} => {
-            // Enable alone may create the fixed default directory or Workspace.
-            let path = default_directory(&config, true)?;
-            let value = rpc.workspace_create(&path).map_err(|e| e.to_string())?;
-            let workspace = value.get("workspace").ok_or("DSH 未返回助手项目。")?;
-            let workspace_id = value_id(workspace, "workspaceId")?;
-            if value.get("created").and_then(Value::as_bool) == Some(true) {
-                let _ = rpc.workspace_rename(&workspace_id, "桌面助手");
-            }
-            let previous = state
-                .data
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .binding
-                .clone();
-            if let Some(binding) = previous.filter(|b| {
-                b.backend == identity(&config)
-                    && b.workspace_id == workspace_id
-                    && b.workspace_path == path
-            }) {
-                if binding.session_pending {
-                    create_session(app, state, &rpc, binding)?;
-                } else {
-                    let (rows, _) = catalog(&rpc, &binding)?;
-                    require_session(&rows, &binding)?;
-                    state.bind(app, binding)?;
-                }
-            } else {
-                let binding = Binding {
-                    backend: identity(&config),
-                    workspace_id,
-                    workspace_path: path,
-                    session_id: None,
-                    session_pending: false,
-                };
-                state.bind(app, binding.clone())?;
-                create_session(app, state, &rpc, binding)?;
-            }
-        }
+        Action::Enable {} => return Err("请前往设置 > 桌面宠物 > 初始化宠物目录。".into()),
         Action::Retry => {
             let binding = checked_binding(state, &config)?;
             let generation = state
@@ -572,7 +620,7 @@ fn run_action(app: &tauri::AppHandle, state: &Assistant, action: Action) -> Resu
                 .generation;
             let workspaces = rpc.workspace_list().map_err(|e| e.to_string())?;
             if crate::assistant_policy::bound_workspace(&workspaces, &binding).is_err() {
-                state.require_setup(app, generation, "默认工作区已删除或绑定失效，请重新确认启用；不会自动创建目录，旧历史对话未删除。");
+                state.require_setup(app, generation, "默认工作区已删除或绑定失效，请前往设置 > 桌面宠物 > 初始化宠物目录；旧历史对话未删除。");
                 return Ok(());
             }
             if binding.session_pending || binding.session_id.is_none() {
@@ -853,17 +901,22 @@ pub(super) fn reveal_pet(app: &tauri::AppHandle) -> Result<(), String> {
     let pet = create_window(app, &state, true)?;
     pet.unminimize().map_err(|_| "无法还原桌面宠物。")?;
     pet.show().map_err(|_| "无法显示桌面宠物。")?;
+    state.initialize_requested.store(true, Ordering::SeqCst);
+    if !state.snapshot().enabled {
+        state.status(
+            app,
+            false,
+            "loading",
+            "正在初始化桌宠工作目录，等待 DSH 服务就绪。",
+        );
+    }
+    state.wake.notify_all();
     Ok(())
 }
 pub(super) fn show(app: &tauri::AppHandle) -> Result<(), String> {
     app.state::<Arc<super::pet_settings::PetControls>>()
         .set_visible(app, true)?;
-    let state = app.state::<Arc<Assistant>>();
-    if !state.snapshot().enabled {
-        let chat = create_window(app, &state, false)?;
-        let _ = chat.show();
-        let _ = chat.set_focus();
-    }
+    // Showing the pet queues native initialization; history remains an explicit user action.
     Ok(())
 }
 fn toggle_chat(app: &tauri::AppHandle, state: &Assistant) -> Result<(), String> {
@@ -943,7 +996,47 @@ pub(super) fn stop(app: &tauri::AppHandle) {
         state.wake.notify_all();
     }
 }
+fn workspace_error_phase<'a>(message: &str, fallback: &'a str) -> &'a str {
+    if message == crate::pet_workspace::MISSING_DIRECTORY_MESSAGE {
+        "workspace_missing"
+    } else {
+        fallback
+    }
+}
+
 pub(super) fn start(app: tauri::AppHandle, controller: Arc<Controller>, state: Arc<Assistant>) {
+    // A show/startup request may precede backend readiness. Consume it once, only after
+    // both operation locks are available. Reconnect/Retry/send never queue initialization.
+    let init_app = app.clone();
+    let init_state = state.clone();
+    let init_controller = controller.clone();
+    thread::spawn(move || loop {
+        if init_controller.exiting.load(Ordering::SeqCst) {
+            break;
+        }
+        if init_state.initialize_requested.load(Ordering::SeqCst)
+            && init_controller.snapshot().state == "ready"
+        {
+            if let Ok(_memory) = crate::pet_memory::operation_mutex().try_lock() {
+                if let Ok(_operation) = init_state.operation.try_lock() {
+                    if init_state
+                        .initialize_requested
+                        .swap(false, Ordering::SeqCst)
+                    {
+                        if let Err(message) = initialize_locked(&init_app, &init_state) {
+                            init_state.status(
+                                &init_app,
+                                false,
+                                workspace_error_phase(&message, "error"),
+                                &message,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        init_state.wait(3);
+    });
     // One follower per selected generation. Session history is never written locally.
     let follow_app = app.clone();
     let follow_state = state.clone();
@@ -973,7 +1066,7 @@ pub(super) fn start(app: tauri::AppHandle, controller: Arc<Controller>, state: A
                 follow_state.require_setup(
                     &follow_app,
                     generation,
-                    "DSH 配置已变化，请重新确认默认工作区；旧项目与历史对话未删除。",
+                    "DSH 配置已变化，请前往设置 > 桌面宠物 > 初始化宠物目录；旧项目与历史对话未删除。",
                 );
                 return Ok(());
             }
@@ -986,8 +1079,13 @@ pub(super) fn start(app: tauri::AppHandle, controller: Arc<Controller>, state: A
             }
             let rpc = client(&follow_app, &config)?;
             if binding.session_pending || binding.session_id.is_none() {
-                if let Ok(_lease) = follow_state.operation.try_lock() {
-                    create_session(&follow_app, &follow_state, &rpc, binding.clone())?;
+                if let Ok(_memory) = crate::pet_memory::operation_mutex().try_lock() {
+                    if let Ok(_lease) = follow_state.operation.try_lock() {
+                        if follow_state.binding()? == binding {
+                            checked_binding(&follow_state, &config)?;
+                            create_session(&follow_app, &follow_state, &rpc, binding.clone())?;
+                        }
+                    }
                 }
                 return Ok(());
             }
@@ -1066,7 +1164,12 @@ pub(super) fn start(app: tauri::AppHandle, controller: Arc<Controller>, state: A
                     .generation
                     == generation
             {
-                follow_state.status(&follow_app, false, "offline", &error);
+                follow_state.status(
+                    &follow_app,
+                    false,
+                    workspace_error_phase(&error, "offline"),
+                    &error,
+                );
             }
         }
         follow_state.wait(3);
@@ -1088,7 +1191,7 @@ pub(super) fn start(app: tauri::AppHandle, controller: Arc<Controller>, state: A
             let result = (|| -> Result<(Vec<SessionRow>, bool), String> {
                 let config = config(&status_app)?;
                 if binding.backend != identity(&config) {
-                    return Err("DSH 配置已变化，请重新确认默认工作区。".into());
+                    return Err("DSH 配置已变化，请前往设置 > 桌面宠物 > 初始化宠物目录。".into());
                 }
                 crate::assistant_policy::require_default_workspace(
                     &binding,
@@ -1114,7 +1217,11 @@ pub(super) fn start(app: tauri::AppHandle, controller: Arc<Controller>, state: A
                         }
                         Err(error) => {
                             data.cancel.store(true, Ordering::SeqCst);
-                            data.projection.set_connection(false, "offline", &error);
+                            data.projection.set_connection(
+                                false,
+                                workspace_error_phase(&error, "offline"),
+                                &error,
+                            );
                         }
                     }
                 }
@@ -1188,6 +1295,18 @@ pub(super) fn start(app: tauri::AppHandle, controller: Arc<Controller>, state: A
 mod tests {
     use super::*;
     #[test]
+    fn missing_workspace_error_has_a_dedicated_non_retry_phase() {
+        assert_eq!(
+            workspace_error_phase(crate::pet_workspace::MISSING_DIRECTORY_MESSAGE, "offline"),
+            "workspace_missing"
+        );
+        assert_eq!(
+            workspace_error_phase("DSH 服务尚未就绪", "offline"),
+            "offline"
+        );
+    }
+
+    #[test]
     fn inline_actions_are_scoped_without_setup_privileges() {
         for action in [
             Action::Send {
@@ -1204,7 +1323,6 @@ mod tests {
             assert!(!action_allowed("dsh-main", &action));
         }
         for action in [
-            Action::Enable {},
             Action::NewSession,
             Action::SelectSession {
                 session_id: "session".into(),
@@ -1212,6 +1330,9 @@ mod tests {
         ] {
             assert!(!action_allowed(PET, &action));
             assert!(action_allowed(CHAT, &action));
+        }
+        for label in [PET, CHAT, "launcher-settings", "dsh-main"] {
+            assert!(!action_allowed(label, &Action::Enable {}));
         }
         for active in [true, false] {
             let action: Action = serde_json::from_value(serde_json::json!({

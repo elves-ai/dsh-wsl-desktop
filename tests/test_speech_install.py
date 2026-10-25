@@ -47,6 +47,29 @@ class InstallerTests(unittest.TestCase):
         self.assertNotIn("LD_PRELOAD",env)
         self.assertNotIn("PIP_INDEX_URL",env)
         self.assertEqual(env["GIT_CONFIG_GLOBAL"],os.devnull)
+    def test_rocm_build_backend_is_pinned_and_only_metapackage_can_use_source(self):
+        env=I.environment(self.root)
+        cancelled=lambda:False
+        with patch.object(I,"run") as run:
+            I.install_rocm_dependencies("/managed/python",cancelled,env)
+        self.assertEqual(run.call_count,2)
+        build, sdk = run.call_args_list
+        self.assertEqual(build.args[0], ["/managed/python", "-I", "-m", "pip", "install",
+            "--index-url", I.PYPI, "--only-binary=:all:", "setuptools==80.9.0"])
+        self.assertEqual(sdk.args[0], ["/managed/python", "-I", "-m", "pip", "install",
+            "--index-url", I.AMD_INDEX, "--only-binary=:all:", "--no-binary=rocm",
+            "--no-build-isolation", "rocm[libraries,devel,device-gfx1201]==10.1.0"])
+        for call in run.call_args_list:
+            self.assertIs(call.args[1],cancelled)
+            self.assertIs(call.args[3],env)
+            self.assertNotIn("--extra-index-url",call.args[0])
+        self.assertEqual(build.args[2],"dependencies_failed")
+        self.assertEqual(sdk.args[2],"rocm_dependencies_failed")
+    def test_rocm_build_backend_failure_does_not_attempt_sdk(self):
+        with patch.object(I,"run",side_effect=I.InstallError("dependencies_failed")) as run:
+            with self.assertRaisesRegex(I.InstallError,"dependencies_failed"):
+                I.install_rocm_dependencies("/managed/python",lambda:False,I.environment())
+        self.assertEqual(run.call_count,1)
     def test_cancel_kills_child_process_group(self):
         pidfile=self.root / "pid"
         code="import os,subprocess,time; p=subprocess.Popen(['sleep','60']);open("+repr(str(pidfile))+",'w').write(str(p.pid));time.sleep(60)"
@@ -162,7 +185,9 @@ class InstallerTests(unittest.TestCase):
                 self.assertIn("--backend",build);self.assertIn(backend,build)
                 self.assertEqual(Path(build[1]).read_bytes(),b"fixed bundled build script")
                 self.assertFalse(any(c[0] in ("sudo","apt","apt-get") for c in calls))
-                if backend=="cuda": cuda.assert_called_once()
+                if backend=="cuda":
+                    cuda.assert_called_once()
+                    self.assertFalse(any("setuptools==80.9.0" in c or "--no-binary=rocm" in c for c in calls))
                 else:
                     cuda.assert_not_called()
                     self.assertTrue(any("rocm[libraries,devel,device-gfx1201]==10.1.0" in c for c in calls))

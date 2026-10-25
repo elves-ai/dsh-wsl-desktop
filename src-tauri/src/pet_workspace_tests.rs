@@ -1,4 +1,59 @@
 use super::*;
+
+#[test]
+fn helper_response_requires_an_existing_directory() {
+    let path = "/home/alice/.dsh-wsl-desktop/assistant";
+    assert_eq!(
+        directory_path(&serde_json::json!({"path":path,"exists":true})).unwrap(),
+        path
+    );
+    assert_eq!(
+        directory_path(&serde_json::json!({"path":path,"exists":false})).unwrap_err(),
+        MISSING_DIRECTORY_MESSAGE
+    );
+    for response in [
+        serde_json::json!({"path":path}),
+        serde_json::json!({"path":path,"exists":"true"}),
+        serde_json::json!({"path":"relative","exists":true}),
+        serde_json::json!({"exists":true}),
+    ] {
+        assert!(directory_path(&response).is_err());
+    }
+}
+
+#[test]
+fn initialization_reuses_exact_selected_or_pending_session() {
+    let mut b = binding();
+    for pending in [false, true] {
+        b.session_pending = pending;
+        assert_eq!(
+            reusable_binding(Some(&b), &b.backend, &b.workspace_id, &b.workspace_path),
+            Some(b.clone())
+        );
+    }
+    b.session_id = None;
+    assert_eq!(
+        reusable_binding(Some(&b), &b.backend, &b.workspace_id, &b.workspace_path),
+        Some(b.clone())
+    );
+    assert!(reusable_binding(None, &b.backend, &b.workspace_id, &b.workspace_path).is_none());
+    assert!(reusable_binding(Some(&b), &b.backend, "other", &b.workspace_path).is_none());
+    assert!(reusable_binding(Some(&b), &b.backend, &b.workspace_id, "/other").is_none());
+    let mut changed = b.backend.clone();
+    changed.user = "other".into();
+    assert!(reusable_binding(Some(&b), &changed, &b.workspace_id, &b.workspace_path).is_none());
+}
+
+#[test]
+fn missing_and_unbound_messages_point_to_settings_initialization() {
+    let b = binding();
+    for state in [
+        inspect(None, None, no_probe),
+        inspect(Some(&b), Some(&b.backend), |_| Ok(false)),
+    ] {
+        assert!(state.message.contains("设置 > 桌面宠物 > 初始化宠物目录"));
+    }
+}
 fn binding() -> Binding {
     Binding {
         backend: BackendIdentity {

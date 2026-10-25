@@ -13,12 +13,12 @@ class Node extends EventTarget {
   constructor() { super(); this.value = ''; this.textContent = ''; this.disabled = false; this.dataset = {}; this.attributes = {}; }
   setAttribute(key, value) { this.attributes[key] = value; }
 }
-function fixture({ native = true, invoke = () => state() } = {}) {
+function fixture({ native = true, invoke = () => state(), onInitialized = () => {} } = {}) {
   const root = new Node(), nodes = new Map(), calls = [];
   let markup = '';
   Object.defineProperty(root, 'innerHTML', { set(html) { markup = html; for (const m of html.matchAll(/id="(pet-workspace-[^"]+)"/g)) nodes.set(m[1], new Node()); } });
   root.querySelector = selector => nodes.get(selector.slice(1));
-  const workspace = new PetWorkspace(root, native, { async invoke(...args) { calls.push(args); return invoke(...args); } });
+  const workspace = new PetWorkspace(root, native, { async invoke(...args) { calls.push(args); return invoke(...args); } }, onInitialized);
   return { workspace, root, calls, get markup() { return markup; }, node: id => nodes.get('pet-workspace-' + id), click(id) { nodes.get('pet-workspace-' + id).dispatchEvent(new Event('click')); }, show() { workspace.setVisible(true); }, hide() { workspace.setVisible(false); } };
 }
 test('readonly path, accurate history copy, preview and hidden controls have no side effects', async () => {
@@ -26,12 +26,13 @@ test('readonly path, accurate history copy, preview and hidden controls have no 
     const f = fixture({ native });
     assert.match(f.markup, /id="pet-workspace-path"[^>]+readonly aria-readonly="true"/);
     assert.ok(f.markup.includes('固定使用 ~/.dsh-wsl-desktop/assistant，不能修改'));
-    assert.match(f.markup, /手动确认启用默认目录/);
+    assert.match(f.markup, /开启宠物时会自动初始化/);
+    assert.match(f.markup, /手动初始化或修复缺失的目录/);
     assert.match(f.markup, /旧目录及其对话历史不搬移、不删除/);
     assert.match(f.markup, /真实对话历史仍由 DSH 保存/);
     assert.doesNotMatch(source, /pick_settings_path|assistant_action|set_pet_workspace|session_create|localStorage/);
-    f.click('open'); f.click('refresh'); await tick(); assert.equal(f.calls.length, 0);
-    if (!native) { f.show(); f.click('open'); f.click('refresh'); await tick(); assert.equal(f.calls.length, 0); assert.match(f.node('message').textContent, /浏览器预览/); }
+    f.click('open'); f.click('refresh'); f.click('initialize'); await tick(); assert.equal(f.calls.length, 0);
+    if (!native) { f.show(); f.click('open'); f.click('refresh'); f.click('initialize'); await tick(); assert.equal(f.calls.length, 0); assert.match(f.node('message').textContent, /浏览器预览/); }
     f.workspace.dispose();
   }
 });
@@ -89,9 +90,43 @@ test('native values render only as plain text or input value', async () => {
   const f = fixture({ invoke: () => state({ path: '/home/<img src=x>', distribution: '<b>Ubuntu</b>', message: '<script>alert(1)</script>' }) });
   f.show(); await tick(); assert.equal(f.node('path').value, '/home/<img src=x>'); assert.equal(f.node('distribution').textContent, '<b>Ubuntu</b>'); assert.equal(f.node('message').textContent, '<script>alert(1)</script>'); f.workspace.dispose();
 });
-test('native commands have settings-only grants, guard both calls and accept no client path', () => {
+test('initialization is explicit, repeatable, pending-safe and never accepts a path', async () => {
+  const result = deferred(); const f = fixture({ invoke: command => command === 'initialize_pet_workspace' ? result.promise : state({ status: 'unbound', path: null, distribution: null }) });
+  f.show(); await tick(); assert.deepEqual(f.calls, [['get_pet_workspace']]);
+  assert.equal(f.node('initialize').disabled, false);
+  f.node('path').value = 'C:/forged'; f.click('initialize'); f.click('initialize'); f.click('open'); f.click('refresh');
+  assert.equal(f.node('initialize').disabled, true); assert.match(f.node('message').textContent, /正在初始化/);
+  assert.deepEqual(f.calls, [['get_pet_workspace'], ['initialize_pet_workspace']]);
+  result.resolve(state()); await tick(); assert.match(f.node('message').textContent, /已初始化/);
+  assert.equal(f.node('initialize').disabled, false); assert.equal(f.node('open').disabled, false);
+  // Directory readiness alone does not prove session setup finished; retry stays available.
+  f.click('initialize'); await tick(); assert.equal(f.calls.length, 3); f.workspace.dispose();
+});
+test('missing directory can be initialized again and initialization errors offer retry', async () => {
+  let fail = true; const f = fixture({ invoke: command => {
+    if (command === 'get_pet_workspace') return state({ status: 'missing', message: '目录已丢失，请初始化' });
+    if (fail) throw new Error('DSH 尚未就绪'); return state();
+  } });
+  f.show(); await tick(); assert.equal(f.node('initialize').disabled, false);
+  f.click('initialize'); await tick(); assert.match(f.node('message').textContent, /初始化未完成.*DSH 尚未就绪/);
+  assert.equal(f.node('initialize').disabled, false); assert.equal(f.node('open').disabled, true);
+  fail = false; f.click('initialize'); await tick(); assert.match(f.node('message').textContent, /已初始化/); f.workspace.dispose();
+});
+test('late initialization replies cannot overwrite a re-entered settings view', async () => {
+  const result = deferred(); const f = fixture({ invoke: command => command === 'initialize_pet_workspace' ? result.promise : state({ status: 'unbound', path: null, distribution: null }) });
+  f.show(); await tick(); f.click('initialize'); f.hide(); f.show(); await tick();
+  result.resolve(state()); await tick(); assert.equal(f.node('path').value, ''); assert.equal(f.node('initialize').disabled, false); f.workspace.dispose();
+});
+test('only successful current initialization refreshes dependent settings', async () => {
+  let refreshed = 0; let status = 'missing'; const f = fixture({onInitialized:()=>refreshed++,invoke:()=>state({status})});
+  f.show(); await tick(); assert.equal(refreshed, 0);
+  f.click('initialize'); await tick(); assert.equal(refreshed, 0);
+  status = 'ready'; f.click('initialize'); await tick(); assert.equal(refreshed, 1);
+  f.click('open'); await tick(); assert.equal(refreshed, 1); f.workspace.dispose();
+});
+test('native commands have settings-only grants, guard all calls and accept no client path', () => {
   const native = read('src-tauri/src/desktop_pet_workspace.rs');
-  for (const name of ['get_pet_workspace', 'open_pet_workspace']) {
+  for (const name of ['get_pet_workspace', 'open_pet_workspace', 'initialize_pet_workspace']) {
     assert.ok(read('src-tauri/build.rs').includes('"' + name + '"'));
     assert.ok(read('src-tauri/src/desktop.rs').includes('pet_workspace::' + name));
     const granted = [];
@@ -104,8 +139,10 @@ test('native commands have settings-only grants, guard both calls and accept no 
     const args = native.slice(native.indexOf('async fn ' + name)).split(') ->')[0];
     assert.doesNotMatch(args, /path:|distribution:|request:|String/);
   }
-  assert.equal(native.split('assert_settings(&view)?;').length - 1, 2);
+  assert.equal(native.split('assert_settings(&view)?;').length - 1, 3);
   assert.match(native, /controller.backend.lock/); assert.match(native, /with_workspace_binding/); assert.match(native, /open::that_detached/);
-  for (const forbidden of ['prepare_directory', 'create_dir', 'session_create', '.chat(', 'Command::new', 'assistant_action']) assert.ok(!native.includes(forbidden));
+  // Read/open remain inspection-only; initialization is a distinct Settings-only command.
+  const inspection = native.slice(0, native.indexOf('pub(super) async fn initialize_pet_workspace'));
+  for (const forbidden of ['prepare_directory', 'create_dir', 'session_create', '.chat(', 'Command::new', 'assistant_action']) assert.ok(!inspection.includes(forbidden));
   const guard = read('src-tauri/src/desktop_pet_settings.rs'); assert.ok(guard.includes('assert_local(view)?')); assert.ok(guard.includes('"launcher-settings" | "dsh-settings"'));
 });

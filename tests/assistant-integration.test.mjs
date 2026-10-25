@@ -47,8 +47,14 @@ test('pet workspace creation and restored bindings cannot select a custom direct
   assert.match(directory, /if !create \{[\s\S]*?args\.push\("--inspect"/);
   assert.doesNotMatch(directory, /path\.to_owned/);
   const runAction = native.slice(native.indexOf('fn run_action('), native.indexOf('fn open_session('));
+  const initializer = native.slice(native.indexOf('fn initialize_locked('), native.indexOf('fn run_action('));
+  assert.ok(initializer.includes('default_directory(&backend, true)?'));
+  assert.match(initializer, /state\s*\.store\(\)\s*\.load\(\)/);
+  assert.ok(initializer.includes('require_session(&rows, &binding)?'));
   const enable = runAction.slice(runAction.indexOf('Action::Enable {} =>'), runAction.indexOf('Action::Retry =>'));
-  assert.ok(enable.includes('default_directory(&config, true)?'));
+  assert.ok(enable.includes('return Err('));
+  const access = native.slice(native.indexOf('fn action_allowed('), native.indexOf('fn document_allowed('));
+  assert.ok(access.includes('Action::Enable { .. } => false'));
   const checked = native.slice(native.indexOf('fn checked_binding('), native.indexOf('fn default_directory('));
   assert.ok(checked.includes('require_default_workspace'));
   assert.ok(checked.includes('default_directory(config, false)?'));
@@ -65,6 +71,28 @@ test('pet workspace creation and restored bindings cannot select a custom direct
   assert.doesNotMatch(retry, /default_directory\(&config, true\)|workspace_create/);
 });
 
+test('status polling preserves missing-workspace initialization guidance', () => {
+  const native = read('src-tauri/src/desktop_assistant.rs');
+  const polling = native.slice(native.indexOf('// Independent status observation'), native.indexOf('// Native hit testing'));
+  assert.match(polling, /default_directory\(&config, false\)/);
+  assert.match(polling, /Err\(error\) => \{[\s\S]*?workspace_error_phase\(&error, "offline"\)/);
+  assert.doesNotMatch(polling, /set_connection\(false, "offline", &error\)/);
+});
+
+test('show queues one initialization that waits for backend readiness and operation leases', () => {
+  const native = read('src-tauri/src/desktop_assistant.rs');
+  const reveal = native.slice(native.indexOf('pub(super) fn reveal_pet('), native.indexOf('pub(super) fn show('));
+  assert.ok(reveal.includes('state.initialize_requested.store(true, Ordering::SeqCst)'));
+  const worker = native.slice(native.indexOf('pub(super) fn start('), native.indexOf('// One follower per selected generation.'));
+  assert.ok(worker.includes('init_controller.snapshot().state == "ready"'));
+  assert.ok(worker.includes('crate::pet_memory::operation_mutex().try_lock()'));
+  assert.ok(worker.includes('init_state.operation.try_lock()'));
+  assert.ok(worker.includes('.swap(false, Ordering::SeqCst)'));
+  assert.ok(worker.includes('initialize_locked(&init_app, &init_state)'));
+  const initialize = native.slice(native.indexOf('fn initialize_locked('), native.indexOf('fn run_action('));
+  assert.ok(initialize.includes('current != Some(&binding)'));
+  for (const unsafe of ['session_prompt(', 'session_delete(', 'remove_dir', 'remove_file']) assert.ok(!initialize.includes(unsafe));
+});
 test('assistant is built, staged, and registered with generated command permissions', () => {
   assert.ok(read('vite.config.ts').includes("assistant: 'assistant.html'"));
   assert.ok(read('scripts/Build-Windows.ps1').includes("'assistant.html'"));
@@ -161,7 +189,7 @@ test('pet controls share actual visibility without inheriting DSH or service pri
   const cap=JSON.parse(read('src-tauri/capabilities/pet-settings.json'));
   assert.equal(cap.local,true);assert.equal(cap.remote,undefined);assert.equal(cap.windows,undefined);
   assert.deepEqual(cap.webviews,['launcher-settings','dsh-settings']);
-  assert.deepEqual(cap.permissions,['allow-get-pet-memory','allow-pet-memory-action','allow-get-pet-workspace','allow-open-pet-workspace','allow-get-pet-settings','allow-set-pet-settings','allow-set-pet-visibility']);
+  assert.deepEqual(cap.permissions,['allow-get-pet-memory','allow-pet-memory-action','allow-initialize-pet-workspace','allow-get-pet-workspace','allow-open-pet-workspace','allow-get-pet-settings','allow-set-pet-settings','allow-set-pet-visibility']);
   const source=read('src-tauri/src/desktop_pet_settings.rs');
   assert.ok(source.includes('assert_local(view)?'));
   assert.ok(source.includes('"launcher-settings" | "dsh-settings"'));

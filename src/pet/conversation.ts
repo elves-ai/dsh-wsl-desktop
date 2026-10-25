@@ -12,7 +12,8 @@ export function conversationCue(state: AssistantSnapshot): ConversationCue {
   const scope = [state.workspace_id, state.session_id].join(':');
   const cue = (key: string, kind: ConversationCue['kind'], text: string, busy = false): ConversationCue =>
     ({ key: scope + ':' + key, kind, text, busy });
-  if (!state.enabled) return cue('setup', 'greeting', '先给我一个独立的空间，就可以在这里聊天啦。');
+  if (state.phase === 'loading') return cue('loading', 'thinking', state.message || '正在连接桌面助手…', true);
+  if (!state.enabled || state.phase === 'workspace_missing') return cue('setup', 'greeting', state.phase === 'error' && state.message ? '初始化未完成：' + state.message : '宠物目录尚未初始化或已丢失，请到「设置 → 桌面宠物」初始化后再聊天。');
   if (!state.connected) return cue('offline', 'error', state.message || '暂时连不上，草稿会为你保留。');
   if (['error', 'failed'].includes(state.phase)) return cue('error:' + state.message, 'error', state.message || '刚才没有完成，可以重试连接。');
   if (state.phase === 'cancelling') return cue('stopping', 'thinking', '正在停下来…', true);

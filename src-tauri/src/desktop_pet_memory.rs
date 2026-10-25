@@ -48,7 +48,7 @@ fn run_memory(
     let (config, binding) = current(app)?;
     let (Some(config), Some(binding)) = (config, binding) else {
         return Ok(MemorySnapshot::unavailable(
-            "尚未绑定桌宠工作目录；查看此页不会初始化记忆。",
+            "尚未初始化桌宠工作目录，请前往设置 > 桌面宠物 > 初始化宠物目录；查看此页不会初始化记忆。",
         ));
     };
     if pet_memory::scope(&binding, &pet_memory::backend_identity(&config)).is_err() {

@@ -48,7 +48,7 @@ class Node {
 }
 function setup({ native = true, view = 'chat', speechSupported = false, autoRead = false, legacyAutoRead = false, storageDenied = false, getSpeechPreferences, setSpeechPreferences, listenGate, getSnapshot, getPreferences, getInbox, openNotification, getInteractions, submitInteraction, openInteraction, setTopmost, setSlingshot, actionResult, getGeometry, movePet, dragPet, now = () => performance.now() } = {}) {
   const nodes = new Map();
-  const ids = ['pet-read', 'pet-read-status', 'pet-auto-read', 'assistant-root', 'pet-dialogue', 'pet-speech', 'pet-speech-label', 'pet-speech-text', 'pet-speech-close', 'pet-speech-expand', 'pet-composer', 'pet-input-close', 'pet-enable', 'preview', 'pet', 'pet-media', 'pet-animation-trigger', 'pet-animation', 'pet-animation-list', 'pet-menu', 'pet-bubble', 'pet-interaction', 'pet-topmost', 'pet-slingshot', 'pet-fixed', 'notice', 'status', 'setup', 'conversation', 'sessions', 'new-session', 'session-bar', 'composer-footnote', 'runtime-message', 'draft-hint', 'retry', 'send', 'cancel', 'enable', 'workspace', 'consent', 'enable-form', 'send-form', 'draft'];
+  const ids = ['initialize', 'pet-initialize', 'pet-read', 'pet-read-status', 'pet-auto-read', 'assistant-root', 'pet-dialogue', 'pet-speech', 'pet-speech-label', 'pet-speech-text', 'pet-speech-close', 'pet-speech-expand', 'pet-composer', 'pet-input-close', 'pet-enable', 'preview', 'pet', 'pet-media', 'pet-animation-trigger', 'pet-animation', 'pet-animation-list', 'pet-menu', 'pet-bubble', 'pet-interaction', 'pet-topmost', 'pet-slingshot', 'pet-fixed', 'notice', 'status', 'setup', 'conversation', 'sessions', 'new-session', 'session-bar', 'composer-footnote', 'runtime-message', 'draft-hint', 'retry', 'send', 'cancel', 'enable', 'workspace', 'consent', 'enable-form', 'send-form', 'draft'];
   ids.forEach(id => nodes.set(id, new Node(id)));
   nodes.get('pet-menu').hidden = true;
   nodes.get('pet-menu').append(nodes.get('pet-animation-trigger'));
@@ -267,74 +267,49 @@ test('a deleted current session can recover through explicit history selection o
   ui.emit(ready(2, { connected: false, workspace_id: null }));
   assert.equal(ui.nodes.get('sessions').disabled, true); assert.equal(ui.nodes.get('new-session').disabled, true);
 });
-test('assistant setup shows only the fixed readonly default and no project reconfiguration', async () => {
+test('assistant setup sends users to settings instead of enabling from chat', async () => {
   const ui = setup({ getSnapshot: () => ({ ...model.initialSnapshot(), phase: 'setup', revision: 1 }) }); await tick();
   const markup = ui.nodes.get('assistant-root').innerHTML;
-  const input = markup.match(/<input id="workspace"[^>]*>/)[0];
-  assert.match(input, /value="~\/\.dsh-wsl-desktop\/assistant"/);
-  assert.match(input, /\breadonly\b/);
-  assert.match(input, /aria-readonly="true"/);
-  assert.equal(ui.nodes.get('workspace').readOnly, true);
-  assert.equal(ui.nodes.get('workspace').value, '~/.dsh-wsl-desktop/assistant');
-  assert.equal(ui.nodes.get('consent').checked, false);
-  assert.match(markup, /不能修改/);
-  assert.match(markup, /旧自定义目录及其对话历史不搬移、不删除/);
-  assert.doesNotMatch(source, /reconfigure|workspace\??\.value/);
-  ui.nodes.get('enable-form').emit('submit'); await tick();
+  assert.match(markup, /设置 → 桌面宠物 → 对话工作目录/);
+  assert.match(markup, /开启宠物时也会自动初始化/);
+  assert.match(markup, /id="initialize"[^>]+data-action="pet_settings"/);
+  assert.doesNotMatch(markup, /id="enable-form"|id="consent"|id="workspace"/);
+  assert.equal(ui.nodes.get('setup').hidden, false); assert.equal(ui.nodes.get('retry').hidden, true);
   assert.equal(ui.calls.filter(call => call.name === 'assistant_action').length, 0);
+  const button = ui.nodes.get('initialize'); button.dataset.action = 'pet_settings';
+  ui.nodes.get('assistant-root').emit('click', { target: button }); await tick();
+  const requests = ui.calls.filter(call => call.name === 'assistant_action').map(call => call.args.request);
+  assert.deepEqual(JSON.parse(JSON.stringify(requests)), [{ action: 'pet_settings' }]);
 });
-
-test('enable sends only the action even when the readonly DOM path is forged', async () => {
-  for (const path of ['~/.dsh-wsl-desktop/assistant', '/home/me/custom assistant', 'relative', '', 'C:\\forged']) {
-    const ui = setup({ getSnapshot: () => ({ ...model.initialSnapshot(), phase: 'setup', revision: 1 }) }); await tick();
-    ui.nodes.get('workspace').readOnly = false;
-    ui.nodes.get('workspace').value = path;
-    ui.nodes.get('consent').checked = true;
-    ui.nodes.get('enable-form').emit('submit'); await tick();
-    const requests = ui.calls.filter(call => call.name === 'assistant_action').map(call => call.args.request);
-    assert.deepEqual(JSON.parse(JSON.stringify(requests)), [{ action: 'enable' }]);
-  }
-});
-
-test('old custom snapshots never populate the default setup display or auto-enable', async () => {
-  for (const oldPath of ['/home/me/DSH-Assistant', '/home/me/custom assistant']) {
-    for (const snapshotPath of [oldPath, null]) {
-      for (const initiallyEnabled of [false, true]) {
-        const ui = setup({ getSnapshot: () => ready(1, { enabled: initiallyEnabled, phase: initiallyEnabled ? 'ready' : 'setup', workspace_path: oldPath }) }); await tick();
-        assert.equal(ui.nodes.get('workspace').value, '~/.dsh-wsl-desktop/assistant');
-        ui.nodes.get('consent').checked = true;
-        ui.emit(ready(2, { enabled: false, connected: false, phase: 'setup', workspace_path: snapshotPath }));
-        assert.equal(ui.nodes.get('setup').hidden, false);
-        assert.equal(ui.nodes.get('workspace').value, '~/.dsh-wsl-desktop/assistant');
-        assert.equal(ui.nodes.get('consent').checked, !initiallyEnabled);
-        assert.equal(ui.calls.filter(call => call.name === 'assistant_action').length, 0);
-      }
-    }
-  }
-});
-
-test('re-entering setup requires fresh consent and hides history and composer', async () => {
-  const ui = setup({ getSnapshot: () => ({ ...model.initialSnapshot(), phase: 'setup', revision: 1 }) }); await tick();
-  ui.nodes.get('consent').checked = true;
-  ui.emit({ ...model.initialSnapshot(), phase: 'setup', revision: 2 });
-  assert.equal(ui.nodes.get('consent').checked, true, 'same setup refresh preserves the current confirmation');
-  ui.emit(ready(3));
-  ui.emit(ready(4, { enabled: false, connected: false, phase: 'setup', workspace_path: '/home/me/old' }));
+test('setup from old custom snapshots hides sending without auto-enabling or moving history', async () => {
+  const ui = setup(); await tick();
+  ui.emit(ready(2, { enabled: false, connected: false, phase: 'setup', workspace_path: '/home/me/old' }));
   assert.equal(ui.nodes.get('setup').hidden, false);
   for (const id of ['session-bar', 'send-form', 'composer-footnote']) assert.equal(ui.nodes.get(id).hidden, true);
-  assert.equal(ui.nodes.get('consent').checked, false);
-  ui.nodes.get('enable-form').emit('submit'); await tick();
+  assert.equal(ui.nodes.get('send').disabled, true); assert.equal(ui.nodes.get('retry').hidden, true);
   assert.equal(ui.calls.filter(call => call.name === 'assistant_action').length, 0);
-  ui.nodes.get('consent').checked = true;
-  ui.emit(ready(5, { enabled: false, connected: false, phase: 'error' }));
-  ui.emit(ready(6, { enabled: false, connected: false, phase: 'setup' }));
-  assert.equal(ui.nodes.get('consent').checked, false, 'disabled error to setup also starts a new confirmation');
-  ui.nodes.get('enable-form').emit('submit'); await tick();
-  assert.equal(ui.calls.filter(call => call.name === 'assistant_action').length, 0);
-  ui.nodes.get('consent').checked = true;
-  ui.nodes.get('enable-form').emit('submit'); await tick();
-  const requests = ui.calls.filter(call => call.name === 'assistant_action').map(call => call.args.request);
-  assert.deepEqual(JSON.parse(JSON.stringify(requests)), [{ action: 'enable' }]);
+});
+test('uninitialized and missing pet directories provide settings action instead of reconnect', async () => {
+  for (const patch of [{enabled:false,phase:'setup'}, {enabled:true,phase:'workspace_missing'}]) {
+    const ui = setup({view:'pet',getSnapshot:()=>ready(1,{...patch,connected:false})}); await tick();
+    ui.nodes.get('pet').emit('click'); await tick();
+    assert.match(ui.nodes.get('pet-speech-text').textContent, /设置.*初始化/);
+    assert.equal(ui.nodes.get('retry').hidden, true);
+    assert.equal(ui.nodes.get('pet-initialize').hidden, false); assert.equal(ui.nodes.get('pet-initialize').disabled, false);
+    assert.equal(ui.nodes.get('send').disabled, true);
+    const button = ui.nodes.get('pet-initialize'); button.dataset.action = 'pet_settings';
+    ui.nodes.get('assistant-root').emit('click',{target:button}); await tick();
+    assert.ok(ui.calls.some(c=>c.name==='assistant_action' && c.args.request.action==='pet_settings'));
+    assert.ok(!ui.calls.some(c=>c.name==='assistant_action' && ['enable','retry','send'].includes(c.args.request.action)));
+    ui.emit(ready(2)); assert.equal(ui.nodes.get('pet-initialize').hidden, true);
+  }
+});
+test('offline initialized pets still offer reconnect and previews cannot initialize', async () => {
+  const offline = setup({view:'pet',getSnapshot:()=>ready(1,{connected:false,phase:'error'})}); await tick();
+  assert.equal(offline.nodes.get('pet-initialize').hidden, true); assert.equal(offline.nodes.get('retry').hidden, false);
+  const preview = setup({view:'pet',native:false}); await tick();
+  assert.equal(preview.nodes.get('pet-initialize').disabled, true);
+  assert.equal(preview.calls.length, 0);
 });
 
 test('cancelling without a running turn retains an explicit retry recovery path', async () => {

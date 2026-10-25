@@ -30,7 +30,7 @@ root.innerHTML = view === 'pet' ?
 <header class="pet-menu-header"><span>桌宠</span><button type="button" class="pet-menu-close" data-pet-command="close-menu" aria-label="关闭菜单"><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 6 12 12M6 18 18 6"/></svg></button></header>
 <button type="button" data-pet-command="talk"><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 11a8 8 0 0 1-8 8H4l1.5-4A8 8 0 1 1 20 11Z"/></svg><span class="pet-menu-label">说句话</span></button>
 <button type="button" data-pet-command="replay"><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 10a8 8 0 1 1 1 7M4 4v6h6"/></svg><span class="pet-menu-label">重看上一句</span></button>
-<button type="button" data-action="toggle_chat"><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h4"/></svg><span class="pet-menu-label">启用与历史</span></button>
+<button type="button" data-action="toggle_chat"><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h4"/></svg><span class="pet-menu-label">对话历史</span></button>
 <button type="button" data-action="open_dsh"><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M14 4h6v6M20 4l-9 9M10 4H4v16h16v-6"/></svg><span class="pet-menu-label">打开 DSH</span></button>
 <hr class="pet-menu-separator">
 <button id="pet-auto-read" type="button" role="switch" aria-label="自动朗读回复" aria-checked="false" data-pet-command="auto-read" title="仅自动朗读新完成的短回复，使用本地千问音色"><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m11 5-5 4H3v6h3l5 4ZM15 8a6 6 0 0 1 0 8M18 5a10 10 0 0 1 0 14"/></svg><span class="pet-menu-label">自动朗读</span><span class="pet-menu-indicator" aria-hidden="true"></span></button>
@@ -41,8 +41,8 @@ root.innerHTML = view === 'pet' ?
 <button type="button" data-action="pet_settings"><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3" fill="var(--ui-bg)"/><circle cx="15" cy="17" r="3" fill="var(--ui-bg)"/></svg><span class="pet-menu-label">宠物设置</span></button>
 <button type="button" data-action="hide"><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 3l18 18M10 5a11 11 0 0 1 11 7 14 14 0 0 1-3 4M6 6a14 14 0 0 0-3 6 11 11 0 0 0 14 6M10 10a3 3 0 0 0 4 4"/></svg><span class="pet-menu-label">隐藏宠物</span></button>
 </section><section id="pet-animation" class="pet-menu pet-submenu" role="menu" aria-label="选择宠物动作" hidden><button type="button" class="pet-submenu-back" data-submenu-back aria-label="返回桌宠菜单">‹ 返回</button><div id="pet-animation-list" role="presentation"></div></section>` +
-  '<section id="pet-dialogue" class="pet-dialogue" aria-label="与鲸鱼娘说话" hidden><section id="pet-speech" class="pet-speech" hidden><header class="pet-speech-header"><span id="pet-speech-label">鲸鱼娘</span><button id="cancel" type="button" data-action="cancel" class="pet-speech-stop" hidden>停止</button><button id="pet-speech-close" type="button" aria-label="收起这句话">×</button></header><div id="pet-speech-text" class="pet-speech-text" role="status" aria-live="polite" aria-atomic="true"></div><div class="pet-speech-actions"><button id="pet-speech-expand" type="button" aria-controls="pet-speech-text" aria-expanded="false" hidden>展开全文</button><button id="pet-read" type="button" aria-label="朗读回复" hidden>朗读</button><button id="retry" type="button" data-action="retry" hidden>重新连接 / 重试</button></div><p id="pet-read-status" class="pet-read-status" role="status" hidden></p></section></section>' +
-  '<section id="pet-composer" class="pet-composer" aria-label="给鲸鱼娘输入消息" hidden><button id="pet-enable" type="button" data-action="toggle_chat" hidden>启用助手</button><form id="send-form"><label class="sr-only" for="draft">跟鲸鱼娘说点什么</label><div class="pet-compose-row"><textarea id="draft" rows="1" placeholder="跟我说点什么…" maxlength="100000"></textarea><button id="send" type="submit" class="primary" aria-label="发送消息">↑</button><button id="pet-input-close" type="button" aria-label="收起输入，保留草稿">×</button></div><p id="draft-hint">Enter 发送 · Shift + Enter 换行</p></form></section><div id="pet-bubble" hidden></div><div id="pet-interaction" hidden></div><p id="notice" class="pet-notice" role="alert" hidden></p></section>' :
+  '<section id="pet-dialogue" class="pet-dialogue" aria-label="与鲸鱼娘说话" hidden><section id="pet-speech" class="pet-speech" hidden><header class="pet-speech-header"><span id="pet-speech-label">鲸鱼娘</span><button id="cancel" type="button" data-action="cancel" class="pet-speech-stop" hidden>停止</button><button id="pet-speech-close" type="button" aria-label="收起这句话">×</button></header><div id="pet-speech-text" class="pet-speech-text" role="status" aria-live="polite" aria-atomic="true"></div><div class="pet-speech-actions"><button id="pet-speech-expand" type="button" aria-controls="pet-speech-text" aria-expanded="false" hidden>展开全文</button><button id="pet-read" type="button" aria-label="朗读回复" hidden>朗读</button><button id="pet-initialize" type="button" data-action="pet_settings" hidden>去设置初始化</button><button id="retry" type="button" data-action="retry" hidden>重新连接 / 重试</button></div><p id="pet-read-status" class="pet-read-status" role="status" hidden></p></section></section>' +
+  '<section id="pet-composer" class="pet-composer" aria-label="给鲸鱼娘输入消息" hidden><button id="pet-enable" type="button" data-action="pet_settings" hidden>去设置初始化</button><form id="send-form"><label class="sr-only" for="draft">跟鲸鱼娘说点什么</label><div class="pet-compose-row"><textarea id="draft" rows="1" placeholder="跟我说点什么…" maxlength="100000"></textarea><button id="send" type="submit" class="primary" aria-label="发送消息">↑</button><button id="pet-input-close" type="button" aria-label="收起输入，保留草稿">×</button></div><p id="draft-hint">Enter 发送 · Shift + Enter 换行</p></form></section><div id="pet-bubble" hidden></div><div id="pet-interaction" hidden></div><p id="notice" class="pet-notice" role="alert" hidden></p></section>' :
   `<section class="chat-shell" aria-label="鲸鱼娘对话">
 <header class="chat-header"><div class="brand"><span class="mini-buddy" aria-hidden="true">${face}</span>
 <div><h1>鲸鱼娘 <span>DSH 助手</span></h1><p id="status" role="status"></p></div></div>
@@ -53,12 +53,9 @@ root.innerHTML = view === 'pet' ?
 <select id="sessions" aria-label="历史对话"><option value="">暂无对话</option></select>
 <button id="new-session" data-action="new_session" class="quiet">＋ 新对话</button></div>
 <div id="notice" class="notice" role="alert" hidden></div>
-<section id="setup" class="setup" hidden><span class="setup-icon" aria-hidden="true">⌂</span><h2>给鲸鱼娘一个独立的空间</h2>
-<p id="workspace-help">工作目录固定为下方默认值，不能修改。确认启用后才会在 WSL 中准备目录并注册 DSH 项目；旧自定义目录及其对话历史不搬移、不删除，历史仍由 DSH 保存。</p>
-<form id="enable-form"><label for="workspace">固定 WSL 工作目录（只读）</label>
-<input id="workspace" value="~/.dsh-wsl-desktop/assistant" readonly aria-readonly="true" aria-describedby="workspace-help" spellcheck="false" />
-<label class="consent"><input id="consent" type="checkbox" required />我确认使用固定默认目录，允许助手在这里工作</label>
-<button id="enable" class="primary" type="submit">确认并启用</button></form></section>
+<section id="setup" class="setup" hidden><span class="setup-icon" aria-hidden="true">⌂</span><h2>先初始化宠物目录</h2>
+<p id="workspace-help">请到“设置 → 桌面宠物 → 对话工作目录”初始化。开启宠物时也会自动初始化，固定使用 ~/.dsh-wsl-desktop/assistant。已有目录和对话历史不会被清空。</p>
+<button id="initialize" class="primary" type="button" data-action="pet_settings">去设置初始化</button></section>
 <section id="conversation" class="conversation" role="log" aria-label="对话消息" aria-live="polite" aria-relevant="additions text"></section>
 <footer class="composer-area"><p id="runtime-message" class="runtime-message"></p>
 <button id="retry" data-action="retry" class="retry" hidden>重新连接 / 重试</button>
@@ -145,10 +142,6 @@ function accept(payload: unknown) {
   if (next === state) return;
   const changedSession = next.session_id !== state.session_id || next.workspace_id !== state.workspace_id;
   if (changedSession) saveDraft();
-  if (!next.enabled && (state.enabled || (next.phase === 'setup' && state.phase !== 'setup'))) {
-    // Entering setup always requires fresh consent, including disabled legacy bindings.
-    const consent = el<HTMLInputElement>('consent'); if (consent) consent.checked = false;
-  }
   state = next;
   transportFailed = false;
   if (changedSession) { loadDraft(); sendUncertain = false; }
@@ -401,7 +394,8 @@ function renderPetConversation() {
   const label = el('pet-speech-label'); if (label) label.textContent = cue.kind === 'thinking' ? '鲸鱼娘 · 想一想' : cue.kind === 'error' ? '鲸鱼娘 · 没连上' : '鲸鱼娘';
   const expand = el('pet-speech-expand');
   if (expand) { expand.hidden = !petSpeechExpanded; expand.textContent = petSpeechExpanded ? '收起全文' : '展开全文'; expand.setAttribute('aria-expanded', String(petSpeechExpanded)); }
-  const enable = el('pet-enable'); if (enable) enable.hidden = state.enabled;
+  const needsInitialization = (!state.enabled && state.phase !== 'loading') || state.phase === 'workspace_missing';
+  for (const id of ['pet-enable', 'pet-initialize']) { const button = el<HTMLButtonElement>(id); if (button) { button.hidden = !needsInitialization; button.disabled = !native || pending; } }
   const hint = el('draft-hint'); if (hint && !native) hint.textContent = '浏览器预览 · 不会发送消息';
   renderPetNarration();
   syncPetNotificationOverlay();
@@ -457,7 +451,9 @@ function render() {
   const status = el('status'); if (status) status.textContent = label;
   const preview = el('preview'); if (preview) preview.hidden = native;
   const notice = el('notice'); if (notice) { notice.textContent = localError; notice.hidden = !localError || view === 'pet'; }
-  const setup = el('setup'); if (setup) setup.hidden = state.enabled || (native && state.phase === 'loading');
+  const needsInitialization = (!state.enabled && state.phase !== 'loading') || state.phase === 'workspace_missing';
+  const setup = el('setup'); if (setup) setup.hidden = !needsInitialization;
+  const initialize = el<HTMLButtonElement>('initialize'); if (initialize) initialize.disabled = !native || pending;
   const conversation = el('conversation'); if (conversation) conversation.hidden = !state.enabled;
   for (const id of ['session-bar', 'send-form', 'composer-footnote']) { const node = el(id); if (node) node.hidden = !state.enabled; }
   const sessions = el<HTMLSelectElement>('sessions');
@@ -498,10 +494,9 @@ function render() {
   }
   const runtime = el('runtime-message'); if (runtime) runtime.textContent = state.message || (state.running ? '鲸鱼娘正在处理，可以随时停止。' : '');
   const hint = el('draft-hint'); if (hint) hint.textContent = sendUncertain ? '上次发送未确认；请先核对历史，草稿仍保留' : !effectiveState.connected && native ? '连接恢复前，草稿会为你保留' : 'Enter 发送 · Shift + Enter 换行';
-  const retry = el<HTMLButtonElement>('retry'); if (retry) { retry.hidden = !native || (state.connected && !transportFailed && !['error', 'failed', 'sending', 'cancelling'].includes(state.phase)); retry.disabled = pending; }
+  const retry = el<HTMLButtonElement>('retry'); if (retry) { retry.hidden = !native || needsInitialization || (state.phase === 'loading' && !transportFailed) || (state.connected && !transportFailed && !['error', 'failed', 'sending', 'cancelling'].includes(state.phase)); retry.disabled = pending; }
   const send = el<HTMLButtonElement>('send'); if (send) send.disabled = !native || !canSend(effectiveState, draft?.value ?? '', pending);
   const cancel = el<HTMLButtonElement>('cancel'); if (cancel) { cancel.hidden = !state.running && !state.waiting && !['sending', 'cancelling'].includes(state.phase); cancel.disabled = !native || pending || state.phase === 'cancelling'; }
-  const enable = el<HTMLButtonElement>('enable'); if (enable) enable.disabled = !native || pending || state.phase === 'loading';
   const newSession = el<HTMLButtonElement>('new-session'); if (newSession) newSession.disabled = !native || pending || !state.enabled || !state.workspace_id || state.running || state.waiting;
   renderPetConversation();
   root.querySelectorAll<HTMLButtonElement>('[data-action]').forEach(button => {
@@ -534,12 +529,6 @@ root.addEventListener('click', event => {
 el<HTMLSelectElement>('sessions')?.addEventListener('change', event => {
   const sessionId = (event.target as HTMLSelectElement).value;
   if (sessionId && sessionId !== state.session_id) void exclusive('select_session', { sessionId });
-}, { signal: cleanup.signal });
-el('enable-form')?.addEventListener('submit', event => {
-  event.preventDefault();
-  if (state.enabled || state.phase === 'loading' || !el<HTMLInputElement>('consent')?.checked) return;
-  // The native boundary chooses the fixed directory; never read a path from the DOM.
-  void exclusive('enable');
 }, { signal: cleanup.signal });
 async function send() {
   if (!native || !draft || composing || transportFailed || !canSend(state, draft.value, pending)) return;

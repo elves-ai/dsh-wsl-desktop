@@ -115,7 +115,7 @@ app.innerHTML = settingsView ? `
     <section id="settings-power" aria-label="电源管理" hidden><div class="setting-group"><div class="toggle-row"><div><h2>任务期间防休眠</h2><p id="power-help">默认启用。任务运行期间，仅防止系统自动休眠，屏幕仍可熄灭。</p></div><label class="switch"><input id="power-enabled" type="checkbox" aria-label="任务期间防休眠" aria-describedby="power-help power-message" checked disabled><span></span></label></div><p id="power-active" class="setting-help" role="status" aria-live="polite">正在读取保护状态。</p><p id="power-message" class="setting-help" role="status" aria-live="polite">正在读取电源设置。</p><button class="button secondary" id="power-refresh" type="button" disabled>重新检测</button></div><p class="setting-help">最小化到托盘后继续保护；退出启动器后不再保护。不阻止手动睡眠或合盖休眠。</p></section>
     <section id="settings-pet" aria-label="桌面宠物" hidden>
       <div class="setting-group">
-        <div class="toggle-row"><div><h2>显示桌面宠物</h2><p id="pet-visible-help">立即显示或隐藏桌面宠物，不会停止 DSH 任务。</p></div><label class="switch"><input id="pet-visible" type="checkbox" aria-label="显示桌面宠物" aria-describedby="pet-visible-help pet-message" disabled><span></span></label></div>
+        <div class="toggle-row"><div><h2>显示桌面宠物</h2><p id="pet-visible-help">开启时自动初始化宠物目录；隐藏不会停止 DSH 任务。</p></div><label class="switch"><input id="pet-visible" type="checkbox" aria-label="显示桌面宠物" aria-describedby="pet-visible-help pet-message" disabled><span></span></label></div>
         <div class="toggle-row"><div><h2>启动时显示</h2><p id="pet-startup-help">保存在本机，下次启动生效；不改变当前显示状态。</p></div><label class="switch"><input id="pet-startup-visible" type="checkbox" aria-label="启动时显示" aria-describedby="pet-startup-help pet-message" disabled><span></span></label></div>
         <div class="toggle-row"><div><h2>允许漫游</h2><p id="pet-roaming-help">保存在本机，即时生效。关闭后停止随机漫游，仍可拖拽、抛掷和点播动作。</p></div><label class="switch"><input id="pet-roaming-enabled" type="checkbox" aria-label="允许漫游" aria-describedby="pet-roaming-help pet-message" disabled><span></span></label></div>
         <div class="toggle-row"><div><h2>允许弹弓</h2><p id="pet-slingshot-help">保存在本机，即时生效。开启后快速连按再拖可蓄力弹射；关闭不影响普通拖拽和甩抛。</p></div><label class="switch"><input id="pet-slingshot-enabled" type="checkbox" aria-label="允许弹弓" aria-describedby="pet-slingshot-help pet-message" disabled><span></span></label></div>
@@ -188,7 +188,7 @@ let settingsSectionRevision = 0;
 let settingsPageRevealed = !native;
 const speechSettings = settingsView ? new SpeechSettings(document.getElementById('settings-speech')!, window, native, { invoke, listen },
   (root) => new SpeechResources(root, window, native, { invoke, listen })) : undefined;
-const petWorkspace = settingsView ? new PetWorkspace(document.getElementById('settings-pet-workspace')!, native, { invoke }) : undefined;
+const petWorkspace = settingsView ? new PetWorkspace(document.getElementById('settings-pet-workspace')!, native, { invoke }, () => { void petMemory?.refresh(); }) : undefined;
 const petMemory = settingsView ? new PetMemory(document.getElementById('settings-pet-memory')!, native, { invoke }) : undefined;
 const repositoryInput = document.getElementById('repository-input') as HTMLInputElement;
 const saveRepositoryButton = document.getElementById('save-repository') as HTMLButtonElement;
@@ -734,7 +734,10 @@ async function performPetSettings(command: 'get_pet_settings' | 'set_pet_setting
     }
   } finally {
     petPending = false;
-    if (!petDisposed) renderPetSettings();
+    if (!petDisposed) {
+      renderPetSettings();
+      if (command === 'set_pet_visibility') { void petWorkspace?.refresh(); void petMemory?.refresh(); }
+    }
   }
 }
 

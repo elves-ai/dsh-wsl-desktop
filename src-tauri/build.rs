@@ -28,6 +28,7 @@ fn main() {
                 "drag_pet",
                 "get_pet_memory",
                 "pet_memory_action",
+                "initialize_pet_workspace",
                 "get_pet_workspace",
                 "open_pet_workspace",
                 "get_pet_settings",

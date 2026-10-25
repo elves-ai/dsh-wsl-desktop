@@ -120,7 +120,7 @@ class AssistantDirectoryTests(unittest.TestCase):
                 before = Path(directory).stat()
                 with patch.object(Path, "mkdir", side_effect=AssertionError("inspect must not create")), patch.object(os, "mkdir", side_effect=AssertionError("inspect must not create")), patch.object(os, "chmod", side_effect=AssertionError("inspect must not chmod")):
                     result = helper.inspect()
-                self.assertEqual(result, {"path": str(data / "assistant")})
+                self.assertEqual(result, {"path": str(data / "assistant"), "exists": False})
                 self.assertEqual(Path(directory).stat(), before)
                 self.assertEqual(list(Path(directory).iterdir()), [data] if root_exists else [])
                 self.assertFalse((data / "assistant").exists())
@@ -147,7 +147,8 @@ class AssistantDirectoryTests(unittest.TestCase):
                 inspected = helper.inspect()
                 self.assertEqual(inspected["path"], str(actual_home / ".dsh-wsl-desktop" / "assistant"))
                 self.assertEqual(list(actual_home.iterdir()), [])
-                self.assertEqual(helper.prepare(), inspected)
+                self.assertFalse(inspected["exists"])
+                self.assertEqual(helper.prepare(), {**inspected, "exists": True})
 
     def test_workspace_link_inserted_during_creation_is_refused(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(Path, "home", return_value=Path(directory)):
@@ -168,16 +169,28 @@ class AssistantDirectoryTests(unittest.TestCase):
 
     def test_cli_inspects_without_creation_then_prepares_default(self):
         with tempfile.TemporaryDirectory(prefix="assistant ; ") as directory:
-            expected = {"path": str(Path(directory) / ".dsh-wsl-desktop" / "assistant")}
+            expected = {"path": str(Path(directory) / ".dsh-wsl-desktop" / "assistant"), "exists": False}
             inspected = self.run_helper(directory, "--inspect")
             self.assertEqual(inspected.returncode, 0, inspected.stderr)
             self.assertEqual(json.loads(inspected.stdout), expected)
             self.assertEqual(list(Path(directory).iterdir()), [])
             prepared = self.run_helper(directory)
             self.assertEqual(prepared.returncode, 0, prepared.stderr)
+            expected["exists"] = True
             self.assertEqual(json.loads(prepared.stdout), expected)
             self.assertTrue(Path(expected["path"]).is_dir())
             self.assertEqual(json.loads(self.run_helper(directory, "--inspect").stdout), expected)
+
+    def test_deleted_workspace_stays_missing_until_explicit_preparation(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(Path, "home", return_value=Path(directory)):
+            prepared = helper.prepare()
+            target = Path(prepared["path"])
+            target.rmdir()
+            for _ in range(3):
+                self.assertEqual(helper.inspect(), {"path": prepared["path"], "exists": False})
+                self.assertFalse(target.exists())
+            self.assertEqual(helper.prepare(), prepared)
+            self.assertTrue(target.is_dir())
 
     def test_cli_rejects_all_other_arguments_without_writes(self):
         with tempfile.TemporaryDirectory() as directory:
