@@ -628,15 +628,22 @@ class ResourcesTests(unittest.TestCase):
     def test_initialize_real_standard_venv_offline_in_fixed_final_location(self):
         # This is the only real venv creation: all files and bundled pip live in
         # TemporaryDirectory HOME. No package index or real-user setup is used.
-        with patch.object(resources, "candidates", return_value=[sys.executable]), \
-             patch.object(resources, "opener", side_effect=AssertionError("offline")), \
-             patch.object(resources, "detect_gpu", side_effect=AssertionError):
-            result = self.initialize(python_path=sys.executable)
+        previous_umask = os.umask(0o002)
+        try:
+            with patch.object(resources, "candidates", return_value=[sys.executable]), \
+                 patch.object(resources, "opener", side_effect=AssertionError("offline")), \
+                 patch.object(resources, "detect_gpu", side_effect=AssertionError):
+                result = self.initialize(python_path=sys.executable)
+        finally:
+            parent_umask = os.umask(previous_umask)
+        self.assertEqual(parent_umask, 0o002, "only the initialization child may set a private umask")
         target = self.root / resources.SPEECH_ROOT / "runtime/venv"
         self.assertEqual(result["config"]["python_path"], str(target / "bin/python"))
         self.assertTrue(result["created_venv"])
         self.assertFalse(result["reused_python"])
         self.assertTrue((target / "pyvenv.cfg").is_file())
+        self.assertEqual((target / "bin").stat().st_mode & 0o777, 0o700)
+        self.assertEqual((target / "pyvenv.cfg").stat().st_mode & 0o777, 0o600)
         self.assertFalse((target / "bin/python").is_symlink())
         checked = subprocess.run([str(target / "bin/python"), "-I", "-B", "-c", "import sys; print(sys.prefix)"],
                                  capture_output=True, timeout=5)
@@ -652,6 +659,55 @@ class ResourcesTests(unittest.TestCase):
         self.assertTrue(again["reused_python"])
         self.assertFalse(again["created_venv"])
         self.assertEqual((target / "pyvenv.cfg").stat().st_mtime_ns, before)
+
+    def test_initialize_normalizes_new_copied_activation_modes_only(self):
+        source = self.root / "activation-template"
+        source.write_text("fixture activation")
+        source.chmod(0o664)
+        def create(command, cancelled, error, **kwargs):
+            result = self.fake_initialize_run(command, cancelled, error, **kwargs)
+            if "venv" in command:
+                target = Path(command[-1]) / "bin/activate"
+                import shutil
+                shutil.copy(source, target)  # CPython venv preserves template mode.
+            return result
+        with patch.object(resources, "candidates", return_value=[sys.executable]), \
+             patch.object(resources, "probe", return_value={"status": "missing_gpu_runtime"}), \
+             patch.object(resources, "run_initialize", side_effect=create):
+            result = self.initialize()
+        copied = Path(result["config"]["python_path"]).parent / "activate"
+        self.assertTrue(result["created_venv"])
+        self.assertEqual(copied.read_text(), "fixture activation")
+        self.assertEqual(copied.stat().st_mode & 0o777, 0o644)
+        self.assertEqual(source.stat().st_mode & 0o777, 0o664)
+
+    def test_initialize_permission_normalization_refuses_links_without_touching_source(self):
+        for link in ("hard", "symbolic"):
+            with self.subTest(link=link), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                venv = root / "managed"
+                venv.mkdir(mode=0o700)
+                source = root / "external"
+                source.write_text("do not change")
+                source.chmod(0o664)
+                if link == "hard":
+                    os.link(source, venv / "activate")
+                else:
+                    (venv / "activate").symlink_to(source)
+                with self.assertRaises(resources.Refused):
+                    resources.check_managed_venv(venv, normalize_permissions=True)
+                self.assertEqual(source.stat().st_mode & 0o777, 0o664)
+                self.assertEqual(source.read_text(), "do not change")
+
+    def test_existing_writable_managed_files_are_not_silently_repaired(self):
+        tree = self.root / "existing-tree"
+        tree.mkdir(mode=0o700)
+        file = tree / "activate"
+        file.write_text("keep mode")
+        file.chmod(0o664)
+        with self.assertRaises(resources.Refused):
+            resources.check_managed_venv(tree)
+        self.assertEqual(file.stat().st_mode & 0o777, 0o664)
 
     def test_initialize_plain_python_builds_venv_and_does_not_auto_reuse_sdkless_venv(self):
         external = self.environment(venv=True)

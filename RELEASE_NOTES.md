@@ -1,4 +1,9 @@
-# v0.1.19
+# v0.1.20
+
+## 发布兼容性修复
+
+- 修复默认 umask 为 0002 或基础 Python 激活模板带组写权限时，离线虚拟环境未能通过安全校验的问题。仅为 venv / ensurepip 子进程设置私有 umask；对受控子进程新生成的受管输出，逐级钉住目录与文件句柄、拒绝符号/硬链接并核对所有者后收紧写权限。不修改父进程 umask、外部环境或既有用户目录，已有不安全树仍先拒绝。
+- 新增在组可写 umask 下创建真实离线虚拟环境的回归条件；保留全部 CUDA、系统路径选择、统一目录与离线初始化改动。v0.1.19 标签的构建未通过且未发布资产，本版不改写旧标签。
 
 ## CUDA 与 ROCm 本地语音
 
@@ -21,7 +26,7 @@
 - CUDA 正向路径已通过模拟测试，无 NVIDIA 实机推理验收；Windows 系统选择弹窗的真实交互与桌宠音频播放仍需人工验收，不将编译和模拟测试等同于实机通过。
 - CUDA / ROCm 驱动、运行库、匹配的原生库及模型仍需另行准备。自动模式优先 CUDA 时，所选原生库也必须是 CUDA 构建。更新后请停止旧托管服务并重启应用；旧服务运行记录不迁移。
 - 交互请求仍需明确选择“允许一次/拒绝”；关闭、收起或选择路径都不代表授权，不自动执行请求。
-- 配置步骤见[本地语音说明](https://github.com/elves-ai/dsh-wsl-desktop/blob/v0.1.19/QWEN_SPEECH.md)。
+- 配置步骤见[本地语音说明](https://github.com/elves-ai/dsh-wsl-desktop/blob/v0.1.20/QWEN_SPEECH.md)。
 - 提供 NSIS 安装包、独立 EXE、Tauri 更新签名、latest.json 和 SHA256SUMS.txt。更新签名不等于 Windows Authenticode 代码签名，SmartScreen 仍可能提示。
 
 ## 上游来源与许可

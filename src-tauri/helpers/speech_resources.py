@@ -526,8 +526,11 @@ def run_initialize(command, cancelled, error, timeout=120, optional=False):
     """Offline subprocess with no output disclosure and cancellable process group."""
     require(not cancelled(), "cancelled")
     try:
+        # venv/ensurepip must not inherit a group-writable launcher umask (e.g.
+        # CI uses 0002). Set it in the child only; never change process-global
+        # umask in this helper, which also has cancellation/watch threads.
         process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL, start_new_session=True,
+            stderr=subprocess.DEVNULL, start_new_session=True, umask=0o077,
             env={"PATH": "/usr/bin:/bin", "HOME": str(Path.home()),
                  "PIP_NO_INDEX": "1", "PIP_DISABLE_PIP_VERSION_CHECK": "1"})
     except OSError:
@@ -597,7 +600,59 @@ def unmanaged_runtime_venv(speech, path):
         os.close(runtime)
 
 
-def check_managed_venv(path):
+def normalize_managed_permissions(path):
+    """Tighten only trusted child output; pin every ancestor, never follow links."""
+    count = 0
+    def visit(fd, depth):
+        nonlocal count
+        require(depth <= 256, "initialize_runtime_conflict")
+        with os.scandir(fd) as entries:
+            for entry in entries:
+                count += 1
+                require(count <= 50000, "initialize_runtime_conflict")
+                info = os.stat(entry.name, dir_fd=fd, follow_symlinks=False)
+                if stat.S_ISLNK(info.st_mode):
+                    require(depth == 0 and entry.name == "lib64"
+                            and os.readlink(entry.name, dir_fd=fd) == "lib", "initialize_runtime_conflict")
+                    continue
+                is_dir = stat.S_ISDIR(info.st_mode)
+                require(info.st_uid == os.getuid() and (is_dir or stat.S_ISREG(info.st_mode))
+                        and (is_dir or info.st_nlink == 1), "initialize_runtime_conflict")
+                flags = os.O_RDONLY | os.O_NONBLOCK | NOFOLLOW
+                if is_dir:
+                    flags |= os.O_DIRECTORY
+                child = os.open(entry.name, flags, dir_fd=fd)
+                try:
+                    opened = os.fstat(child)
+                    require((opened.st_dev, opened.st_ino, opened.st_uid,
+                             stat.S_IFMT(opened.st_mode), opened.st_nlink)
+                            == (info.st_dev, info.st_ino, os.getuid(),
+                                stat.S_IFMT(info.st_mode), info.st_nlink), "initialize_runtime_conflict")
+                    # CPython copies activation-template modes, bypassing umask.
+                    # Strip write bits in the managed copy, never its source.
+                    if opened.st_mode & 0o022:
+                        os.fchmod(child, stat.S_IMODE(opened.st_mode) & ~0o022)
+                    check_owned(os.fstat(child))
+                    if is_dir:
+                        visit(child, depth + 1)
+                finally:
+                    os.close(child)
+    try:
+        fd = directory(str(path))
+        try:
+            check_owned(os.fstat(fd), private=True)
+            visit(fd, 0)
+        finally:
+            os.close(fd)
+    except OSError:
+        raise Refused("initialize_runtime_conflict") from None
+
+
+def check_managed_venv(path, normalize_permissions=False):
+    if normalize_permissions:
+        # Used only after our successful offline subprocess. Existing trees are
+        # always checked strictly before that subprocess; they are not repaired.
+        normalize_managed_permissions(path)
     # --copies avoids Python symlinks. The sole standard venv directory symlink
     # is lib64 -> lib; never follow arbitrary links left in an interrupted tree.
     count = 0
@@ -658,7 +713,7 @@ def initialize_venv(home, speech, bases, cancelled):
         require(not cancelled(), "cancelled")
         run_initialize([base, "-I", "-S", "-B", "-m", "venv", "--copies", "--without-pip", str(path)],
                        cancelled, "initialize_venv_failed")
-        check_managed_venv(path)
+        check_managed_venv(path, normalize_permissions=True)
         require(python_usable(probe(target, "unknown")), "initialize_venv_failed")
         # ensurepip uses only wheels bundled with this Python. No pip install,
         # package index, downloader, SDK/driver installation or network request.
@@ -667,7 +722,7 @@ def initialize_venv(home, speech, bases, cancelled):
                           cancelled, "initialize_pip_failed", timeout=5, optional=True):
             run_initialize([target, "-I", "-B", "-m", "ensurepip", "--upgrade", "--default-pip"],
                            cancelled, "initialize_pip_failed")
-        check_managed_venv(path)
+        check_managed_venv(path, normalize_permissions=True)
         publish_initialize_json(runtime, INIT_COMPLETE, intent, cancelled)
         return target, True
     finally:
