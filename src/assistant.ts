@@ -33,14 +33,14 @@ root.innerHTML = view === 'pet' ?
 <button type="button" data-action="toggle_chat"><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h4"/></svg><span class="pet-menu-label">启用与历史</span></button>
 <button type="button" data-action="open_dsh"><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M14 4h6v6M20 4l-9 9M10 4H4v16h16v-6"/></svg><span class="pet-menu-label">打开 DSH</span></button>
 <hr class="pet-menu-separator">
-<button id="pet-auto-read" type="button" role="switch" aria-label="自动朗读回复" aria-checked="false" data-pet-command="auto-read" title="仅自动朗读新完成的短回复，使用本地千问音色"><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m11 5-5 4H3v6h3l5 4ZM15 8a6 6 0 0 1 0 8M18 5a10 10 0 0 1 0 14"/></svg><span class="pet-menu-label">自动朗读</span><span class="pet-menu-indicator" aria-hidden="true"><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m5 12 4 4L19 6"/></svg></span></button>
-<label class="pet-menu-animation" for="pet-animation"><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m9 5 11 7-11 7Z"/></svg><span>动作</span><select id="pet-animation" aria-label="选择宠物动作"></select></label>
-<button id="pet-topmost" type="button" role="switch" aria-label="窗口置顶" data-pet-command="topmost"><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M8 3h8l-1 6 4 4v2H5v-2l4-4ZM12 15v6"/></svg><span class="pet-menu-label">窗口置顶</span><span class="pet-menu-indicator" aria-hidden="true"><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m5 12 4 4L19 6"/></svg></span></button>
+<button id="pet-auto-read" type="button" role="switch" aria-label="自动朗读回复" aria-checked="false" data-pet-command="auto-read" title="仅自动朗读新完成的短回复，使用本地千问音色"><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m11 5-5 4H3v6h3l5 4ZM15 8a6 6 0 0 1 0 8M18 5a10 10 0 0 1 0 14"/></svg><span class="pet-menu-label">自动朗读</span><span class="pet-menu-indicator" aria-hidden="true"></span></button>
+<button id="pet-animation-trigger" type="button" aria-haspopup="menu" aria-controls="pet-animation" aria-expanded="false"><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m9 5 11 7-11 7Z"/></svg><span class="pet-menu-label">选择动作</span><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m9 6 6 6-6 6"/></svg></button>
+<button id="pet-topmost" type="button" role="switch" aria-label="窗口置顶" data-pet-command="topmost"><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M8 3h8l-1 6 4 4v2H5v-2l4-4ZM12 15v6"/></svg><span class="pet-menu-label">窗口置顶</span><span class="pet-menu-indicator" aria-hidden="true"></span></button>
 <hr class="pet-menu-separator">
 <button type="button" data-action="pet_settings"><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3" fill="var(--ui-bg)"/><circle cx="15" cy="17" r="3" fill="var(--ui-bg)"/></svg><span class="pet-menu-label">宠物设置</span></button>
 <button type="button" data-action="hide"><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 3l18 18M10 5a11 11 0 0 1 11 7 14 14 0 0 1-3 4M6 6a14 14 0 0 0-3 6 11 11 0 0 0 14 6M10 10a3 3 0 0 0 4 4"/></svg><span class="pet-menu-label">隐藏宠物</span></button>
-</section>` +
-  '<section id="pet-dialogue" class="pet-dialogue" aria-label="与鲸鱼娘说话" hidden><section id="pet-speech" class="pet-speech" hidden><header class="pet-speech-header"><span id="pet-speech-label">鲸鱼娘</span><button id="cancel" type="button" data-action="cancel" class="pet-speech-stop" hidden>停止</button><button id="pet-speech-close" type="button" aria-label="收起这句话">×</button></header><div id="pet-speech-text" class="pet-speech-text" role="status" aria-live="polite" aria-atomic="true"></div><div class="pet-speech-actions"><button id="pet-speech-expand" type="button" aria-expanded="false" hidden>展开全文</button><button id="pet-read" type="button" aria-label="朗读回复" hidden>朗读</button><button id="retry" type="button" data-action="retry" hidden>重新连接 / 重试</button></div><p id="pet-read-status" class="pet-read-status" role="status" hidden></p></section></section>' +
+</section><section id="pet-animation" class="pet-menu pet-submenu" role="menu" aria-label="选择宠物动作" hidden><button type="button" class="pet-submenu-back" data-submenu-back aria-label="返回桌宠菜单">‹ 返回</button><div id="pet-animation-list" role="presentation"></div></section>` +
+  '<section id="pet-dialogue" class="pet-dialogue" aria-label="与鲸鱼娘说话" hidden><section id="pet-speech" class="pet-speech" hidden><header class="pet-speech-header"><span id="pet-speech-label">鲸鱼娘</span><button id="cancel" type="button" data-action="cancel" class="pet-speech-stop" hidden>停止</button><button id="pet-speech-close" type="button" aria-label="收起这句话">×</button></header><div id="pet-speech-text" class="pet-speech-text" role="status" aria-live="polite" aria-atomic="true"></div><div class="pet-speech-actions"><button id="pet-speech-expand" type="button" aria-controls="pet-speech-text" aria-expanded="false" hidden>展开全文</button><button id="pet-read" type="button" aria-label="朗读回复" hidden>朗读</button><button id="retry" type="button" data-action="retry" hidden>重新连接 / 重试</button></div><p id="pet-read-status" class="pet-read-status" role="status" hidden></p></section></section>' +
   '<section id="pet-composer" class="pet-composer" aria-label="给鲸鱼娘输入消息" hidden><button id="pet-enable" type="button" data-action="toggle_chat" hidden>启用助手</button><form id="send-form"><label class="sr-only" for="draft">跟鲸鱼娘说点什么</label><div class="pet-compose-row"><textarea id="draft" rows="1" placeholder="跟我说点什么…" maxlength="100000"></textarea><button id="send" type="submit" class="primary" aria-label="发送消息">↑</button><button id="pet-input-close" type="button" aria-label="收起输入，保留草稿">×</button></div><p id="draft-hint">Enter 发送 · Shift + Enter 换行</p></form></section><div id="pet-bubble" hidden></div><div id="pet-interaction" hidden></div><p id="notice" class="pet-notice" role="alert" hidden></p></section>' :
   `<section class="chat-shell" aria-label="鲸鱼娘对话">
 <header class="chat-header"><div class="brand"><span class="mini-buddy" aria-hidden="true">${face}</span>
@@ -200,7 +200,7 @@ function scheduleHitRegions() {
     if (pet) layoutPetBubbles(root, pet, petOverlayInsets);
     positionPetMenu();
     if (!native) return;
-    const regions = [...root.querySelectorAll<HTMLElement>('#pet, #pet-menu, #pet-bubble, #pet-interaction, #pet-dialogue, #pet-composer, #notice')]
+    const regions = [...root.querySelectorAll<HTMLElement>('#pet, #pet-menu, #pet-animation, #pet-bubble, #pet-interaction, #pet-dialogue, #pet-composer, #notice')]
       .filter(node => node.getClientRects().length > 0)
       .map(node => { const r = node.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; });
     const signature = JSON.stringify(regions);
@@ -398,7 +398,7 @@ function renderPetConversation() {
   if (text && text.textContent !== cue.text) text.textContent = cue.text;
   const label = el('pet-speech-label'); if (label) label.textContent = cue.kind === 'thinking' ? '鲸鱼娘 · 想一想' : cue.kind === 'error' ? '鲸鱼娘 · 没连上' : '鲸鱼娘';
   const expand = el('pet-speech-expand');
-  if (expand) { expand.hidden = cue.kind !== 'reply'; expand.textContent = petSpeechExpanded ? '收起全文' : '展开全文'; expand.setAttribute('aria-expanded', String(petSpeechExpanded)); }
+  if (expand) { expand.hidden = !petSpeechExpanded; expand.textContent = petSpeechExpanded ? '收起全文' : '展开全文'; expand.setAttribute('aria-expanded', String(petSpeechExpanded)); }
   const enable = el('pet-enable'); if (enable) enable.hidden = state.enabled;
   const hint = el('draft-hint'); if (hint && !native) hint.textContent = '浏览器预览 · 不会发送消息';
   renderPetNarration();
@@ -691,7 +691,10 @@ function mountPet() {
     pet.style.height = ((HIT_BOX.y1 - HIT_BOX.y0) / 360 * 100) + '%';
   }
   const menu = el('pet-menu');
+  const trigger = el('pet-animation-trigger'), panel = el('pet-animation');
   if (menu) petMenu = new PetMenuController(menu, {
+    submenu: trigger && panel ? { trigger, panel } : undefined,
+    onLayout: scheduleHitRegions,
     getGeometry: native ? () => requestPetGeometry('get_pet_geometry') : undefined,
     onChange: open => {
       if (disposed) return;
@@ -702,7 +705,7 @@ function mountPet() {
   });
   mountPetConversation();
   mountPetNarration();
-  menu?.addEventListener('contextmenu', event => { event.preventDefault(); petMenu?.close(); }, { signal: cleanup.signal });
+  for (const surface of [menu, panel]) surface?.addEventListener('contextmenu', event => { event.preventDefault(); petMenu?.close(); }, { signal: cleanup.signal });
   const bubble = el('pet-bubble');
   if (bubble) {
     petNotifications = new PetNotifications(bubble, {
@@ -742,16 +745,31 @@ function mountPet() {
     onMoveEnd: () => petMotion?.stopRoam(),
     onError: error => { if (!disposed) setNotice('宠物动画加载失败：' + error.message); },
   });
-  const select = el<HTMLSelectElement>('pet-animation');
-  if (select) {
-    select.add(new Option('选择动作…', ''));
-    for (const item of petRenderer.listActions()) select.add(new Option(item.group + ' · ' + item.name, item.name));
-    select.addEventListener('change', () => {
-      petMotion?.stop();
-      if (select.value) petRenderer?.trigger(select.value);
-      petMenu?.close();
-      select.value = ''; syncPetNotificationOverlay();
-    }, { signal: cleanup.signal });
+  const list = el('pet-animation-list');
+  if (list) {
+    const groups = new Map<string, HTMLElement>();
+    const groupLabels: Record<string, string> = { idle: '待机', turn: '转向', clicks: '点击回应', drag: '拖拽', move: '移动', balance: '余额', whisper: '碎碎念', workStatus: '工作状态' };
+    for (const item of petRenderer.listActions()) {
+      let group = groups.get(item.group);
+      if (!group) {
+        group = document.createElement('div');
+        group.setAttribute('role', 'group');
+        const label = groupLabels[item.group] ?? item.group;
+        group.setAttribute('aria-label', label);
+        const heading = document.createElement('div');
+        heading.className = 'pet-submenu-heading'; heading.textContent = label;
+        heading.setAttribute('aria-hidden', 'true');
+        group.append(heading); list.append(group); groups.set(item.group, group);
+      }
+      const button = document.createElement('button');
+      button.type = 'button'; button.setAttribute('role', 'menuitem'); button.tabIndex = -1;
+      button.textContent = item.name; button.title = item.name;
+      button.addEventListener('click', () => {
+        petMotion?.stop(); petRenderer?.trigger(item.name); petMenu?.close();
+        syncPetNotificationOverlay();
+      }, { signal: cleanup.signal });
+      group.append(button);
+    }
   }
 }
 function renderPetTopmost() {
@@ -946,7 +964,7 @@ if (import.meta.hot) import.meta.hot.dispose(dispose);
 if (view === 'pet') {
   resizeObserver = new ResizeObserver(scheduleHitRegions);
   resizeObserver.observe(root);
-  root.querySelectorAll('#pet, #notice, #pet-menu, #pet-bubble, #pet-interaction, #pet-dialogue, #pet-composer, #pet-speech-text, #pet-read-status, #draft').forEach(node => resizeObserver!.observe(node));
+  root.querySelectorAll('#pet, #notice, #pet-menu, #pet-animation, #pet-bubble, #pet-interaction, #pet-dialogue, #pet-composer, #pet-speech-text, #pet-read-status, #draft').forEach(node => resizeObserver!.observe(node));
   window.addEventListener('resize', scheduleHitRegions, { signal: cleanup.signal });
 }
 mountPet();

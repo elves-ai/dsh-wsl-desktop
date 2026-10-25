@@ -41,10 +41,14 @@ mod path_picker;
 mod pet;
 #[path = "desktop_pet_interactions.rs"]
 mod pet_interactions;
+#[path = "desktop_pet_memory.rs"]
+mod pet_memory;
 #[path = "desktop_pet_notifications.rs"]
 mod pet_notifications;
 #[path = "desktop_pet_settings.rs"]
 mod pet_settings;
+#[path = "desktop_pet_workspace.rs"]
+mod pet_workspace;
 #[path = "desktop_power.rs"]
 mod power;
 #[path = "desktop_settings.rs"]
@@ -87,6 +91,18 @@ struct Controller {
     log_path: PathBuf,
 }
 impl Controller {
+    /// Local configuration only: memory remains inspectable while the backend is stopped.
+    fn backend_config(&self) -> Result<Option<config::Config>, String> {
+        if self.exiting.load(Ordering::SeqCst) {
+            return Err("启动器正在退出。".into());
+        }
+        Ok(self
+            .backend
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone())
+    }
+
     fn snapshot(&self) -> Snapshot {
         let mut snapshot = self
             .snapshot
@@ -901,9 +917,16 @@ pub fn run() {
             speech_settings::get_speech_download,
             speech_settings::download_speech_model,
             speech_settings::cancel_speech_download,
+            speech_settings::get_speech_install,
+            speech_settings::install_speech,
+            speech_settings::cancel_speech_install,
             pet::get_pet_geometry,
             pet::move_pet,
             pet::drag_pet,
+            pet_memory::get_pet_memory,
+            pet_memory::pet_memory_action,
+            pet_workspace::get_pet_workspace,
+            pet_workspace::open_pet_workspace,
             pet_settings::get_pet_settings,
             pet_settings::set_pet_settings,
             pet_settings::set_pet_visibility,

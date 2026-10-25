@@ -8,6 +8,10 @@
     "dsh-settings"
   ],
   "permissions": [
+    "allow-get-pet-memory",
+    "allow-pet-memory-action",
+    "allow-get-pet-workspace",
+    "allow-open-pet-workspace",
     "allow-get-pet-settings",
     "allow-set-pet-settings",
     "allow-set-pet-visibility"

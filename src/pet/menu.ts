@@ -16,6 +16,9 @@ export interface PetMenuOptions {
   clock?: PetMenuClock;
   /** Keep adjacent speech actions stable while an inline composer is open. */
   dismissBoundary?: HTMLElement;
+  submenu?: { trigger: HTMLElement; panel: HTMLElement };
+  /** Schedule positioning and native hit-region updates after submenu visibility changes. */
+  onLayout?: () => void;
 }
 type Point = { x: number; y: number };
 type Bounds = Point & { width: number; height: number };
@@ -41,12 +44,23 @@ export class PetMenuController {
   private timer: unknown;
   private inFlight = false;
   private pointer?: Point;
+  private submenuOpenedByHover = false;
 
   constructor(private readonly menu: HTMLElement, private readonly options: PetMenuOptions) {
     this.clock = options.clock ?? clock;
     this.document = menu.ownerDocument;
     this.view = this.document.defaultView;
     this.menu.hidden = true;
+    if (options.submenu) {
+      const { trigger, panel } = options.submenu;
+      panel.hidden = true;
+      trigger.setAttribute('aria-expanded', 'false');
+      trigger.addEventListener('pointerenter', this.onTriggerEnter);
+      trigger.addEventListener('click', this.onTriggerClick);
+      this.menu.addEventListener('pointerover', this.onParentRow);
+      this.menu.addEventListener('focusin', this.onParentRow);
+      panel.addEventListener('click', this.onSubmenuClick);
+    }
     this.document.addEventListener('pointerdown', this.onPointerDown, true);
     this.document.addEventListener('keydown', this.onKeyDown, true);
     this.view?.addEventListener('blur', this.onBlur);
@@ -70,6 +84,7 @@ export class PetMenuController {
     ++this.token;
     this.cancelTimer();
     this.menu.hidden = true;
+    this.setSubmenu(false);
     this.notify(false);
   }
 
@@ -96,6 +111,35 @@ export class PetMenuController {
     const y = clamp(preferredY, bounds.y, bounds.y + bounds.height - height);
     this.menu.style.left = (x - origin.x) + 'px';
     this.menu.style.top = (y - origin.y) + 'px';
+    const submenu = this.options.submenu;
+    if (!submenu || submenu.panel.hidden) return;
+    const { panel, trigger } = submenu;
+    panel.style.maxWidth = bounds.width + 'px';
+    panel.style.maxHeight = bounds.height + 'px';
+    panel.style.right = 'auto';
+    panel.style.bottom = 'auto';
+    const subRect = panel.getBoundingClientRect();
+    if (![subRect.width, subRect.height].every(value => Number.isFinite(value) && value > 0)) return;
+    const subWidth = Math.min(subRect.width, bounds.width), subHeight = Math.min(subRect.height, bounds.height);
+    const right = bounds.x + bounds.width;
+    let mainX = x, subX: number;
+    if (width + subWidth <= bounds.width) {
+      // Keep the main panel stationary if either side fits; otherwise move it the least possible.
+      const withRight = clamp(x, bounds.x, right - width - subWidth);
+      const withLeft = clamp(x, bounds.x + subWidth, right - width);
+      const useRight = Math.abs(withRight - x) <= Math.abs(withLeft - x);
+      mainX = useRight ? withRight : withLeft;
+      subX = useRight ? mainX + width : mainX - subWidth;
+    } else {
+      // A narrow work area cannot hold both panels. Keep the parent stable and overlap it.
+      const useRight = right - x - width >= x - bounds.x;
+      subX = clamp(useRight ? x + width : x - subWidth, bounds.x, right - subWidth);
+    }
+    this.menu.style.left = (mainX - origin.x) + 'px';
+    const triggerY = trigger.getBoundingClientRect().top;
+    const subY = clamp(Number.isFinite(triggerY) ? triggerY : y, bounds.y, bounds.y + bounds.height - subHeight);
+    panel.style.left = (subX - origin.x) + 'px';
+    panel.style.top = (subY - origin.y) + 'px';
   }
 
   dispose(): void {
@@ -106,6 +150,15 @@ export class PetMenuController {
     ++this.token;
     this.cancelTimer();
     this.menu.hidden = true;
+    this.setSubmenu(false);
+    if (this.options.submenu) {
+      const { trigger, panel } = this.options.submenu;
+      trigger.removeEventListener('pointerenter', this.onTriggerEnter);
+      trigger.removeEventListener('click', this.onTriggerClick);
+      this.menu.removeEventListener('pointerover', this.onParentRow);
+      this.menu.removeEventListener('focusin', this.onParentRow);
+      panel.removeEventListener('click', this.onSubmenuClick);
+    }
     this.document.removeEventListener('pointerdown', this.onPointerDown, true);
     this.document.removeEventListener('keydown', this.onKeyDown, true);
     this.view?.removeEventListener('blur', this.onBlur);
@@ -114,10 +167,70 @@ export class PetMenuController {
 
   private readonly onPointerDown = (event: PointerEvent): void => {
     // A pet right-click must reach contextmenu/toggle, not close then immediately reopen.
-    if (event.button === 0 && !(this.options.dismissBoundary ?? this.menu).contains(event.target as Node | null)) this.close();
+    const target = event.target as Node | null;
+    const panel = this.options.submenu?.panel;
+    if (event.button === 0 && !this.menu.contains(target) && !this.options.dismissBoundary?.contains(target) &&
+        !(panel && !panel.hidden && panel.contains(target))) this.close();
   };
   private readonly onKeyDown = (event: KeyboardEvent): void => {
-    if (event.key === 'Escape' && !event.isComposing && event.keyCode !== 229) this.close();
+    if (event.isComposing || event.keyCode === 229) return;
+    if (event.key === 'Escape') { this.close(); return; }
+    const submenu = this.options.submenu;
+    if (!submenu || this.disposed || !this.opened || this.menu.hidden) return;
+    const target = event.target as Node | null;
+    if (submenu.trigger.contains(target) && (event.key === 'ArrowRight' || event.key === 'ArrowDown')) {
+      event.preventDefault();
+      this.setSubmenu(true);
+      if (!submenu.panel.hidden) this.submenuItems()[0]?.focus();
+    } else if (!submenu.panel.hidden && submenu.panel.contains(target)) {
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault();
+        this.returnToTrigger();
+      } else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+        event.preventDefault();
+        const items = this.submenuItems();
+        const index = items.findIndex(item => item.contains(target));
+        const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 :
+          event.key === 'ArrowDown' ? (index + 1) % items.length : (index < 0 ? items.length - 1 : (index - 1 + items.length) % items.length);
+        items[next]?.focus();
+      }
+    }
+  };
+  private submenuItems(): HTMLElement[] {
+    return Array.from(this.options.submenu!.panel.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+      .filter(item => !item.closest('[hidden]') && !item.matches(':disabled, [aria-disabled="true"]'));
+  }
+  private setSubmenu(open: boolean, hover = false): void {
+    const submenu = this.options.submenu;
+    if (!submenu || (open && (this.disposed || !this.opened || this.menu.hidden))) return;
+    const changed = submenu.panel.hidden === open;
+    if (changed || !hover) this.submenuOpenedByHover = open && hover;
+    submenu.panel.hidden = !open;
+    submenu.trigger.setAttribute('aria-expanded', String(open));
+    if (changed) {
+      try { this.options.onLayout?.(); } catch { /* Layout observers cannot interrupt cleanup. */ }
+    }
+  }
+  private returnToTrigger(): void {
+    this.setSubmenu(false);
+    if (!this.disposed && this.opened) this.options.submenu?.trigger.focus();
+  }
+  private readonly onTriggerEnter = (): void => { this.setSubmenu(true, true); };
+  private readonly onTriggerClick = (): void => {
+    // Pointer entry precedes a mouse click: don't immediately undo that hover-open.
+    const open = this.submenuOpenedByHover || !!this.options.submenu?.panel.hidden;
+    this.setSubmenu(open);
+    if (open && !this.options.submenu?.panel.hidden) this.submenuItems()[0]?.focus();
+  };
+  private readonly onParentRow = (event: Event): void => {
+    const target = event.target as Element | null;
+    const row = target?.closest?.('button, [role="menuitem"], [role="switch"]');
+    if (row && this.menu.contains(row) && !this.options.submenu?.trigger.contains(row)) this.setSubmenu(false);
+  };
+  private readonly onSubmenuClick = (event: MouseEvent): void => {
+    const back = (event.target as Element | null)?.closest?.('[data-submenu-back]');
+    const panel = this.options.submenu?.panel;
+    if (back && panel && !panel.hidden && panel.contains(back)) this.returnToTrigger();
   };
   private readonly onBlur = (event: Event): void => {
     if (!event.target || event.target === this.view) this.close();
@@ -153,9 +266,21 @@ export class PetMenuController {
           !finitePoint(geometry.cursor) || !Number.isFinite(geometry.scale) || geometry.scale <= 0) return;
       const x = (geometry.cursor.x - geometry.position.x) / geometry.scale;
       const y = (geometry.cursor.y - geometry.position.y) / geometry.scale;
-      const rect = (this.options.dismissBoundary ?? this.menu).getBoundingClientRect();
+      const rect = this.menu.getBoundingClientRect();
       if (![x, y, rect.left, rect.top, rect.width, rect.height].every(Number.isFinite) || rect.width <= 0 || rect.height <= 0) return;
-      if (x < rect.left || x >= rect.left + rect.width || y < rect.top || y >= rect.top + rect.height) this.close();
+      if (x >= rect.left && x < rect.left + rect.width && y >= rect.top && y < rect.top + rect.height) return;
+      const boundary = this.options.dismissBoundary;
+      if (boundary && !boundary.hidden) {
+        const extra = boundary.getBoundingClientRect();
+        if (x >= extra.left && x < extra.left + extra.width && y >= extra.top && y < extra.top + extra.height) return;
+      }
+      const panel = this.options.submenu?.panel;
+      if (panel && !panel.hidden) {
+        const subRect = panel.getBoundingClientRect();
+        if (![subRect.left, subRect.top, subRect.width, subRect.height].every(Number.isFinite) || subRect.width <= 0 || subRect.height <= 0) return;
+        if (x >= subRect.left && x < subRect.left + subRect.width && y >= subRect.top && y < subRect.top + subRect.height) return;
+      }
+      this.close();
     } catch { /* Native reads may fail transiently. DOM and explicit close remain available. */ }
     finally {
       this.inFlight = false;

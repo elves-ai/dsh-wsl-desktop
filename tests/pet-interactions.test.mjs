@@ -113,9 +113,117 @@ test('all untrusted strings are plain text; full details and plan are readable',
 
 test('layout fits pet viewport with scrollable full text and no timeout or clamp', () => {
   for (const rule of [/top: 4px/, /left: calc\(6px \+ var\(--pet-visible-left, 0px\)\)/, /right: calc\(6px \+ var\(--pet-visible-right, 0px\)\)/, /bottom: 60px/, /z-index: 9/, /12px/, /overflow: auto/, /min-height: 0/]) assert.match(css, rule);
-  assert.doesNotMatch(css, /ellipsis|line-clamp/);
+  // Source metadata alone may ellipsize; risk/plan/question/option text must not.
+  const sourceRule = css.match(/\.pet-interactions-source\s*\{[^}]*\}/)?.[0];
+  assert.match(sourceRule, /white-space: nowrap/);
+  assert.match(sourceRule, /text-overflow: ellipsis/);
+  assert.doesNotMatch(css.replace(sourceRule, ''), /ellipsis|line-clamp/);
   assert.doesNotMatch(source, /innerHTML|insertAdjacentHTML|setTimeout|setInterval/);
   assert.doesNotMatch(source, /allowed-session|allowed-always|sessionId/);
+});
+
+test('stable semantic titles keep long source separate and count only queued requests', t => {
+  const { root, update } = setup(t);
+  const agent = 'Agent / 工作目录 / '.repeat(300) + '<b>source END</b>';
+  const item = card('a', { agent_label: agent });
+  update([item]);
+  const heading = one(root, 'heading'), sourceLabel = one(root, 'source');
+  assert.equal(heading.textContent, '回答问题');
+  assert.equal(sourceLabel.textContent, agent);
+  assert.equal(sourceLabel.getAttribute('title'), agent);
+  assert.equal(sourceLabel.parent, heading.parent);
+  assert.equal(heading.parent.parent, one(root, 'header'));
+  assert.equal(tag(root, 'b').length, 0);
+  update([item, approval('b')]);
+  assert.equal(one(root, 'heading'), heading);
+  assert.equal(one(root, 'source'), sourceLabel);
+  assert.equal(heading.textContent, '回答问题（2）');
+  update([approval('b')]);
+  assert.equal(heading.textContent, '权限确认');
+  update([card('plan', { questions: [plan()] })]);
+  assert.equal(heading.textContent, '确认计划');
+  assert.deepEqual(byClass(root, 'option-label').map(node => node.textContent), ['Approve', 'Keep planning']);
+});
+
+test('fieldset choices retain native controls, visible input labels and full descriptions', t => {
+  const { root, update, sent } = setup(t);
+  const description = '说明\n'.repeat(1500) + 'DESCRIPTION END';
+  update([card('a', { questions: [question('single', { options: [{ label: ' Original value ', description }] }),
+    question('multiple', { multiSelect: true }), question('text', { options: undefined })] })]);
+  const sections = tag(root, 'fieldset'), inputs = tag(root, 'input'), textareas = tag(root, 'textarea');
+  assert.equal(sections.length, 3);
+  assert.ok(sections.every(section => section.children[0].tagName === 'LEGEND'));
+  assert.deepEqual(inputs.map(input => input.type), ['radio', 'checkbox', 'checkbox']);
+  assert.ok(inputs.every(input => !input.checked && input.parent.tagName === 'LABEL'));
+  assert.deepEqual(byClass(root, 'choice-hint').map(node => node.textContent), ['单选', '可多选']);
+  assert.equal(one(root, 'option-description').textContent, description);
+  for (const textarea of textareas) {
+    assert.equal(textarea.rows, 2);
+    assert.equal(textarea.value, '');
+    assert.equal(textarea.parent.tagName, 'LABEL');
+    assert.ok(textarea.parent.children[0].textContent.length > 0);
+  }
+  assert.match(textareas[0].parent.textContent, /可选/);
+  select(inputs[0]); select(inputs[1]); select(inputs[2]);
+  assert.ok(inputs.every(input => input.checked));
+  assert.equal(inputs[0].value, ' Original value ');
+  assert.equal(sent.length, 0);
+});
+
+test('full plan and permission details stay in body while status and actions stay outside', async t => {
+  const attempt = deferred();
+  const { root, update } = setup(t, { onSubmit: () => attempt.promise });
+  const detail = '# Plan\n' + '完整计划 / 风险\n'.repeat(2000) + 'PLAN END';
+  const details = '{\n  "command": "' + 'long raw parameter '.repeat(2000) + '"\n}';
+  update([card('a', { details, questions: [plan({ detail })] })]);
+  const scroll = one(root, 'scroll'), footer = one(root, 'footer'), status = one(root, 'status');
+  assert.equal(one(root, 'details').parent, scroll);
+  assert.equal(one(root, 'detail').parent.parent, scroll);
+  assert.equal(one(root, 'detail').textContent, detail);
+  assert.equal(one(root, 'details').textContent, details);
+  assert.equal(tag(root, 'details').length, 0, 'no collapsed detail disclosure');
+  assert.deepEqual(one(root, 'card').children, [scroll, footer]);
+  assert.deepEqual(footer.children, [status, one(root, 'actions')]);
+  assert.equal(status.getAttribute('role'), 'status');
+  assert.equal(status.hidden, true);
+  select(tag(root, 'input')[0]); one(root, 'submit').click();
+  assert.equal(status.hidden, false);
+  assert.match(status.textContent, /正在处理/);
+  attempt.reject(new Error('network')); await flush();
+  assert.equal(one(root, 'status'), status);
+  assert.match(status.textContent, /发送失败/);
+  assert.equal(status.parent, footer);
+  assert.equal(one(root, 'detail').textContent, detail);
+  update([approval('permission', { details, reason: detail })], false);
+  assert.equal(one(root, 'details').textContent, details);
+  assert.equal(one(root, 'reason').textContent, detail);
+  assert.match(one(root, 'status').textContent, /连接已断开/);
+  assert.equal(one(root, 'status').parent, one(root, 'footer'));
+});
+
+test('compact CSS keeps one body scroll, fixed header/footer and bounded status/input', () => {
+  const rule = selector => css.slice(css.indexOf(selector)).match(/^[^{]+\{([^}]*)\}/)?.[1];
+  assert.match(rule('.pet-interactions-panel {'), /width: 348px/);
+  assert.match(rule('.pet-interactions-panel {'), /max-height: 280px/);
+  for (const selector of ['.pet-interactions-header {', '.pet-interactions-footer {']) {
+    assert.match(rule(selector), /flex-shrink: 0/);
+    assert.doesNotMatch(rule(selector), /overflow: auto|max-height/);
+  }
+  assert.match(rule('.pet-interactions-scroll {'), /overflow: auto/);
+  assert.match(rule('.pet-interactions-actions {'), /flex-wrap: wrap/);
+  assert.match(rule('.pet-interactions button {'), /min-height: 30px/);
+  assert.match(rule('.pet-interactions .pet-interactions-status {'), /max-height: 48px/);
+  assert.match(rule('.pet-interactions .pet-interactions-status {'), /overflow: auto/);
+  assert.match(rule('.pet-interactions-custom {'), /min-height: 48px/);
+  assert.match(rule('.pet-interactions-custom {'), /max-height: 96px/);
+  assert.match(rule('.pet-interactions-custom {'), /resize: none/);
+  assert.match(rule('.pet-interactions-question {'), /border: 0/);
+  assert.match(rule('.pet-interactions-option {'), /width: 100%/);
+  assert.match(rule('.pet-interactions-option:has(input:checked)'), /border-color: var\(--ui-accent/);
+  assert.match(rule('.pet-interactions-option:has(input:checked)'), /background: var\(--ui-selected/);
+  assert.match(rule('.pet-interactions-option:has(input:focus-visible)'), /outline: 2px/);
+  assert.match(rule('.pet-interactions .pet-interactions-details {'), /font-family: var\(--ui-mono/);
+  assert.doesNotMatch(css, /appearance: none|resize: vertical/);
 });
 
 test('no preselected options and empty answers require explicit skip', async t => {
@@ -166,6 +274,9 @@ test('plan feedback blocks Approve and permits original Keep planning + custom',
   const { root, update, sent } = setup(t); update([card('a', { questions: [plan()] })]);
   const inputs = tag(root, 'input'); select(inputs[0]); type(tag(root, 'textarea')[0], '请修改\n风险项');
   assert.equal(one(root, 'submit').disabled, true); assert.match(root.textContent, /请选择 Keep planning/);
+  assert.match(one(root, 'status').textContent, /请选择 Keep planning/);
+  assert.equal(one(root, 'status').parent, one(root, 'footer'));
+  assert.equal(one(root, 'status').hidden, false);
   one(root, 'submit').forceClick(); assert.equal(sent.length, 0);
   select(inputs[1]); one(root, 'submit').click(); await flush();
   assert.deepEqual(sent[0].reply.answers, [{ id: 'plan', selected: ['Keep planning'], custom: '请修改\n风险项' }]);
@@ -272,9 +383,9 @@ test('FIFO keeps current DOM, focusable inputs and draft on new/reordered snapsh
   const { root, update } = setup(t); const a = card('a'), b = card('b'), c = approval('c');
   update([a]); const textarea = tag(root, 'textarea')[0]; type(textarea, 'stay');
   update([b, a]); assert.equal(tag(root, 'textarea')[0], textarea); assert.equal(textarea.value, 'stay');
-  update([c, b, a]); assert.match(one(root, 'heading').textContent, /Agent a/);
-  update([c, b]); assert.match(one(root, 'heading').textContent, /Agent b/);
-  update([c]); assert.match(one(root, 'heading').textContent, /Agent c/);
+  update([c, b, a]); assert.match(one(root, 'source').textContent, /Agent a/);
+  update([c, b]); assert.match(one(root, 'source').textContent, /Agent b/);
+  update([c]); assert.match(one(root, 'source').textContent, /Agent c/);
 });
 
 test('X collapses to persistent count; summary restores pending draft without answering', t => {
@@ -322,7 +433,7 @@ test('disconnect while drafting disables response; reconnect retains same DOM an
 test('obsolete RPC completions cannot mark another request answered or show its error', async t => {
   const pending = deferred(); const { root, update } = setup(t, { onSubmit: () => pending.promise });
   update([approval('a')]); one(root, 'allow').click(); update([approval('b')]); pending.reject(new Error('old failure')); await flush();
-  assert.match(one(root, 'heading').textContent, /Agent b/); assert.equal(one(root, 'allow').disabled, false);
+  assert.match(one(root, 'source').textContent, /Agent b/); assert.equal(one(root, 'allow').disabled, false);
   assert.doesNotMatch(root.textContent, /失败|已发送/);
 });
 

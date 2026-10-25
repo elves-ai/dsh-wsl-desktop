@@ -12,13 +12,16 @@ pub mod notification_transport;
 pub mod notifications;
 pub mod pet_geometry;
 pub mod pet_interactions;
+pub mod pet_memory;
 pub mod pet_native_policy;
 pub mod pet_notifications;
 pub mod pet_settings;
+pub mod pet_workspace;
 pub mod power;
 pub mod protocol;
 pub mod settings_path;
 pub mod setup;
+pub mod speech_install;
 pub mod speech_resources;
 pub mod speech_settings;
 #[cfg(any(windows, test))]

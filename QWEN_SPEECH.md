@@ -1,39 +1,36 @@
 # 本地千问朗读（WSL 原生 Q8 / CUDA / ROCm）
 
-桌宠沿用现有“朗读”“自动朗读”、原生 IPC 和 Web Audio。Python 只作 127.0.0.1:18765 安全桥与进程编排，在独立 spawn 子进程中通过 ctypes 调用外部 C ABI 6 原生库，使用 **Q8 GGUF + CUDA / ROCm GPU**。自动选择优先 CUDA0，再尝试 ROCm0；不回退 CPU。没有 PyTorch/MIOpen 推理，也没有 Windows 原生 Python 或系统音色生产回退。
+桌宠沿用现有“朗读”“自动朗读”、原生 IPC 和 Web Audio。Python 只作 127.0.0.1:18765 安全桥与进程编排，在独立 spawn 子进程中通过 ctypes 调用 C ABI 6 原生库，使用 **Q8 GGUF + CUDA / ROCm GPU**。自动选择优先 CUDA0，再尝试 ROCm0；不回退 CPU。没有 PyTorch/MIOpen 推理，也没有 Windows 原生 Python 或系统音色生产回退。
 
 自动朗读仍默认关闭，与音量一起保存在原生语音设置中，设置页和桌宠右键菜单即时同步。旧 `dsh-assistant:qwen-auto-read` 仅在原生偏好尚未初始化时迁移一次，不继承旧系统语音开关；只读显式启用后新完成的短回复，不补读历史。本文是源码开发接入说明，**不是 Windows 桌宠全链路验收或新安装包已构建的声明**。
 
-## 运行边界与固定音色
+## 一键安装与使用
 
-- **设置 → 桌面宠物 → 本地千问语音**：配置、检测、启动并加载、固定短句试听及停止释放显存。原“语音”分类入口兼容跳转到桌面宠物。普通朗读可按需准备已配置的服务，不在启动应用或刷新状态时加载模型。桌面应用不安装系统 WSL/Python/CUDA/ROCm、不构建原生库；可显式初始化本地虚拟环境与配置，模型仅在用户确认后下载。
-- Python 环境固定在当前 WSL 用户的 `~/.dsh-wsl-desktop/speech/runtime/venv`，不允许手动指定或选择其他解释器。原生库和两个模型文件仍由用户配置目录，不随安装包捆绑，不依赖仓库临时目录。
-- 固定 profile `pet-airhead-v1`，使用用户批准的第二段 8.4 秒合成声音：[完整参考音频](<services/qwen_tts/voice/reference.wav>)与[准确台词、SHA256 和来源](<services/qwen_tts/voice/profile.json>)共同用于 ICL，不改为 embedding-only，不混入早期 A 声纹，不在运行时调用 VoiceDesign。没有训练权重。
+打开“设置 → 桌面宠物 → 本地千问语音”，点击 **一键安装**。无需选择模型文件夹、Python 或原生库，也无需单独保存：程序在默认目录准备环境、匹配显卡的依赖、固定版本原生库和两份 Q8 模型，执行真实 GPU/ABI 与模型校验，通过后自动保存配置。
+
+- 首次安装需要联网下载模型和依赖。两份模型约 **2.21 GiB**，SDK、源码和编译产物还需要额外磁盘空间。界面显示当前阶段与模型下载字节，支持取消及失败重试。
+- 离开设置分类不会中断安装，回来继续查看；退出应用会取消所属安装任务。已完成资源可能保留，重试复用通过校验的资源；失败不把未通过检测的配置设为有效配置。
+- 打开设置和刷新状态只读，不安装。安装完成不自动加载模型，也不开启自动朗读。随后点击“启动并加载模型”，再“试听固定文本”；“停止并释放显存”仅停止本应用托管的语音服务。
+- 自动朗读默认关闭，音量与桌宠右键菜单同步。设置页试听权限不等于桌宠已解锁播放，桌宠首次使用仍可能需要点击“朗读”。
+- 安装器面向 x86_64 WSL2、Python ≥ 3.10 和可用的 `/dev/dxg` GPU 桥接。系统需有 Git、Bash、Make、C/C++ 编译器及 realpath；缺少 pip 时会自动准备固定版本 pip。ROCm 固定为 10.1.0 / gfx1201；CUDA 固定为 12.8.1，要求驱动与 GPU 架构兼容。
+- 不自动安装 WSL、系统 Python、系统显卡驱动或执行管理员命令。缺少系统前置工具或不支持的硬件会明确报错，不回退 CPU、不假称安装完成。NVIDIA 实机验收仍待完成。
+- 固定 profile `pet-airhead-v1`，使用已批准的 8.4 秒合成声音：[参考音频](<services/qwen_tts/voice/reference.wav>)与[台词、SHA256 和来源](<services/qwen_tts/voice/profile.json>)共同用于 ICL，不调用 VoiceDesign、不混入其他声纹。
 
 ## 默认数据目录
 
-本地语音的 WSL 侧数据统一以家目录下的隐藏目录 `~/.dsh-wsl-desktop/` 为根，不放在源码仓库或安装目录：
+语音数据统一放在当前 WSL 用户的家目录，不放在源码仓库或 Windows 安装目录：
 
 ~~~text
-~/.dsh-wsl-desktop/
-└── speech/
-    ├── config.json         # 显式初始化生成的本地路径配置（不含凭据）
-    ├── models/qwen3-tts-q8/  # 默认模型目录
-    ├── runtime/            # Python 环境、CUDA toolkit / ROCm SDK 与原生构建
-    └── service/            # 按内容版本隔离的托管服务与私有运行记录
+~/.dsh-wsl-desktop/speech/
+├── models/qwen3-tts-q8/  # 固定模型目录
+├── runtime/venv/       # 默认 Python 与用户级依赖
+├── native/install-*/   # 隔离的固定版本源码与原生构建
+├── cuda-12.8.1/        # NVIDIA 路径使用的用户级 toolkit
+├── config.json         # 旧初始化流程的兼容记录，可能不存在，不含凭据
+└── service/            # 版本隔离的服务与私有运行记录
 ~~~
 
-Python 固定使用 `speech/runtime/venv/bin/python`，不接受手动指定路径。设置页不再自动发现 Python 或显卡环境，也没有重新发现或检测结果填充入口；打开页面仅读取已保存配置和语音服务状态。旧配置中的外部 Python 路径不再执行，须初始化默认环境；本地路径配置仅保留模型与原生库的自定义值。打开页面和刷新不创建环境或安装依赖。默认环境不存在时，只有明确点击“初始化语音环境”才在该目录创建；已有默认环境即使缺少 GPU 依赖也可复用，不会改选其他已安装 SDK 的环境。模型与原生库的外部路径仍可使用，不会自动搬迁旧虚拟环境、SDK 或原生库。Windows 侧偏好和路径配置仍由 Tauri 用户配置目录保存，不与 WSL 运行文件混用。更新目录布局后须停止旧托管服务，重新构建并重启桌面应用；旧服务运行记录不迁移，新服务按新目录创建。
-
-## 在宠物设置中初始化环境与选择模型
-
-1. 打开“设置 → 桌面宠物”，在“本地千问语音”中查看当前 WSL 发行版。
-2. 页面只读展示固定默认 Python 路径，没有解释器选择、自动环境发现或路径输入入口。首次配置可点击“初始化语音环境”：复用已有默认虚拟环境，默认目录没有环境时用已安装的 Python 在 `speech/runtime/venv` 离线创建，并生成 `speech/config.json`；不会因为其他环境已安装 CUDA / ROCm 就将其用作默认语音环境。初始化不会复用旧配置指定的外部 Python。初始化结果仅填入草稿，不等于依赖、GPU、ABI 或模型就绪，仍须保存并检测。
-3. 通过系统窗口选择已有 WSL 模型目录，或选择/新建下载目标目录，也可使用初始化生成的默认目录，然后点击下载并确认。仅从下文固定 Hugging Face revision 下载两个 Q8 GGUF，并校验固定 SHA256；可能需要数 GB 磁盘与流量。支持查看已下载字节、取消及重新尝试，不自动保存路径或启动服务。
-4. 在高级设置中选择已有原生库。模型下载不包含此库、Python 依赖或 CUDA / ROCm 安装。
-5. 点击“保存并检测候选路径”；通过后才替换原配置。再点击“启动并加载模型”和“试听固定文本”。
-
-选择与检测结果仅填入草稿，不覆盖原有效配置；服务运行中须先停止再保存新路径。Python 路径固定，不提供选择；模型与原生库路径通过 Windows 原生 IFileOpenDialog 系统窗口选择，窗口定位到 `\\wsl.localhost\已配置发行版`；返回后转换为该发行版的 WSL 绝对路径。仅接受启动器已配置的 WSL 发行版和用户对应路径，不允许主机本地路径、其他发行版或手动输入路径。
+Python 固定使用 `runtime/venv/bin/python`，旧外部解释器不会执行。目录由程序管理，不提供选择或手输入口；不搬迁旧外部环境。检测通过后的有效路径与偏好由 Windows Tauri 用户配置目录保存；不会覆盖旧初始化流程留下的 `speech/config.json`。外部手动服务不接管，安装前须先停止冲突的语音服务。更新代码不会改变已安装的 Windows 应用，需要重新构建并更新桌面应用。
 
 ## 已核实的硬件与实验结果
 
@@ -50,13 +47,15 @@ WSL 使用 `/dev/dxg` 和自动加载的 librocdxg，没有 `/dev/kfd` 是正常
 
 这是独立试听，不包含冷启动、安全服务和 Windows 桌宠完整链路。采样音频长度不同，不能当作严格基准或产品实时性保证；CPU 仅为历史对照，不是正式回退路径。
 
-## 1. 默认 Python / GPU 环境
+## 开发参考：默认 Python / GPU 环境
+
+以下命令用于开发和排障，不是普通用户的安装步骤。设置页的一键安装负责自动编排依赖、原生构建与模型准备；手动命令不会由打开设置或刷新触发。
 
 ### ROCm（保留原有 gfx1201 路径）
 
-在固定的默认虚拟环境中准备 ROCm 依赖；已有默认环境无需重建，外部开发环境不能作为桌宠解释器，也不要直接移动虚拟环境。已有可信原生库及相邻依赖库仍可配置使用。ROCm 10.x 的 `rocm_sdk` 模块由 `rocm-sdk-core` 包提供；准备好依赖后，显式执行“保存并检测候选路径”完成实际 GPU/ABI 校验。
+在固定的默认虚拟环境中准备 ROCm 依赖；外部开发环境不能作为桌宠解释器，也不要直接移动虚拟环境。ROCm 10.x 的 `rocm_sdk` 模块由 `rocm-sdk-core` 包提供；一键安装末尾及后续“检测环境与模型”均执行实际 GPU/ABI 校验。
 
-以下均为用户在 **WSL** 主动执行的命令，不会由应用自动执行。先备好 Python 3.12、系统 C/C++ 编译工具、Git 和 curl，从本项目根目录开始：
+手动开发前先备好 Python、系统 C/C++ 编译工具、Git 和 curl，从本项目根目录开始：
 
 ~~~bash
 export QWEN_RUNTIME="$HOME/.dsh-wsl-desktop/speech/runtime"
@@ -90,13 +89,13 @@ export CMAKE="$QWEN_RUNTIME/build-tools/bin/cmake"
 
 ### CUDA（NVIDIA，尚无实机验收）
 
-CUDA 路径使用 ctypes 调用系统 NVIDIA driver API 和 cuBLAS，不需要 Torch、Qwen Python SDK 或 MIOpen。WSL 的 `libcuda.so.1` 来自 Windows NVIDIA 驱动；不要安装 Linux 显卡驱动或用 toolkit 的 stubs 目录充当运行库。构建还需要用户预先安装完整 CUDA toolkit（nvcc、头文件和开发库），Python wheels 不能替代编译工具链。已有 toolkit 的运行库可直接复用。
+CUDA 路径使用 ctypes 调用系统 NVIDIA driver API 和 cuBLAS，不需要 Torch、Qwen Python SDK 或 MIOpen。WSL 的 `libcuda.so.1` 来自 Windows NVIDIA 驱动；不要安装 Linux 显卡驱动或用 toolkit 的 stubs 目录充当运行库。一键安装从 NVIDIA 官方 redistrib 获取固定版本的用户级 CUDA toolkit（nvcc、头文件和开发库），无需选择 toolkit 目录；手动构建时须自己准备完整工具链，Python runtime wheels 不能替代编译器。
 
-只在用户主动决定安装时执行以下命令；**打开设置和“初始化语音环境”都不会联网安装依赖**：
+以下为 CUDA 依赖的手动排障命令；打开设置不会执行，只有显式安装才联网准备依赖：
 
 ~~~bash
 export QWEN_RUNTIME="$HOME/.dsh-wsl-desktop/speech/runtime"
-# 仅使用默认虚拟环境；应用的显式初始化仅离线创建 venv/config。
+# 桌面语音只使用固定默认虚拟环境。
 source "$QWEN_RUNTIME/venv/bin/activate"
 python -m pip install -r services/qwen_tts/requirements-cuda.txt
 export CUDA_HOME=/usr/local/cuda
@@ -105,7 +104,7 @@ export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$CUDA_HOME/targets/x86_64-linux/lib:/us
 
 [CUDA 可选依赖](<services/qwen_tts/requirements-cuda.txt>)固定 CUDA 12 runtime 和 cuBLAS wheels；实际 native 库需使用与构建 toolkit 相容的库。使用 wheels 时须保留当前 venv 的 `site-packages/nvidia/cuda_runtime/lib` 和 `site-packages/nvidia/cublas/lib`；若动态链接器尚未配置它们，需显式加入 `LD_LIBRARY_PATH`（不能只安装包便认为外部 libqwen 的依赖一定可解析）。驱动版本、GPU 架构、toolkit 和外部原生库仍须完整验证。
 
-设置页不再提供 Python/GPU 自动发现或元数据 `ready` 初筛。显式初始化只检查 Python 版本与可执行性，以便创建或复用默认 venv，不导入 GPU 包或判断 CUDA/ROCm 就绪；显式保存并检测及启动前仍执行必要的真实 GPU、原生库和模型校验。自动后端优先 CUDA0，再尝试 ROCm0；双 GPU 时原生库必须匹配实际选择的后端，不回退 CPU。
+一键安装中自动识别后端并准备匹配依赖，保存前和启动前执行真实 GPU、原生库和模型校验。运行时自动后端优先 CUDA0，再尝试 ROCm0；双 GPU 时原生库必须匹配实际选择的后端，不回退 CPU。
 
 ## 2. 固定版本原生库
 
@@ -177,14 +176,14 @@ curl -fL "$QWEN_MODEL_URL/qwen-tokenizer-12hz-Q8_0.gguf" \
   | sha256sum --check)
 ~~~
 
-文件分别为 2,079,448,256 与 291,150,624 字节，合计约 **2.21 GiB 磁盘权重**，不是 RAM/VRAM 需求。已有文件可直接配置目录，仍须核对字节数与 SHA256。应用和服务不会自动执行下载。
+文件分别为 2,079,448,256 与 291,150,624 字节，合计约 **2.21 GiB 磁盘权重**，不是 RAM/VRAM 需求。一键安装下载到固定默认目录并校验 SHA256；已存在的匹配文件可复用。打开页面和普通语音服务不会隐式下载。
 
 ## 4. 设置与桌宠使用
 
-在“设置 → 语音”中：
+在“设置 → 桌面宠物 → 本地千问语音”中：
 
-1. 沿用启动器已配置的 WSL 发行版和用户；Python 固定使用默认虚拟环境，不允许手动指定路径；通过系统弹窗选择 **模型目录、原生推理库**，界面使用转换后的 WSL 绝对路径，不提供路径手动输入。运行时路径可以折叠，音色固定；后端自动优先 CUDA0，再尝试 ROCm0，不提供额外高级调参。
-2. “保存并检测”先检查真实 CUDA driver / cuBLAS 或 HIP / hipBLAS 计算、固定原生 ABI 和两份模型 SHA256，通过才替换旧配置。进度来自实际校验字节，可取消；环境未通过时模型显示未知，而不是假称文件损坏。错误会指出缺主模型、缺声码器或校验不匹配。
+1. 沿用启动器配置的 WSL 发行版和用户，点击“一键安装”。环境与目录由程序管理，无需选择模型或原生库。音色固定，自动后端优先 CUDA0、其次 ROCm0。
+2. 安装末尾自动检查真实 CUDA driver / cuBLAS 或 HIP / hipBLAS 计算、固定原生 ABI 和两份模型 SHA256，通过才保存配置，无需另点保存。后续可单独“检测环境与模型”；环境未通过时不会将模型标为文件损坏。
 3. “启动语音”启动本应用托管的安全桥并加载模型和完整参考；状态分别显示环境、文件、服务、模型与归属。健康检查成功不冒充模型已就绪。启动早期和模型加载期间也可停止。
 4. 点击“试听”播放固定短句。最近试听只在真实播放自然结束后显示完成，取消和失败分别显示；本页播放权限不等于桌宠 WebView 已解锁，桌宠首次播放仍可能需要点击“朗读”。
 5. “停止并释放显存”先作废本应用的播放与排队，再结束所托管的服务和模型进程。外部手动服务只读显示，不接管、不按端口猜 PID 强杀。更改运行时/模型路径前先停止服务；自动朗读和音量仍可单独调整。
@@ -253,4 +252,4 @@ DSH_QWEN_LIVE_TEST=1 cargo test --manifest-path src-tauri/Cargo.toml --lib \
 
 迁移前基线记录前端 690 项、Rust 277 项、Python 172 项（含 29 项旧服务测试）通过；旧 Python/PyTorch 服务生成与取消恢复、Windows 到 WSL health、Chromium 隔离页 Web Audio 分别验证。页面模拟 IPC 回包，**不是 Windows Tauri 桌宠验收**；旧服务耗时和历史测试数量不代表当前 Q8/ROCm 版本结果。
 
-发布前仍须验证 Windows Tauri 真实手动/自动朗读与播放权限、生成中停止/隐藏取消、退出与恢复、失败重试、跨台词音色，以及全桥接延迟与资源占用。设置内托管流程已实现，外部运行时和模型仍须先准备。自动安装 WSL/SDK/驱动、下载模型、多音色、克隆面板及语速音调等高级功能不在当前范围。
+发布前仍须验证 Windows Tauri 一键安装、取消重试、真实手动/自动朗读与播放权限、退出与恢复、跨台词音色，以及全桥接延迟与资源占用。安装流程管理用户级依赖、原生构建与模型；自动安装 WSL、系统驱动、多音色、克隆面板及语速音调等功能不在当前范围。

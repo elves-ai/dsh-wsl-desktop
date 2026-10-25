@@ -2,6 +2,7 @@
 export interface PetNotification {
   id: string;
   kind: 'completed' | 'failed' | 'waiting';
+  /** Session/task name; status and action labels are derived from kind. */
   title: string;
   body: string;
 }
@@ -47,6 +48,8 @@ export class PetNotifications {
   private readonly clock: PetNotificationClock;
   private readonly openButton: HTMLButtonElement;
   private readonly closeButton: HTMLButtonElement;
+  private readonly status: HTMLElement;
+  private readonly action: HTMLElement;
   private readonly title: HTMLElement;
   private readonly body: HTMLElement;
   private readonly error: HTMLElement;
@@ -80,6 +83,10 @@ export class PetNotifications {
     this.openButton = document.createElement('button');
     this.openButton.type = 'button';
     this.openButton.className = 'pet-notification-open';
+    this.status = document.createElement('span');
+    this.status.className = 'pet-notification-status';
+    this.action = document.createElement('span');
+    this.action.className = 'pet-notification-action';
     this.title = document.createElement('span');
     this.title.className = 'pet-notification-title';
     this.body = document.createElement('span');
@@ -88,7 +95,7 @@ export class PetNotifications {
     this.error.className = 'pet-notification-error';
     this.error.textContent = '打开失败，点击重试';
     this.error.hidden = true;
-    this.openButton.append(this.title, this.body, this.error);
+    this.openButton.append(this.status, this.title, this.body, this.action, this.error);
     this.closeButton = document.createElement('button');
     this.closeButton.type = 'button';
     this.closeButton.className = 'pet-notification-close';
@@ -205,9 +212,18 @@ export class PetNotifications {
     this.openButton.removeAttribute('aria-disabled');
     this.error.hidden = true;
     const item = this.current;
+    const labels = item ? {
+      completed: ['本轮已结束', '查看结果 →'],
+      failed: ['本轮执行失败', '查看详情 →'],
+      waiting: ['需要你回答', '前往回答 →'],
+    }[item.kind] : ['', ''];
+    this.status.textContent = labels[0];
+    this.action.textContent = labels[1];
     this.title.textContent = item?.title ?? '';
+    this.title.setAttribute('title', item?.title ?? '');
     this.body.textContent = item?.body ?? '';
-    this.openButton.setAttribute('aria-label', item ? '查看会话：' + item.title + '。' + item.body : '查看通知会话');
+    this.body.hidden = !item?.body;
+    this.openButton.setAttribute('aria-label', item ? labels[0] + '：' + item.title + (item.body ? '。' + item.body : '') + '。' + labels[1] : '查看通知会话');
     this.root.hidden = !item;
     if (item) this.root.dataset.kind = item.kind;
     else delete this.root.dataset.kind;

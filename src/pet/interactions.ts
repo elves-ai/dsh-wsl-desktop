@@ -137,6 +137,7 @@ export class PetInteractions {
   private readonly summary: HTMLButtonElement;
   private readonly panel: HTMLElement;
   private readonly heading: HTMLElement;
+  private readonly source: HTMLElement;
   private readonly close: HTMLButtonElement;
   private readonly body: HTMLElement;
   private readonly listeners: (() => void)[] = [];
@@ -165,14 +166,17 @@ export class PetInteractions {
     this.panel = this.element('section', 'pet-interactions-panel');
     this.panel.setAttribute('aria-label', '待处理请求');
     const header = this.element('header', 'pet-interactions-header');
+    const headingGroup = this.element('div', 'pet-interactions-heading-group');
     this.heading = this.element('strong', 'pet-interactions-heading');
+    this.source = this.element('span', 'pet-interactions-source');
+    headingGroup.append(this.heading, this.source);
     this.close = this.button('pet-interactions-close', '×', () => {
       if (!this.active || this.obscured || this.disposed) return;
       this.collapsed = true;
       this.refresh();
     });
     this.close.setAttribute('aria-label', '收起请求（不取消）');
-    header.append(this.heading, this.close);
+    header.append(headingGroup, this.close);
     this.body = this.element('div', 'pet-interactions-content');
     this.panel.append(header, this.body);
     root.replaceChildren(this.summary, this.panel);
@@ -288,8 +292,13 @@ export class PetInteractions {
     this.summary.textContent = '有' + this.order.length + '个待处理请求';
     this.summary.disabled = this.obscured || !visible;
     this.close.disabled = this.obscured || !visible;
-    if (entry) this.heading.textContent = entry.card.agent_label + ' · ' +
-      (entry.card.kind === 'approval' ? '授权确认' : '问题确认') + '（' + this.order.length + '）';
+    if (entry) {
+      const title = entry.card.kind === 'approval' ? '权限确认' :
+        entry.card.questions?.some(question => question.intent?.kind === 'plan-review') ? '确认计划' : '回答问题';
+      this.heading.textContent = title + (this.order.length > 1 ? '（' + this.order.length + '）' : '');
+      this.source.textContent = entry.card.agent_label;
+      this.source.setAttribute('title', entry.card.agent_label);
+    }
     this.refreshControls();
     this.notify(visible && !this.collapsed);
   }
@@ -299,6 +308,9 @@ export class PetInteractions {
     entry.controls = [];
     const view = this.element('div', 'pet-interactions-card');
     const scroll = this.element('div', 'pet-interactions-scroll');
+    scroll.tabIndex = 0;
+    scroll.setAttribute('role', 'region');
+    scroll.setAttribute('aria-label', '请求正文');
     const text = (className: string, value?: string) => {
       if (value !== undefined) scroll.append(this.element('pre', className, value));
     };
@@ -314,6 +326,9 @@ export class PetInteractions {
       const q: QuestionView = { question, choices: [], custom: this.element('textarea', 'pet-interactions-custom'),
         hint: this.element('p', 'pet-interactions-hint'), skipped: false };
       const group = 'pet-interaction-' + ++this.radioGroup;
+      if (question.options?.length) {
+        section.append(this.element('p', 'pet-interactions-choice-hint', question.multiSelect ? '可多选' : '单选'));
+      }
       for (const option of question.options ?? []) {
         const label = this.element('label', 'pet-interactions-option');
         const input = this.element('input', '');
@@ -333,8 +348,11 @@ export class PetInteractions {
         entry.controls.push(input);
         section.append(label);
       }
-      q.custom.rows = 3;
-      q.custom.setAttribute('aria-label', question.intent ? '计划反馈（选择 Keep planning）' : '自定义回答');
+      q.custom.rows = 2;
+      const customLabel = this.element('label', 'pet-interactions-custom-label');
+      customLabel.append(this.element('span', '', question.intent ? '计划反馈（可选，选择 Keep planning）' :
+        question.options?.length ? '其他回答（可选）' : '自定义回答'));
+      customLabel.append(q.custom);
       q.custom.placeholder = question.intent ? '反馈（请选择非批准选项后提交）' : '其他回答（可选）';
       this.listen(q.custom, 'input', () => { q.skipped = false; this.refreshControls(); }, true);
       const skip = this.button('pet-interactions-skip', '跳过', () => {
@@ -352,7 +370,7 @@ export class PetInteractions {
         q.choices.forEach(choice => { choice.checked = draft.choices.some(old => old.checked && old.value === choice.value); });
       }
       entry.controls.push(q.custom);
-      section.append(q.custom, skip, q.hint);
+      section.append(customLabel, skip, q.hint);
       entry.questions.push(q);
       scroll.append(section);
     }
@@ -361,7 +379,7 @@ export class PetInteractions {
     }
     entry.status = this.element('p', 'pet-interactions-status');
     entry.status.setAttribute('role', 'status');
-    scroll.append(entry.status);
+    const footer = this.element('footer', 'pet-interactions-footer');
     const actions = this.element('div', 'pet-interactions-actions');
     if (entry.card.kind === 'approval') {
       entry.allow = this.button('pet-interactions-allow', '允许一次', () => {
@@ -385,7 +403,8 @@ export class PetInteractions {
     entry.open = open;
     entry.controls.push(open);
     entry.drafts = undefined;
-    view.append(scroll, actions);
+    footer.append(entry.status, actions);
+    view.append(scroll, footer);
     entry.view = view;
     this.body.replaceChildren(view);
   }
@@ -422,15 +441,18 @@ export class PetInteractions {
     if (entry.open) entry.open.disabled = !this.canOpen(entry) || this.composing;
     if (entry.allow) entry.allow.disabled = !enabled || entry.card.can_allow !== true || this.composing;
     if (entry.submit) entry.submit.disabled = !enabled || this.composing || !this.answers(entry);
+    let validationMessage = '';
     for (const q of entry.questions) {
       const conflict = q.question.intent && !!q.custom.value.trim() &&
         q.choices.some(choice => choice.checked && choice.value === q.question.intent!.approve);
       q.hint.textContent = conflict ? '有反馈时不能批准计划；请选择 Keep planning 后提交。' : q.skipped ? '已选择跳过此题。' : '';
       q.hint.hidden = !conflict && !q.skipped;
+      if (conflict) validationMessage = q.hint.textContent;
     }
     if (entry.status) entry.status.textContent = !this.connected ? '连接已断开，恢复连接前不能提交。' :
       entry.pending || this.requests.has(entry.card.id) ? '正在处理，请勿重复点击。' :
-      entry.card.answerable === false ? '请求尚未就绪，请稍候；也可在 DSH 打开。' : entry.message;
+      entry.card.answerable === false ? '请求尚未就绪，请稍候；也可在 DSH 打开。' : entry.message || validationMessage;
+    if (entry.status) entry.status.hidden = !entry.status.textContent;
   }
 
   private async submit(entry: Entry, reply: PetInteractionReply): Promise<void> {

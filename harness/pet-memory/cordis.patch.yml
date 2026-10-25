@@ -1,0 +1,18 @@
+# Adds a non-default preset; does not edit standard/coding presets.
+- insert:
+    - id: preset-desktop-pet
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: desktop-pet
+        name: Desktop Pet (local explicit memory)
+        plugins:
+          - id: desktop-pet-memory
+            name: '@dsh-wsl-desktop/pet-memory'
+            config:
+              enabled: !!js Boolean(process.env.DSH_PET_MEMORY_SCOPE && process.env.DSH_PET_MEMORY_HELPER)
+              scope: !!js process.env.DSH_PET_MEMORY_SCOPE || ''
+              expectedWorkspaceId: !!js process.env.DSH_PET_MEMORY_WORKSPACE || ''
+              helperPath: !!js process.env.DSH_PET_MEMORY_HELPER || ''
+              maxInputTokens: 24000
+              outputReserveTokens: 4096
+              safetyTokens: 2048

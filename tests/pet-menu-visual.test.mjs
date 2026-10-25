@@ -26,18 +26,20 @@ function toggleNode() {
   };
 }
 
-test('pet menu groups existing actions, preserves native select and uses uniform decorative line icons', () => {
+test('pet menu groups existing actions, exposes an action submenu and uses uniform decorative line icons', () => {
   const groups = menu.split('<hr class="pet-menu-separator">');
   assert.equal(groups.length, 3);
   const actions = group => [...group.matchAll(/data-(?:pet-command|action)="([^"]+)"/g)].map(match => match[1]);
   assert.deepEqual(actions(groups[0]), ['close-menu','talk','replay','toggle_chat','open_dsh']);
   assert.deepEqual(actions(groups[1]), ['auto-read','topmost']);
   assert.deepEqual(actions(groups[2]), ['pet_settings','hide']);
-  assert.ok(groups[1].includes('<select id="pet-animation" aria-label="选择宠物动作"></select>'));
+  assert.ok(groups[1].includes('aria-haspopup="menu" aria-controls="pet-animation" aria-expanded="false"'));
+  assert.ok(root.innerHTML.includes('id="pet-animation" class="pet-menu pet-submenu" role="menu"'));
+  assert.doesNotMatch(menu, /<select/);
   assert.ok(menu.includes('class="pet-menu-label">自动朗读</span>'));
   assert.ok(menu.includes('class="pet-menu-label">窗口置顶</span>'));
   const icons = [...menu.matchAll(/<svg [^>]*>/g)];
-  assert.equal(icons.length, 12); // Nine action rows, close, two checkmarks.
+  assert.equal(icons.length, 11); // Nine action rows, close, submenu chevron.
   for (const [icon] of icons) {
     for (const attribute of ['viewBox="0 0 24 24"','stroke-width="1.5"','stroke-linecap="round"','aria-hidden="true"','focusable="false"']) assert.ok(icon.includes(attribute));
   }
@@ -48,10 +50,12 @@ test('menu styles import shared tokens and constrain dimensions without moving t
   const panel = css.match(/\.pet-menu \{([^}]+)\}/)[1];
   for (const rule of ['width: 196px', 'max-height: calc(100% - 12px)', 'overflow: auto', 'background: var(--ui-bg)', 'font: 12px/18px var(--ui-font)']) assert.ok(panel.includes(rule), rule);
   assert.doesNotMatch(panel, /gradient|backdrop-filter|transform/);
-  assert.match(css, /\.pet-menu > button, \.pet-menu-animation \{[^}]*height: 26px/);
+  assert.match(css, /\.pet-menu > button, \.pet-submenu \[role="menuitem"\] \{[^}]*height: 26px/);
   assert.match(css, /\.pet-menu-icon \{[^}]*width: 16px; height: 16px/);
-  assert.ok(css.includes('.pet-menu [aria-checked="true"] .pet-menu-indicator > svg { visibility: visible'));
-  assert.ok(css.includes('.pet-menu button:focus-visible, .pet-menu select:focus-visible { outline: 2px solid var(--ui-accent)'));
+  assert.ok(css.includes(`.pet-menu [aria-checked="true"] .pet-menu-indicator::after { content: '开'; }`));
+  assert.ok(css.includes(`.pet-menu [aria-checked="false"] .pet-menu-indicator::after { content: '关'; }`));
+  assert.doesNotMatch(menu, /pet-menu-indicator[^>]*><svg/);
+  assert.ok(css.includes('.pet-menu button:focus-visible { outline: 2px solid var(--ui-accent)'));
   assert.ok(css.includes('@media (prefers-reduced-motion: reduce)'));
   assert.ok(css.includes("content: '保存失败'"), 'save failure remains visible alongside the stable label');
 });

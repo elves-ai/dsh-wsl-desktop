@@ -130,10 +130,9 @@ pub struct Notice {
 }
 
 /// Add task identity using only session-list metadata, never history/question text.
-/// Titles are ephemeral; do not put this body in snapshots or launcher logs.
-pub fn task_notice_body(list: &Value, session_id: &str, description: &str) -> String {
-    let title = list
-        .get("items")
+/// Titles are ephemeral; do not put them in snapshots or launcher logs.
+pub fn task_notice_title(list: &Value, session_id: &str) -> String {
+    list.get("items")
         .and_then(Value::as_array)
         .and_then(|items| {
             items
@@ -151,7 +150,11 @@ pub fn task_notice_body(list: &Value, session_id: &str, description: &str) -> St
             } else {
                 format!("未命名会话 · {id}")
             }
-        });
+        })
+}
+
+pub fn task_notice_body(list: &Value, session_id: &str, description: &str) -> String {
+    let title = task_notice_title(list, session_id);
     format!("任务：{title}\n{description}")
 }
 
@@ -542,6 +545,18 @@ mod tests {
                 .unwrap()
                 .fragment()
         );
+    }
+
+    #[test]
+    fn task_notice_title_is_separate_from_description() {
+        let rows = list(vec![
+            json!({"sessionId":"root", "projections":{"values":{"title":"宠物的对话目录展示到设置里"}}}),
+        ]);
+        assert_eq!(
+            task_notice_title(&rows, "root"),
+            "宠物的对话目录展示到设置里"
+        );
+        assert_eq!(task_notice_title(&rows, ""), "未命名会话");
     }
 
     #[test]

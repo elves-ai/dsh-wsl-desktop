@@ -22,11 +22,12 @@ export function layoutPetBubbles(root: HTMLElement, anchor: HTMLElement, insets:
   // transparent window stays unchanged; video and hit box move together without scaling.
   const composer = root.querySelector<HTMLElement>('#pet-composer');
   let composerTop = bottom;
+  const previousReserved = parseFloat(host.style.getPropertyValue('--pet-composer-space')) || 0;
   let reserved = 0;
   if (composer && !composer.hidden && composer.getClientRects().length) {
     const width = Math.min(324, bounds.width);
     setStyle(composer, 'width', width + 'px');
-    setStyle(composer, 'max-height', Math.max(40, bounds.height - 180) + 'px');
+    setStyle(composer, 'max-height', Math.min(bounds.height, 128) + 'px');
     setStyle(composer, 'height', 'auto');
     setStyle(composer, 'top', 'auto');
     setStyle(composer, 'bottom', (shell.bottom - bottom) + 'px');
@@ -36,7 +37,10 @@ export function layoutPetBubbles(root: HTMLElement, anchor: HTMLElement, insets:
     setStyle(composer, 'left', (x - shell.left) + 'px');
     setStyle(composer, 'right', 'auto');
     composerTop = bottom - height;
-    reserved = height + 8;
+    // Reserve from the actual feet, not the video stage bottom: its transparent
+    // margin otherwise needlessly lifts the head into a short speech bubble.
+    // Undo the previous pass so repeated layouts do not oscillate.
+    reserved = Math.max(0, pet.bottom + previousReserved - composerTop + 8);
     composer.dataset.placement = 'below';
   }
   setStyle(host, '--pet-composer-space', reserved + 'px');
@@ -56,12 +60,24 @@ export function layoutPetBubbles(root: HTMLElement, anchor: HTMLElement, insets:
     setStyle(bubble, 'right', 'auto');
     setStyle(bubble, 'bottom', 'auto');
     setStyle(bubble, 'width', width + 'px');
-    // Speech stays above the head; expanded text must not cover the separate input strip.
+    // Prefer space around the head, but keep text readable when that means covering the pet.
+    // Neither compact nor expanded speech may cover the separate input strip.
     const available = dialogue ? speechBounds : bounds;
-    const dialogueHeight = bubble.dataset.expanded === 'true' ? 256 : Math.max(36, Math.min(152, target.y - bounds.y - 8));
-    setStyle(bubble, 'max-height', Math.min(interaction ? 256 : dialogue ? dialogueHeight : 110, available.height) + 'px');
+    const expanded = dialogue && bubble.dataset.expanded === 'true';
+    const expand = dialogue ? bubble.querySelector<HTMLElement>('#pet-speech-expand') : null;
+    // Measure the compact text without its optional expand action first. This avoids
+    // keeping an unnecessary action just because it reduced the text's available height.
+    if (expand) expand.hidden = !expanded;
+    const dialogueHeight = expanded ? 256 : 152;
+    setStyle(bubble, 'max-height', Math.min(interaction ? 280 : dialogue ? dialogueHeight : 110, available.height) + 'px');
     // An absolute summary has max-height:100%; give it a real containing height while measuring.
-    setStyle(bubble, 'height', interaction ? Math.min(256, bounds.height) + 'px' : 'auto');
+    setStyle(bubble, 'height', interaction ? Math.min(280, bounds.height) + 'px' : 'auto');
+    const text = dialogue ? bubble.querySelector<HTMLElement>('#pet-speech-text') : null;
+    if (expand && text) {
+      const overflow = text.scrollHeight > text.clientHeight + 1 || text.scrollWidth > text.clientWidth + 1;
+      expand.hidden = !expanded && !overflow;
+      if (expanded) text.setAttribute('tabindex', '0'); else text.removeAttribute('tabindex');
+    }
     const measured = (summary ?? bubble).getBoundingClientRect();
     const preferred = { width: summary ? measured.width : width, height: measured.height };
     const placement = placePetBubble(target, preferred, available);

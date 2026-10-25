@@ -1,6 +1,6 @@
 [package]
 name = "dsh-wsl-desktop"
-version = "0.1.21"
+version = "0.1.22"
 description = "Windows launcher for DeepSeek Harness in WSL"
 edition = "2021"
 rust-version = "1.85"
@@ -17,6 +17,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 url = "2"
 semver = "1"
+sha2 = "0.10"
 # Pure read-only RPC transport is also tested on Linux without a GUI.
 reqwest = { version = "0.12", default-features = false, features = ["blocking"] }
 tungstenite = { version = "0.26", default-features = false, features = ["handshake"] }
@@ -32,7 +33,6 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-notification = "=2.3.3"
 # Retain WinRT toast handles and activation callbacks while the launcher is running.
 windows = { version = "=0.61.3", features = ["Data_Xml_Dom", "Foundation", "UI_Notifications", "Win32_System_WinRT"] }
-sha2 = "0.10"
 base64 = "0.22"
 # Windows system TLS/certificate store; updater packages are direct NSIS EXEs, not legacy ZIPs.
 tauri-plugin-updater = { version = "2.14", default-features = false, features = ["native-tls", "system-proxy"] }

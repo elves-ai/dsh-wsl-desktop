@@ -48,9 +48,11 @@ class Node {
 }
 function setup({ native = true, view = 'chat', speechSupported = false, autoRead = false, legacyAutoRead = false, storageDenied = false, getSpeechPreferences, setSpeechPreferences, listenGate, getSnapshot, getPreferences, getInbox, openNotification, getInteractions, submitInteraction, openInteraction, setTopmost, actionResult, getGeometry, movePet, dragPet } = {}) {
   const nodes = new Map();
-  const ids = ['pet-read', 'pet-read-status', 'pet-auto-read', 'assistant-root', 'pet-dialogue', 'pet-speech', 'pet-speech-label', 'pet-speech-text', 'pet-speech-close', 'pet-speech-expand', 'pet-composer', 'pet-input-close', 'pet-enable', 'preview', 'pet', 'pet-media', 'pet-animation', 'pet-menu', 'pet-bubble', 'pet-interaction', 'pet-topmost', 'pet-fixed', 'notice', 'status', 'setup', 'conversation', 'sessions', 'new-session', 'session-bar', 'composer-footnote', 'reconfigure', 'runtime-message', 'draft-hint', 'retry', 'send', 'cancel', 'enable', 'workspace', 'consent', 'enable-form', 'send-form', 'draft'];
+  const ids = ['pet-read', 'pet-read-status', 'pet-auto-read', 'assistant-root', 'pet-dialogue', 'pet-speech', 'pet-speech-label', 'pet-speech-text', 'pet-speech-close', 'pet-speech-expand', 'pet-composer', 'pet-input-close', 'pet-enable', 'preview', 'pet', 'pet-media', 'pet-animation-trigger', 'pet-animation', 'pet-animation-list', 'pet-menu', 'pet-bubble', 'pet-interaction', 'pet-topmost', 'pet-fixed', 'notice', 'status', 'setup', 'conversation', 'sessions', 'new-session', 'session-bar', 'composer-footnote', 'reconfigure', 'runtime-message', 'draft-hint', 'retry', 'send', 'cancel', 'enable', 'workspace', 'consent', 'enable-form', 'send-form', 'draft'];
   ids.forEach(id => nodes.set(id, new Node(id)));
   nodes.get('pet-menu').hidden = true;
+  nodes.get('pet-menu').append(nodes.get('pet-animation-trigger'));
+  nodes.get('pet-animation').append(nodes.get('pet-animation-list'));
   const root = nodes.get('assistant-root');
   const calls = []; const events = []; const petEvents = []; const storage = new Map(); const frames = new Map(); let frameId = 0;
   const listeners = new Map(); let stopped = 0;
@@ -1002,6 +1004,25 @@ test('local storage failure does not create a second truth beside native prefere
   assert.equal(ui.nodes.get('pet-auto-read').getAttribute('aria-checked'),'false');toggleReading(ui);await tick();
   assert.equal(ui.nodes.get('pet-auto-read').getAttribute('aria-checked'),'true');assert.doesNotMatch(ui.nodes.get('pet-auto-read').textContent,/仅本次/);
   ui.emit(ready(2,{messages:[spokenAnswer()]}));assert.equal(ui.narration.played.length,1);ui.window.emit('pagehide');
+});
+
+test('action submenu lists renderer actions and selecting an action stops movement then closes the menu', async () => {
+  const ui = setup({view:'pet'}); await tick();
+  const list = ui.nodes.get('pet-animation-list');
+  const group = list.children[0];
+  assert.equal(group.getAttribute('aria-label'), '待机');
+  const button = group.children[1];
+  assert.equal(button.getAttribute('role'), 'menuitem');
+  assert.equal(button.textContent, '待机呼吸休闲');
+  ui.nodes.get('pet').emit('contextmenu');
+  assert.equal(ui.nodes.get('pet-menu').hidden, false);
+  const before = ui.petEvents.length;
+  button.emit('click');
+  assert.deepEqual(ui.petEvents.slice(before, before + 2), [['motion-stop'], ['trigger', '待机呼吸休闲']]);
+  assert.equal(ui.nodes.get('pet-menu').hidden, true);
+  assert.equal(ui.nodes.get('pet-animation').hidden, true);
+  ui.window.emit('pagehide');
+  assert.equal(button.handlers.get('click').length, 0);
 });
 
 test('closing the speech bubble silences narration without cancelling the model task',async()=>{

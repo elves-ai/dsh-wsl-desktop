@@ -255,7 +255,7 @@ test('pending-question reminders share safe delivery and only read existing sess
   assert.ok(native.includes('AttentionTracker::new()'));
   assert.ok(native.includes('attention.poll(&list'));
   assert.ok(native.includes('rpc.page(session_id, cursor)'));
-  assert.ok(native.includes('DSH · 需要你回答'));
+  assert.ok(native.includes('需要你回答'));
   const delivery = native.slice(native.indexOf('fn deliver('), native.indexOf('pub(super) fn start('));
   for (const guard of ['foreground(app)', '!settings.should_notify(is_foreground)', 'notify_when_focused: data.snapshot.notify_when_focused', 'data.epoch != epoch', 'controller.exiting.load', 'controller.snapshot().state != "ready"']) assert.ok(delivery.includes(guard));
   const transport = read('src-tauri/src/notification_transport.rs');
@@ -270,10 +270,13 @@ test('all task notification kinds add matching session identity without new RPC 
   const waiting = worker.slice(worker.indexOf('for notice in waiting'), worker.indexOf('let requests = tracker.scan'));
   const results = worker.slice(worker.indexOf('if let Some(notice) = notice'));
   assert.match(waiting, /task_notice_body\(\s*&list,\s*&notice.session_id,/);
-  assert.match(waiting, /"DSH · 需要你回答",\s*&body/);
+  assert.match(waiting, /"需要你回答",\s*&body,\s*&task_notice_title/);
   assert.match(results, /task_notice_body\(&list, &notice.session_id, body\)/);
-  assert.match(results, /deliver\(\s*&app,\s*&controller,\s*&state,\s*epoch,\s*channels,\s*target,\s*title,\s*&body,\s*kind,\s*&key,?\s*\)/);
+  assert.match(results, /deliver\(\s*&app,\s*&controller,\s*&state,\s*epoch,\s*channels,\s*target,\s*title,\s*&body,\s*&task_notice_title\(&list, &notice.session_id\),\s*kind,\s*&key,?\s*\)/);
   assert.equal((native.match(/task_notice_body\(/g) || []).length, 2);
+  assert.equal((native.match(/task_notice_title\(&list, &notice.session_id\)/g) || []).length, 2);
+  assert.ok(native.includes('kind, task_title, "", key'));
+  assert.doesNotMatch(native, /DSH · (?:本轮执行|需要你回答)/);
   assert.doesNotMatch(native, /snapshot[.](?:title|body|task)|emit_to[\s\S]{0,120}&body/);
 });
 

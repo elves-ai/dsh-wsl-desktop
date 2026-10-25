@@ -28,7 +28,7 @@ test('real browser keeps speech above, input below and controls inside either ed
       if (document.getElementById('pet-status')) failures.push(['pet head status remains']);
       document.getElementById('notice').textContent = '移动失败后仍可打开设置';
       document.getElementById('pet-topmost').setAttribute('aria-checked', 'true');
-      document.getElementById('pet-animation').innerHTML = '<option>被鼠标拖拽悬空反馈</option>';
+      document.getElementById('pet-animation-list').innerHTML = '<button role="menuitem">被鼠标拖拽悬空反馈</button>';
       if (document.querySelector('#pet-menu .pet-menu-credit, #pet-menu .asset-license, #pet-menu .pet-credit')) failures.push(['menu material attribution remains']);
       const bubble = document.getElementById('pet-bubble');
       bubble.className = 'pet-notifications';
@@ -50,11 +50,16 @@ test('real browser keeps speech above, input below and controls inside either ed
           document.getElementById('pet-speech-text').textContent = '我在呢，想说些什么？';
           document.getElementById('pet-enable').hidden = true;
           layoutPetBubbles(root,pet,{left,right});
+          const firstPass = [pet.getBoundingClientRect().top, document.getElementById('pet-dialogue').getBoundingClientRect().bottom];
+          layoutPetBubbles(root,pet,{left,right});
+          if (firstPass[0] !== pet.getBoundingClientRect().top || firstPass[1] !== document.getElementById('pet-dialogue').getBoundingClientRect().bottom) failures.push(['layout oscillates',left,right,panel]);
           if (panel === 'pet-composer') {
             const input=document.getElementById('pet-composer').getBoundingClientRect();
             const character=pet.getBoundingClientRect();
             const speech=document.getElementById('pet-dialogue').getBoundingClientRect();
             if(input.top < character.bottom + 4 || input.bottom > 320) failures.push(['input not below pet',left,right,input.top,character.bottom,input.bottom]);
+            if(Math.abs(input.top - character.bottom - 8) > .1) failures.push(['excess or missing feet clearance',left,right,input.top,character.bottom]);
+            if(speech.height < 62 || document.querySelector('.pet-speech-header').getBoundingClientRect().height < 24 || document.getElementById('pet-speech-text').getBoundingClientRect().height < 20) failures.push(['short speech no longer readable',left,right,speech.height]);
             if(speech.bottom > character.top + .1) failures.push(['speech not above head',left,right,speech.bottom,character.top]);
             if(document.getElementById('pet-dialogue').contains(document.getElementById('pet-composer'))) failures.push(['input still grouped with speech']);
           }
@@ -64,6 +69,7 @@ test('real browser keeps speech above, input below and controls inside either ed
             const rect = node.getBoundingClientRect();
             if (rect.left < left - .1 || rect.right > 360 - right + .1 || rect.width <= 0) failures.push([left,right,panel,node.className || node.id,rect.left,rect.right]);
           }
+          if (panel !== 'pet-composer' && (stage.getBoundingClientRect().y !== originalStage.y || pet.getBoundingClientRect().y !== originalPet.y)) failures.push(['resting position not restored',left,right,panel]);
           for (const [node,original] of [[stage,originalStage],[pet,originalPet]]) {
             const rect = node.getBoundingClientRect();
             if (rect.x !== original.x || rect.width !== original.width || rect.height !== original.height) failures.push(['stage/pet changed',left,right]);

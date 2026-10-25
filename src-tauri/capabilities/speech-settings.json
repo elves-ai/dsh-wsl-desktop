@@ -18,6 +18,9 @@
     "allow-cancel-speech-initialization",
     "allow-get-speech-download",
     "allow-download-speech-model",
-    "allow-cancel-speech-download"
+    "allow-cancel-speech-download",
+    "allow-get-speech-install",
+    "allow-install-speech",
+    "allow-cancel-speech-install"
   ]
 }

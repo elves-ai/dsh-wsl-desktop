@@ -4,7 +4,7 @@ import { PetNotifications } from '/src/pet/notifications.ts';
 let sequence=0;
 const result=document.getElementById('preview-result');
 const notifications=new PetNotifications(document.getElementById('pet-bubble'),{onOpen:async()=>{result.textContent='预览：已点击查看会话，不进行实际跳转。';},onDismiss:()=>{}});
-document.getElementById('preview-completed').addEventListener('click',()=>notifications.enqueue({id:'preview-'+(++sequence),kind:'completed',title:'本轮执行已结束',body:'任务：气泡通知布局验收。点击这里查看对应会话。'}));
-document.getElementById('preview-waiting').addEventListener('click',()=>notifications.enqueue({id:'preview-'+(++sequence),kind:'waiting',title:'鲸鱼娘需要你回答',body:'任务正在等待你选择、回答问题或确认计划。'}));
+document.getElementById('preview-completed').addEventListener('click',()=>notifications.enqueue({id:'preview-'+(++sequence),kind:'completed',title:'宠物的对话目录展示到设置里',body:''}));
+document.getElementById('preview-waiting').addEventListener('click',()=>notifications.enqueue({id:'preview-'+(++sequence),kind:'waiting',title:'确认宠物通知的展示方案',body:''}));
 window.addEventListener('pagehide',()=>notifications.dispose(),{once:true});
 </script></body></html>

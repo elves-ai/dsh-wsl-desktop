@@ -569,6 +569,108 @@ impl Manager {
         state.data = data;
         Ok(state.data.preferences.clone())
     }
+    /// Installer holds the shared resource lease across build, inspection and atomic save.
+    /// This synchronous path reuses exactly the normal run_inspect persistence logic.
+    pub fn save_install_config(
+        &self,
+        lease: &ResourceDownloadLease,
+        config: SpeechConfig,
+        cancel: &Cancellation,
+    ) -> Result<SpeechSnapshot, String> {
+        config.validate()?;
+        if !Arc::ptr_eq(&lease.0, &self.shared) {
+            return Err("安装资源所有权无效。".into());
+        }
+        let _worker = self.shared.worker.lock().unwrap();
+        cancel.check()?;
+        let id = {
+            let mut state = self.shared.state.lock().unwrap();
+            if state.closed || !state.resource_download {
+                return Err("安装已关闭。".into());
+            }
+            cancel_operation(&mut state);
+            state.next_id = state
+                .next_id
+                .checked_add(1)
+                .ok_or("语音操作版本号已用尽。")?;
+            let id = state.next_id;
+            state.operation = Some(Operation {
+                id,
+                kind: "save",
+                cancel: cancel.clone(),
+                request_id: None,
+            });
+            state.snapshot.busy = true;
+            state.snapshot.operation = Some("save".into());
+            state.snapshot.error = None;
+            state.snapshot.environment_state = CheckState::Checking;
+            state.snapshot.models_state = CheckState::Checking;
+            id
+        };
+        run_inspect(&self.shared, id, true, config.clone(), cancel);
+        let mut state = self.shared.state.lock().unwrap();
+        let cleanup = if state.operation.as_ref().is_some_and(|op| op.id == id) {
+            cancel_operation(&mut state);
+            bump(&mut state, "语音安装检测已取消；原配置未覆盖。");
+            Some(state.snapshot.clone())
+        } else {
+            None
+        };
+        let snapshot = state.snapshot.clone();
+        drop(state);
+        if let Some(cleanup) = cleanup {
+            self.shared.emit(cleanup);
+        }
+        if snapshot.config == config
+            && snapshot.environment_state == CheckState::Passed
+            && snapshot.models_state == CheckState::Passed
+            && snapshot.error.is_none()
+        {
+            return Ok(snapshot);
+        }
+        cancel.check()?;
+        Err(snapshot
+            .error
+            .unwrap_or_else(|| "语音安装检测未通过；原配置未覆盖。".into()))
+    }
+    pub fn ensure_install_stopped(
+        &self,
+        lease: &ResourceDownloadLease,
+        cancel: &Cancellation,
+    ) -> Result<(), String> {
+        if !Arc::ptr_eq(&lease.0, &self.shared) {
+            return Err("安装资源所有权无效。".into());
+        }
+        cancel.check()?;
+        let status = self.shared.runtime.status(cancel)?;
+        cancel.check()?;
+        if status.service_state != ServiceState::Stopped {
+            return Err(
+                "检测到语音服务运行或状态未知；请先停止服务后重试安装，未修改依赖。".into(),
+            );
+        }
+        Ok(())
+    }
+    pub fn reuse_install_config(
+        &self,
+        lease: &ResourceDownloadLease,
+        cancel: &Cancellation,
+    ) -> Result<bool, String> {
+        let snapshot = self.get_snapshot();
+        if !snapshot.configured || snapshot.config.validate().is_err() {
+            return Ok(false);
+        }
+        let result = self
+            .shared
+            .runtime
+            .inspect(&snapshot.config, cancel, &|_| {});
+        cancel.check()?;
+        if result.is_ok_and(|result| result.environment_ok && result.models_ok) {
+            self.save_install_config(lease, snapshot.config, cancel)?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
     pub fn save_config(&self, config: SpeechConfig) -> Result<SpeechSnapshot, String> {
         config.validate()?;
         self.launch("save", Some(config), None)

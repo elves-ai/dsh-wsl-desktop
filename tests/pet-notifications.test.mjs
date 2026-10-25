@@ -97,9 +97,31 @@ function setup(t, options = {}) {
   });
   t.after(() => notifications.dispose());
   const [open, close] = root.children;
-  const [title, body, error] = open.children;
-  return { root, outer, document, clock, notifications, dismissed, opened, changed, open, close, title, body, error };
+  const [status, title, body, action, error] = open.children;
+  return { root, outer, document, clock, notifications, dismissed, opened, changed, open, close, status, title, body, action, error };
 }
+
+test('task name is separate from concise status and action for every kind', t => {
+  const e = setup(t);
+  const title = '宠物的对话目录展示到设置里';
+  for (const [kind, status, action] of [
+    ['completed', '本轮已结束', '查看结果 →'],
+    ['failed', '本轮执行失败', '查看详情 →'],
+    ['waiting', '需要你回答', '前往回答 →'],
+  ]) {
+    e.notifications.enqueue(item(kind, { kind, title, body: '' }));
+    assert.equal(e.status.textContent, status);
+    assert.equal(e.title.textContent, title);
+    assert.equal(e.title.getAttribute('title'), title);
+    assert.equal(e.action.textContent, action);
+    assert.equal(e.body.hidden, true);
+    assert.ok(e.open.getAttribute('aria-label').includes(status + '：' + title));
+    assert.doesNotMatch(e.root.textContent, /DSH|不代表|任务已完成/);
+    e.close.click();
+  }
+  e.notifications.enqueue(item('with-body'));
+  assert.equal(e.body.hidden, false);
+});
 
 test('FIFO with five pending; overflow dismisses oldest pending exactly once', t => {
   const e = setup(t);
@@ -306,7 +328,8 @@ test('CSS keeps compact speech bubble bounds and z8 below menu z10; visual verif
   assert.match(css, /left:\s*calc\(18px \+ var\(--pet-visible-left, 0px\)\)/); assert.match(css, /right:\s*calc\(18px \+ var\(--pet-visible-right, 0px\)\)/);
   assert.match(css, /max-height:\s*110px/); assert.match(css, /z-index:\s*8/);
   assert.match(css, /\.pet-notifications::after\s*\{/);
-  assert.match(css, /-webkit-line-clamp:\s*3/);
+  assert.match(css, /[.]pet-notification-title \{ -webkit-line-clamp: 2;[^}]*font-size: 14px/);
+  assert.match(css, /[.]pet-notification-status \{[^}]*font-size: 11px/);
   assert.doesNotMatch(css, /url\(/i);
 });
 

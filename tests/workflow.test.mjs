@@ -21,6 +21,14 @@ test('environment inspection and directory save fixture tests run before packagi
   assert.equal(workflow.env.PYTHONDONTWRITEBYTECODE, '1');
 });
 
+test('Linux verification covers the isolated WSL memory bundle before packaging', () => {
+  const step = workflow.jobs.verify.steps.find(step => step.name === 'Test pet-only memory bundle without model calls');
+  assert.ok(step);
+  assert.match(step.run, /node --test harness\/pet-memory\/test\/plugin\.test\.js/);
+  assert.match(step.run, /python -I -B harness\/pet-memory\/test\/configure_test\.py/);
+  assert.ok(!workflow.jobs['build-windows'].steps.some(step => step.run?.includes('harness/pet-memory/test')));
+});
+
 test('Windows packaging waits for verification and pins every third-party action', () => {
   assert.equal(workflow.jobs['build-windows'].needs, 'verify');
   assert.equal(workflow.jobs['build-windows']['runs-on'], 'windows-2022');
@@ -54,7 +62,7 @@ test('local Windows staging copies test metadata and permissions before npm test
   for (const file of ['RELEASE_NOTES.md', '.gitignore', '.gitattributes']) {
     assert.ok(rootFiles?.includes("'" + file + "'"), file + ' must be staged before tests');
   }
-  assert.ok(folders?.includes("'src-tauri/permissions'"));
+  for (const folder of ["src-tauri/permissions", "harness", "docs"]) assert.ok(folders?.includes("'" + folder + "'"));
   assert.match(beforeTests, /foreach \(\$file in \$rootFiles\) \{ Copy-Item/);
   assert.match(beforeTests, /foreach \(\$folder in \$folders\) \{[\s\S]*robocopy\.exe/);
 });

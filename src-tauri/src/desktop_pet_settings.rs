@@ -251,7 +251,7 @@ impl PetControls {
     }
 }
 
-fn assert_settings(view: &Webview) -> Result<(), String> {
+pub(super) fn assert_settings(view: &Webview) -> Result<(), String> {
     assert_local(view)?;
     if !matches!(view.label(), "launcher-settings" | "dsh-settings") {
         return Err("请在设置页中操作桌面宠物。".into());

@@ -17,6 +17,7 @@ const pet = (extra = {}) => ({ visible: false, startup_visible: true, roaming_en
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 async function mount(native, initial = base(), options = {}) {
   let pickerResult = null;
+  const workspaceVisibility = []; let workspaceRefreshes = 0, workspaceDisposed = 0;
   let savedNotification = options.initialNotification || notification();
   let savedPower = options.initialPower || power();
   let savedPet = options.initialPet || pet();
@@ -29,6 +30,8 @@ async function mount(native, initial = base(), options = {}) {
   const location = { href: options.location || (options.mode === 'startup' ? 'http://127.0.0.1:1420/index.html' : 'http://127.0.0.1:1420/index.html?view=settings&section=environment') };
   const context = vm.createContext({
     appIconUrl: 'app-icon.png',
+    PetMemory: class { setVisible() {} refresh() {} dispose() {} },
+    PetWorkspace: class { setVisible(visible) { workspaceVisibility.push(visible); } refresh() { workspaceRefreshes++; } dispose() { workspaceDisposed++; } },
     SpeechSettings: class { setVisible(visible) { speechVisibility.push(visible); } dispose() {} },
     URL, console, document: { addEventListener() {}, querySelector: () => root, getElementById: id => nodes.get(id), createElement: tag => ({ tagName: tag, value: '', textContent: '', set innerHTML(_) { throw new Error('Native data must not use HTML'); } }) }, window: { location, addEventListener(name, handler) { windowHandlers.set(name, handler); } },
     isTauri: () => native,
@@ -66,12 +69,26 @@ async function mount(native, initial = base(), options = {}) {
     },
   });
   vm.runInContext(source, context); await flush();
-  return { async pick(id, path) { pickerResult = path; const button = id === 'repository-input' ? 'pick-repository' : id.replace('setup-', 'setup-pick-'); nodes.get(button)?.handlers.click?.(); await flush(); }, speechVisibility, template: root.template, pet(snapshot) { subscriptions.get('pet-settings-state')?.({ payload: snapshot }); }, power(snapshot) { subscriptions.get('launcher-power-state')?.({ payload: snapshot }); }, node(id) { assert.ok(nodes.has(id), 'Missing DOM node: ' + id); return nodes.get(id); }, has: id => nodes.has(id), location, calls, subscriptions, listenCalls, unlistened, async fill(id, value) { const item = nodes.get(id); item.value = value; item.handlers.input?.(); await flush(); }, async choose(id, value) { const item = nodes.get(id); item.value = value; item.handlers.change?.(); await flush(); }, async submit() { nodes.get('setup-form')?.handlers.submit?.({ preventDefault() {} }); await flush(); }, async change(id, checked) { const item = nodes.get(id); if (!item) return; item.checked = checked; item.handlers.change?.(); await flush(); }, notification(snapshot) { subscriptions.get('launcher-notification-state')?.({ payload: snapshot }); }, unload() { windowHandlers.get('beforeunload')?.(); }, event(snapshot) { subscriptions.get('launcher-state')?.({ payload: snapshot }); }, update(snapshot) { subscriptions.get('launcher-update-state')?.({ payload: snapshot }); }, async click(id) { nodes.get(id)?.handlers.click?.(); await flush(); } };
+  return { async pick(id, path) { pickerResult = path; const button = id === 'repository-input' ? 'pick-repository' : id.replace('setup-', 'setup-pick-'); nodes.get(button)?.handlers.click?.(); await flush(); }, workspaceVisibility, get workspaceRefreshes() { return workspaceRefreshes; }, get workspaceDisposed() { return workspaceDisposed; }, speechVisibility, template: root.template, pet(snapshot) { subscriptions.get('pet-settings-state')?.({ payload: snapshot }); }, power(snapshot) { subscriptions.get('launcher-power-state')?.({ payload: snapshot }); }, node(id) { assert.ok(nodes.has(id), 'Missing DOM node: ' + id); return nodes.get(id); }, has: id => nodes.has(id), location, calls, subscriptions, listenCalls, unlistened, async fill(id, value) { const item = nodes.get(id); item.value = value; item.handlers.input?.(); await flush(); }, async choose(id, value) { const item = nodes.get(id); item.value = value; item.handlers.change?.(); await flush(); }, async submit() { nodes.get('setup-form')?.handlers.submit?.({ preventDefault() {} }); await flush(); }, async change(id, checked) { const item = nodes.get(id); if (!item) return; item.checked = checked; item.handlers.change?.(); await flush(); }, notification(snapshot) { subscriptions.get('launcher-notification-state')?.({ payload: snapshot }); }, unload() { windowHandlers.get('beforeunload')?.(); }, event(snapshot) { subscriptions.get('launcher-state')?.({ payload: snapshot }); }, update(snapshot) { subscriptions.get('launcher-update-state')?.({ payload: snapshot }); }, async click(id) { nodes.get(id)?.handlers.click?.(); await flush(); } };
 }
 
 const petControls = ['pet-visible', 'pet-startup-visible', 'pet-roaming-enabled', 'pet-bubble-notifications'];
 const petCalls = app => app.calls.filter(([name]) => ['get_pet_settings', 'set_pet_settings', 'set_pet_visibility'].includes(name));
 const petValues = app => petControls.map(id => app.node(id).checked);
+
+test('workspace lifecycle refreshes pet entry and native re-entry independently of chat settings', async () => {
+  const pending = deferred();
+  const app = await mount(true, base(), { readySection: 'pet', invoke(name, args, {fallback}) { return name === 'settings_page_ready' ? pending.promise : fallback(); } });
+  assert.equal(app.workspaceVisibility.includes(true), false);
+  pending.resolve('pet'); await flush(); assert.equal(app.workspaceVisibility.at(-1), true);
+  await app.click('nav-power'); assert.equal(app.workspaceVisibility.at(-1), false);
+  await app.click('nav-pet'); assert.equal(app.workspaceVisibility.at(-1), true);
+  const count = app.workspaceVisibility.length;
+  app.subscriptions.get('launcher-show-settings')({ payload: 'pet' }); await flush();
+  assert.equal(app.workspaceVisibility.length, count + 1); assert.equal(app.workspaceVisibility.at(-1), true);
+  await app.click('pet-refresh'); assert.equal(app.workspaceRefreshes, 1);
+  app.unload(); assert.equal(app.workspaceDisposed, 1);
+});
 
 test('speech auto discovery waits until native settings has actually been revealed', async () => {
   const pending=deferred();
@@ -1553,7 +1570,8 @@ test('settings design uses shared tokens, labelled icons and preserves collapsib
   assert.match(app.template, /<div class="setting-path"><input id="repository-input"[^>]*readonly/);
   assert.match(css, /\.settings-sidebar nav \{[^}]*overflow-x: auto/);
   assert.match(css, /prefers-reduced-motion: reduce/);
-  assert.ok(speech.indexOf('id="speech-auto"') < speech.indexOf('id="speech-model_dir"'));
+  assert.ok(speech.indexOf('id="speech-auto"') < speech.indexOf('id="speech-resources"'));
+  assert.doesNotMatch(speech, /id="speech-(?:model_dir|python_path|native_lib|save)"/);
 });
 
 test('changing settings categories resets content scroll without resetting the current category', async () => {

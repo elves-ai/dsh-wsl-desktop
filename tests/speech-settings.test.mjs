@@ -27,65 +27,17 @@ function fixture({ native=true, initial=snapshot(), initialPrefs=prefs(), invoke
  const context={state:'suspended',destination:{},resume(){order.push('resume');this.state='running';return Promise.resolve();},close(){order.push('close');return Promise.resolve();},createGain(){return{gain:{value:1},connect(){},disconnect(){}};},decodeAudioData(){return Promise.resolve({duration:.1});},createBufferSource(){const s={onended:null,connect(){},disconnect(){},start(){order.push('play');},stop(){order.push('stop');}};sources.push(s);return s;}};
  const view={AudioContext:class{constructor(){return context;}},crypto:{getRandomValues(bytes){bytes.fill(++serial);return bytes;}},atob:s=>Buffer.from(s,'base64').toString('binary'),setTimeout(fn){timers.set(++clock,fn);return clock;},clearTimeout(id){timers.delete(id);},navigator:{clipboard:{async writeText(value){copied=value;}}}};
  const bridge={async listen(name,fn){order.push('listen:'+name);listeners.set(name,fn);if(customListen)await customListen(name,fn);return()=>{listeners.delete(name);order.push('unlisten:'+name);};},async invoke(name,args){calls.push({name,args});order.push(name);if(custom)return custom(name,args,fallback);return fallback(name,args);}};
- function fallback(name,args){if(name==='get_speech_settings')return initial;if(name==='get_speech_preferences')return initialPrefs;if(name==='speech_action')return initial;if(name==='save_speech_config')return snapshot({revision:1,config:args.config});if(name==='set_speech_preferences')return prefs({...initialPrefs,...args.patch,revision:initialPrefs.revision+1});if(name==='test_speech')return{request_id:args.requestId,voice_id:'pet-airhead-v1',wav_base64:wav()};if(name==='cancel_speech_test')return;throw Error('unexpected command '+name);}
+ function fallback(name,args){if(name==='get_speech_settings')return initial;if(name==='get_speech_preferences')return initialPrefs;if(name==='speech_action')return initial;if(name==='set_speech_preferences')return prefs({...initialPrefs,...args.patch,revision:initialPrefs.revision+1});if(name==='test_speech')return{request_id:args.requestId,voice_id:'pet-airhead-v1',wav_base64:wav()};if(name==='cancel_speech_test')return;throw Error('unexpected command '+name);}
  const settings=new SpeechSettings(root,view,native,bridge,resourceFactory);
  const node=id=>nodes.get('speech-'+id);
  return{settings,node,calls,order,listeners,timers,sources,context,get copied(){return copied;},show(){settings.setVisible(true);},hide(){settings.setVisible(false);},event(name,payload){listeners.get(name)?.({payload});},click(id){node(id).emit('click');},fill(id,value){node(id).value=value;node(id).emit('input');},async poll(){const jobs=[...timers.values()];timers.clear();jobs.forEach(fn=>fn());await tick();}};
 }
 
-test('resource selections are unsaved drafts and lifecycle follows trusted visible speech settings', async()=>{
- let select, getDraft, visible=false, disposed=false;
- const f=fixture({resources(root,onSelect,read){select=onSelect;getDraft=read;return{isBusy:()=>false,setVisible:v=>{visible=v;},setBlocked(){},dispose(){disposed=true;}};}});
- assert.equal(visible,false);f.show();await tick();assert.equal(visible,true);
- assert.deepEqual(getDraft(),config);select({model_dir:'/detected/models'});
- assert.equal(f.node('model_dir').value,'/detected/models');assert.match(f.node('draft').textContent,/未保存/);
- assert.equal(f.calls.some(c=>c.name==='save_speech_config'),false);
- f.event('launcher-speech-state',snapshot({revision:3}));assert.equal(f.node('model_dir').value,'/detected/models');
- f.hide();assert.equal(visible,false);select({model_dir:'/late'});assert.equal(f.node('model_dir').value,'/detected/models');
- f.settings.dispose();assert.equal(disposed,true);
-});
-test('resource busy blocks save, check, start and audition without blocking cancel or preferences',async()=>{
- let busy=false,blocked=false;
- const f=fixture({resources(){return{isBusy:()=>busy,setVisible(){},setBlocked:v=>{blocked=v;},dispose(){}};}});f.show();await tick();
- f.fill('model_dir','/candidate');busy=true;f.node('resources').emit('speech-resources-busy');
- for(const id of ['save','check','start','test']){assert.equal(f.node(id).disabled,true);f.click(id);}await tick();
- assert.equal(f.calls.some(c=>c.name==='save_speech_config'||c.args?.action==='start'||c.args?.action==='check'),false);
- assert.equal(f.node('auto').disabled,false);assert.equal(blocked,false);
- busy=false;f.node('resources').emit('speech-resources-busy');assert.equal(f.node('save').disabled,false);
- f.event('launcher-speech-state',ready({revision:4}));assert.equal(blocked,true);f.settings.dispose();
-});
-
-test('resource initialization busy blocks ready audition and polling but not later draft input or preferences',async()=>{
- let busy=false;const locks=[];
- const f=fixture({initial:ready(),resources(){return{isBusy:()=>busy,setVisible(){},setBlocked:v=>locks.push(v),dispose(){}};}});f.show();await tick();
- assert.equal(f.node('test').disabled,false);busy=true;f.node('resources').emit('speech-resources-busy');
- assert.equal(f.node('test').disabled,true);f.click('test');f.click('refresh');await f.poll();
- assert.equal(f.calls.some(c=>c.name==='test_speech'||c.args?.action==='refresh'),false);
- f.fill('model_dir','/newer/draft');assert.equal(f.node('model_dir').disabled,false);assert.equal(f.node('save').disabled,true);
- assert.equal(f.node('auto').disabled,false);busy=false;f.node('resources').emit('speech-resources-busy');
- assert.equal(f.node('model_dir').value,'/newer/draft');assert.equal(f.node('test').disabled,false);f.settings.dispose();
-});
-
 test('preview stays unknown, disabled and entirely non-mutating even for synthetic events',async()=>{
- const f=fixture({native:false});f.show();for(const id of ['save','refresh','check','start','stop','test','copy']){assert.equal(f.node(id).disabled,true);f.click(id);}f.fill('model_dir','/new');f.node('auto').checked=true;f.node('auto').emit('change');await tick();assert.deepEqual(f.calls,[]);assert.equal(f.listeners.size,0);assert.equal(f.timers.size,0);assert.equal(f.node('model_state').textContent,'未知');assert.match(f.node('message').textContent,/浏览器预览/);f.settings.dispose();
+ const f=fixture({native:false});f.show();for(const id of ['refresh','check','start','stop','test','copy']){assert.equal(f.node(id).disabled,true);f.click(id);}f.node('auto').checked=true;f.node('auto').emit('change');await tick();assert.deepEqual(f.calls,[]);assert.equal(f.listeners.size,0);assert.equal(f.timers.size,0);assert.equal(f.node('model_state').textContent,'未知');assert.match(f.node('message').textContent,/浏览器预览/);f.settings.dispose();
 });
 test('opening visible speech subscribes first then reads only lightweight state and preferences',async()=>{
  const f=fixture();assert.equal(f.calls.length,0);f.show();await tick();assert.deepEqual(f.calls.map(c=>c.name),['get_speech_settings','get_speech_preferences']);assert.equal(f.listeners.size,3);assert.ok(f.order.indexOf('listen:launcher-speech-stop')<f.order.indexOf('get_speech_settings'));assert.equal(f.node('test').disabled,true);assert.equal(f.node('model_state').textContent,'未知');assert.equal(f.node('progress').hidden,true);await f.poll();assert.deepEqual(f.calls.at(-1),{name:'speech_action',args:{action:'refresh'}});f.hide();assert.equal(f.listeners.size,0);assert.equal(f.timers.size,0);
-});
-test('empty first use keeps Python blank and read-only until a valid snapshot supplies the managed path',async()=>{
- const empty={model_dir:'',python_path:'',native_lib:''};
- const f=fixture({initial:snapshot({configured:false,config:empty})});f.show();await tick();
- assert.equal(f.node('python_path').value,'');
- assert.match(raw, /id="speech-python_path"[^>]*readonly[^>]*aria-readonly="true"/);
- assert.match(raw, /首次使用请点击“初始化语音环境”准备默认路径/);
- assert.doesNotMatch(raw, /使用检测结果|按检测到的显卡类型/);
- f.event('launcher-speech-state',snapshot({revision:1,ownership:'invalid'}));
- assert.equal(f.node('python_path').value,'');
- f.event('launcher-speech-state',snapshot({revision:2}));
- assert.equal(f.node('python_path').value,config.python_path);
- f.event('launcher-speech-state',snapshot({revision:3,config:{...config,python_path:'/external/bin/python'}}));
- assert.equal(f.node('python_path').value,'');
- assert.deepEqual(f.calls.map(c=>c.name),['get_speech_settings','get_speech_preferences']);f.settings.dispose();
 });
 test('opening, reopening and polling never dispatch discovery or Python runtime validation',async()=>{
  const f=fixture();f.show();await tick();await f.poll();f.hide();f.show();await tick();await f.poll();
@@ -107,12 +59,12 @@ test('read-only polling never toggles resource locks or status guidance',async()
  }
  assert.equal(locks.slice(before).includes(true),false);f.settings.dispose();
 });
-test('save, check and start are dispatchable while only a read-only refresh is busy',async()=>{
- for(const action of ['save','check','start']){
+test('check and start are dispatchable while only a read-only refresh is busy',async()=>{
+ for(const action of ['check','start']){
   const f=fixture({initial:snapshot({busy:true,operation:'refresh'})});f.show();await tick();
   if(action==='save')f.fill('model_dir','/candidate');
   assert.equal(f.node(action).disabled,false);f.click(action);await tick();
-  assert.ok(f.calls.some(c=>action==='save'?c.name==='save_speech_config':c.args?.action===action));f.settings.dispose();
+  assert.ok(f.calls.some(c=>c.args?.action===action));f.settings.dispose();
  }
 });
 test('an old refresh failure cannot replace guidance after a newer explicit operation',async()=>{
@@ -130,27 +82,6 @@ test('poll skips native refresh during start, check and candidate validation wit
 });
 test('newer events during subscription beat stale initial queries and malformed snapshots',async()=>{
  const f=fixture({listen(name,fn){if(name==='launcher-speech-state')fn({payload:ready({revision:9})});if(name==='launcher-speech-preferences')fn({payload:prefs({revision:9,auto_read:true,volume:22})});}});f.show();await tick();assert.equal(f.node('model_state').textContent,'就绪');assert.equal(f.node('auto').checked,true);assert.equal(f.node('volume').value,'22');f.event('launcher-speech-state',snapshot({revision:8}));f.event('launcher-speech-state',{...ready({revision:99}),model_state:'fake-ready'});f.event('launcher-speech-preferences',prefs({revision:999,volume:101}));assert.equal(f.node('model_state').textContent,'就绪');assert.equal(f.node('volume').value,'22');f.settings.dispose();
-});
-test('path saves validate candidates without replacing draft or current valid config on failure',async()=>{
- const pending=deferred();const f=fixture({invoke(name,args,fallback){return name==='save_speech_config'?pending.promise:fallback(name,args);}});f.show();await tick();f.fill('model_dir','/candidate');f.click('save');f.click('save');assert.equal(f.calls.filter(c=>c.name==='save_speech_config').length,1);assert.deepEqual(f.calls.at(-1).args.config,{...config,model_dir:'/candidate'});f.event('launcher-speech-state',snapshot({revision:2,error:'safe code',models_state:'error'}));f.fill('model_dir','/newer-draft');pending.reject(Error('secret /home/secret/token'));await tick();assert.equal(f.node('model_dir').value,'/newer-draft');assert.match(f.node('message').textContent,/失败/);assert.doesNotMatch(f.node('message').textContent,/secret|token/);assert.match(f.node('draft').textContent,/未保存/);await f.poll();assert.match(f.node('message').textContent,/失败/);f.settings.dispose();
-});
-test('successful final candidate clears dirty only when draft has not changed',async()=>{
- const f=fixture();f.show();await tick();f.fill('model_dir','/new');f.click('save');await tick();assert.match(f.node('draft').textContent,/已保存/);assert.equal(f.node('save').disabled,true);f.settings.dispose();
- const pending=deferred(),g=fixture({invoke(name,args,fallback){return name==='save_speech_config'?pending.promise:fallback(name,args);}});g.show();await tick();g.fill('model_dir','/candidate');g.click('save');g.fill('model_dir','/newer');pending.resolve(snapshot({revision:2,config:{...config,model_dir:'/candidate'}}));await tick();assert.equal(g.node('model_dir').value,'/newer');assert.match(g.node('draft').textContent,/未保存/);g.settings.dispose();
-});
-test('initial busy save resolves only through final event and cancelled save never clears drafts',async()=>{
- const f=fixture({invoke(name,args,fallback){return name==='save_speech_config'?snapshot({revision:1,busy:true,operation:'check',environment_state:'checking'}):fallback(name,args);}});
- f.show();await tick();f.fill('model_dir','/candidate');f.click('save');await tick();assert.match(f.node('draft').textContent,/未保存/);assert.doesNotMatch(f.node('message').textContent,/失败/);assert.equal(f.node('save').disabled,true);
- f.event('launcher-speech-state',snapshot({revision:2,config:{...config,model_dir:'/candidate'},environment_state:'passed',models_state:'passed'}));assert.match(f.node('draft').textContent,/已保存/);
- f.fill('model_dir','/other');f.click('save');await tick();f.click('cancel_check');await tick();f.event('launcher-speech-state',snapshot({revision:4,config:{...config,model_dir:'/other'}}));assert.match(f.node('draft').textContent,/未保存/);f.settings.dispose();
-});
-test('running or owned service locks changed path saves without locking shared preferences',async()=>{
- const f=fixture({initial:ready()});f.show();await tick();f.fill('model_dir','/candidate');assert.equal(f.node('save').disabled,true);assert.match(f.node('draft').textContent,/先停止/);assert.equal(f.node('auto').disabled,false);assert.equal(f.node('volume').disabled,false);f.click('save');await tick();assert.equal(f.calls.some(c=>c.name==='save_speech_config'),false);assert.equal(f.node('model_dir').value,'/candidate');
- f.event('launcher-speech-state',snapshot({revision:2,service_state:'stopped',ownership:'none'}));assert.equal(f.node('save').disabled,false);assert.equal(f.node('model_dir').value,'/candidate');f.settings.dispose();
- const external=fixture({initial:ready({ownership:'external'})});external.show();await tick();external.fill('native_lib','/other.so');assert.equal(external.node('save').disabled,true);assert.match(external.node('draft').textContent,/原终端/);external.settings.dispose();
-});
-test('invalid Windows or relative paths never reach native save',async()=>{
- const f=fixture();f.show();await tick();for(const path of ['C:/models','relative','//server/models','/invalid'+String.fromCharCode(92)+'path']){f.fill('model_dir',path);f.click('save');await tick();}assert.equal(f.calls.some(c=>c.name==='save_speech_config'),false);assert.match(f.node('message').textContent,/WSL 绝对路径/);f.settings.dispose();
 });
 test('busy actions suppress duplicates but allow cancel check and owned stop',async()=>{
  const pending=deferred();const f=fixture({initial:ready(),invoke(name,args,fallback){return name==='speech_action'&&args.action==='check'?pending.promise:fallback(name,args);}});f.show();await tick();f.click('check');f.click('check');f.click('start');assert.equal(f.calls.filter(c=>c.args?.action==='check').length,1);f.click('cancel_check');assert.equal(f.calls.at(-1).args.action,'cancel_check');await tick();f.click('stop');assert.equal(f.calls.at(-1).args.action,'stop');pending.resolve(snapshot({revision:0}));await tick();f.settings.dispose();
@@ -191,4 +122,26 @@ test('leaving an explicit check cancels helper and ignores late results',async()
 });
 test('DTO validation refuses unknown readiness and malformed shared preference values',()=>{
  assert.ok(isSpeechSnapshot(snapshot()));assert.ok(isSpeechPreferences(prefs()));assert.equal(isSpeechSnapshot({...snapshot(),ownership:'port-guessed'}),false);assert.equal(isSpeechSnapshot({...snapshot(),model_progress:101}),false);assert.equal(isSpeechPreferences(prefs({volume:NaN})),false);assert.equal(isSpeechPreferences(prefs({revision:-1})),false);assert.doesNotMatch(raw,/fetch\(|XMLHttpRequest|https?:\/\//);
+});
+
+test('resource mount lifecycle follows visibility and completion only refreshes saved state', async()=>{
+ let visible=false,disposed=false;
+ const f=fixture({resources(){return{isBusy:()=>false,setVisible:v=>{visible=v;},setBlocked(){},dispose(){disposed=true;}};}});
+ assert.equal(visible,false);f.show();await tick();assert.equal(visible,true);
+ f.node('resources').emit('speech-resources-completed');await tick();assert.equal(f.calls.at(-1).name,'get_speech_settings');
+ assert.equal(f.calls.some(c=>c.name==='save_speech_config'||c.args?.action==='check'||c.args?.action==='start'),false);
+ f.hide();assert.equal(visible,false);const count=f.calls.length;f.node('resources').emit('speech-resources-completed');await tick();assert.equal(f.calls.length,count);f.settings.dispose();assert.equal(disposed,true);
+});
+test('resource busy blocks all conflicting service and preference operations, including synthetic clicks',async()=>{
+ let busy=false;const f=fixture({initial:ready(),resources(){return{isBusy:()=>busy,setVisible(){},setBlocked(){},dispose(){}};}});f.show();await tick();
+ busy=true;f.node('resources').emit('speech-resources-busy');
+ for(const id of ['refresh','check','start','stop','cancel_check','test','auto','volume'])assert.equal(f.node(id).disabled,true,id);
+ for(const id of ['refresh','check','start','stop','cancel_check','test'])f.click(id);
+ f.node('auto').checked=true;f.node('auto').emit('change');f.node('volume').value='40';f.node('volume').emit('change');await f.poll();
+ assert.deepEqual(f.calls.map(c=>c.name),['get_speech_settings','get_speech_preferences']);
+ busy=false;f.node('resources').emit('speech-resources-busy');assert.equal(f.node('test').disabled,false);assert.equal(f.node('auto').disabled,false);f.settings.dispose();
+});
+test('local speech settings contain neither editable/read-only paths nor a manual save flow',()=>{
+ assert.doesNotMatch(raw,/speech-(?:python_path|model_dir|native_lib|save|draft)|save_speech_config|pick_settings_path|getDraft|pathsLocked/);
+ assert.match(raw,/打开本页仅查看状态/);assert.match(raw,/安装结束自动检测并保存/);
 });

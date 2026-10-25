@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-pet-memory-action"
+description = "Enables the pet_memory_action command without any pre-configured scope."
+commands.allow = ["pet_memory_action"]
+
+[[permission]]
+identifier = "deny-pet-memory-action"
+description = "Denies the pet_memory_action command without any pre-configured scope."
+commands.deny = ["pet_memory_action"]

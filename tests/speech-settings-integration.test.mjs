@@ -10,7 +10,7 @@ test('speech settings management and pet preferences have separate exact local c
  assert.equal(settings.local,true);assert.equal(settings.remote,undefined);assert.deepEqual(settings.webviews,['launcher-settings','dsh-settings']);
  assert.deepEqual(pet.webviews,['assistant-pet']);assert.equal(pet.local,true);assert.equal(pet.remote,undefined);
  assert.deepEqual(pet.permissions,['allow-get-speech-preferences','allow-set-speech-preferences']);
- for(const name of ['get_speech_settings','save_speech_config','speech_action','get_speech_preferences','set_speech_preferences','test_speech','cancel_speech_test','download_speech_model','cancel_speech_download','get_speech_download']){
+ for(const name of ['get_speech_settings','save_speech_config','speech_action','get_speech_preferences','set_speech_preferences','test_speech','cancel_speech_test','download_speech_model','cancel_speech_download','get_speech_download','get_speech_install','install_speech','cancel_speech_install']){
   assert.ok(settings.permissions.includes('allow-'+name.replaceAll('_','-')));
   assert.ok(read('src-tauri/build.rs').includes('"'+name+'"'));
   assert.ok(read('src-tauri/src/desktop.rs').includes('speech_settings::'+name));
@@ -35,7 +35,7 @@ test('native speech management guards settings callers and auditions only fixed 
  assert.doesNotMatch(s,/discover_speech_resources/);
  assert.ok(s.includes('settings_page::label(view.window().label())'));
  assert.ok(s.includes('settings_page::is_active(view.window().label())'));
- for(const name of ['get_speech_settings','save_speech_config','speech_action','test_speech','cancel_speech_test','download_speech_model','cancel_speech_download','get_speech_download']){
+ for(const name of ['get_speech_settings','save_speech_config','speech_action','test_speech','cancel_speech_test','download_speech_model','cancel_speech_download','get_speech_download','get_speech_install','install_speech','cancel_speech_install']){
   const from=s.indexOf('fn '+name+'(');assert.ok(from>=0,name);
   const body=s.slice(from,s.indexOf('#[tauri::command]',from+4)<0?undefined:s.indexOf('#[tauri::command]',from+4));
   assert.ok(body.includes('assert_page(&view,'),name+' exact trusted settings guard');
@@ -55,4 +55,14 @@ test('only small trusted bridge sources are embedded, not models or executable s
  for (const file of ['src/speech-settings.ts','src/speech-resources.ts']) assert.doesNotMatch(read(file),/fetch\(|XMLHttpRequest|http:\/\/127\.0\.0\.1:18765/);
  assert.ok(read('scripts/Build-Windows.ps1').includes("'services/qwen_tts'"));
  assert.ok(read('scripts/Build-Windows.ps1').includes("'src-tauri/helpers'"));
+});
+
+test('one-click installation IPC has no caller-selected paths and preserves read-only opening',()=>{
+ const native=read('src-tauri/src/desktop_speech_settings.rs');
+ for(const name of ['get_speech_install','install_speech','cancel_speech_install'])assert.ok(native.includes('fn '+name+'(view: Webview)'));
+ const get=native.slice(native.indexOf('fn get_speech_install('),native.indexOf('fn install_speech('));
+ assert.match(get,/assert_page\(&view, false\)/);assert.match(get,/snapshot\(\)/);assert.doesNotMatch(get,/\.start\(|\.install\(/);
+ const install=native.slice(native.indexOf('fn install_speech('),native.indexOf('fn cancel_speech_install('));assert.match(install,/assert_page\(&view, true\)/);
+ assert.match(native,/launcher-speech-install/);
+ const main=read('src/main.ts');assert.ok(main.includes('new SpeechResources(root, window, native, { invoke, listen })'));assert.doesNotMatch(main,/onSelect, getDraft/);
 });

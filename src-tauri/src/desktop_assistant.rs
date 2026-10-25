@@ -130,6 +130,11 @@ impl Assistant {
         let data = self.data.lock().unwrap_or_else(|e| e.into_inner());
         drop(self.wake.wait_timeout(data, Duration::from_secs(seconds)));
     }
+    /// Read only: keep the binding fixed for a short snapshot/check/dispatch closure (no filesystem I/O).
+    pub(super) fn with_workspace_binding<T>(&self, read: impl FnOnce(Option<&Binding>) -> T) -> T {
+        let data = self.data.lock().unwrap_or_else(|e| e.into_inner());
+        read(data.binding.as_ref())
+    }
     fn binding(&self) -> Result<Binding, String> {
         self.data
             .lock()
@@ -267,6 +272,25 @@ pub(super) async fn assistant_action(
     let caller = view.label().to_owned();
     let window = view.window();
     tauri::async_runtime::spawn_blocking(move || {
+        // Serialize memory consent/management with sends and binding changes.
+        // Acquire before Assistant.operation/data or Controller.backend locks.
+        let _memory_lease = if matches!(
+            &request,
+            Action::Enable { .. }
+                | Action::Reconfigure
+                | Action::NewSession
+                | Action::SelectSession { .. }
+                | Action::Send { .. }
+                | Action::Retry
+        ) {
+            Some(
+                crate::pet_memory::operation_mutex()
+                    .try_lock()
+                    .map_err(|_| "正在处理记忆或会话操作，请稍后重试。")?,
+            )
+        } else {
+            None
+        };
         match request {
             Action::HitRegions { regions } => {
                 if caller != PET
@@ -464,13 +488,31 @@ fn create_session(
             return state.bind(app, binding);
         }
     }
+    let backend = config(app)?;
+    let memory = super::pet_memory::get_for_binding(&backend, &binding)?;
+    let preset = if memory.enabled {
+        if !rpc
+            .pet_preset_available()
+            .map_err(|_| "无法确认桌宠 Agent 扩展，请检查 DSH 连接和扩展安装。")?
+        {
+            return Err(
+                "尚未安装可用的 desktop-pet 专属 Agent；请先安装扩展，不会退回普通 Agent。".into(),
+            );
+        }
+        Some("desktop-pet")
+    } else {
+        None
+    };
+    if identity(&config(app)?) != binding.backend {
+        return Err("后端已变化，请重新检查桌宠绑定。".into());
+    }
     if !binding.session_pending {
         binding.session_id = Some(id());
         binding.session_pending = true;
         state.bind(app, binding.clone())?;
     }
     let created = rpc
-        .session_create(&binding.workspace_id, binding.session_id.as_deref())
+        .session_create_for_preset(&binding.workspace_id, binding.session_id.as_deref(), preset)
         .map_err(|e| format!("{e} 会话创建结果未确认，重试将核对同一个会话标识。"))?;
     binding.session_id = Some(value_id(&created, "sessionId")?);
     binding.session_pending = false;
@@ -597,6 +639,17 @@ fn run_action(app: &tauri::AppHandle, state: &Assistant, action: Action) -> Resu
                 .projection
                 .set_sessions(sessions);
             let session_id = binding.session_id.as_deref().ok_or("尚未绑定会话。")?;
+            let memory = super::pet_memory::get_for_binding(&config, &binding)?;
+            if memory.enabled
+                && !rpc
+                    .session_uses_pet_preset(session_id)
+                    .map_err(|_| "无法核对桌宠专属 Agent，请重新连接后重试。")?
+            {
+                return Err("当前仍是普通会话。请安装 desktop-pet 扩展后新建对话；不会将记忆追加到普通会话。".into());
+            }
+            if identity(&self::config(app)?) != binding.backend {
+                return Err("后端已变化，未发送消息。".into());
+            }
             state
                 .data
                 .lock()

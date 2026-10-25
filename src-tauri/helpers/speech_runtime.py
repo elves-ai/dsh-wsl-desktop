@@ -466,6 +466,10 @@ def supervise(request):
         env = os.environ.copy()
         # Keep the immutable staged bundle free of import bytecode artifacts.
         env["PYTHONDONTWRITEBYTECODE"] = "1"
+        cuda = Path.home() / ".dsh-wsl-desktop/speech/cuda-12.8.1"
+        if (cuda / ".complete").is_file() and not cuda.is_symlink():
+            env["CUDA_HOME"] = str(cuda)
+            env["LD_LIBRARY_PATH"] = str(cuda / "lib64") + ":/usr/lib/wsl/lib"
         if os.path.isdir("/usr/lib/wsl/lib"):
             old = env.get("LD_LIBRARY_PATH", "")
             if "/usr/lib/wsl/lib" not in old.split(":"):
@@ -657,6 +661,10 @@ def inspect_check():
         threading.Thread(target=watch_lifeline, args=(cancel,), daemon=True).start()
         env = os.environ.copy()
         env["PYTHONDONTWRITEBYTECODE"] = "1"
+        cuda = Path.home() / ".dsh-wsl-desktop/speech/cuda-12.8.1"
+        if (cuda / ".complete").is_file() and not cuda.is_symlink():
+            env["CUDA_HOME"] = str(cuda)
+            env["LD_LIBRARY_PATH"] = str(cuda / "lib64") + ":/usr/lib/wsl/lib"
         if os.path.isdir("/usr/lib/wsl/lib"):
             old = env.get("LD_LIBRARY_PATH", "")
             if "/usr/lib/wsl/lib" not in old.split(":"):

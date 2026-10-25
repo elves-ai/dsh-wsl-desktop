@@ -193,13 +193,30 @@ h2 { font-size: 13px; font-weight: 600; line-height: 1.7; }
 .pet-source a:hover { color: var(--ui-accent); }
 .settings-preview { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--ui-line); font-size: 11px; color: var(--ui-muted); }
 
+/* Memory management stays in the pet section and shares settings fields. */
+#settings-pet-memory h3 { margin: 0; font-size: 12px; font-weight: 600; line-height: 20px; }
+#settings-pet-memory label:not(.switch):not(.visually-hidden) { display: block; margin: 12px 0 6px; color: var(--ui-secondary); font-size: 12px; }
+#settings-pet-memory :is(textarea, select) { display: block; width: 100%; min-width: 0; border: 1px solid var(--ui-border); border-radius: var(--ui-radius); background: var(--ui-field); color: var(--ui-text); padding: 7px 10px; font: 12px/20px var(--ui-font); }
+#settings-pet-memory textarea { resize: vertical; min-height: 80px; }
+#settings-pet-memory select { width: auto; min-height: 36px; }
+#settings-pet-memory :is(textarea, select):focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 3px; }
+#settings-pet-memory :is(textarea, select):disabled { opacity: .6; }
+#settings-pet-memory .setting-actions { margin-top: 12px; }
+.pet-memory-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin: 24px 0 12px; }
+#settings-pet-memory .pet-memory-heading .setting-actions { margin-top: 0; }
+.pet-memory-list { list-style: none; padding: 0; margin: 0; max-height: 420px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--ui-border) transparent; }
+.pet-memory-entry { border-top: 1px solid var(--ui-line); padding: 12px 0; }
+#settings-pet-memory .pet-memory-entry-content { color: var(--ui-text); white-space: pre-wrap; margin: 0 0 8px; }
+#settings-pet-memory .pet-memory-source { margin: 0; font-size: 11px; }
+.pet-memory-editor, .pet-memory-confirm { padding: 16px; margin-top: 16px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius); background: var(--ui-subtle); }
+#settings-pet-memory .pet-memory-danger, #pet-memory-message[data-error="true"] { color: var(--ui-error); }
+
 /* Speech uses the same fields and rows, not a second visual system. */
 #settings-speech label:not(.switch) { display: block; margin: 16px 0 8px; color: var(--ui-secondary); font-size: 12px; }
 #settings-speech label.speech-volume-label { display: flex; justify-content: space-between; max-width: 350px; }
 #speech-volume-label { color: var(--ui-muted); font-variant-numeric: tabular-nums; }
 #settings-speech input[type="range"] { display: block; margin: 8px 0; width: min(100%, 350px); accent-color: var(--ui-accent); }
 .speech-actions { margin: 16px 0; }
-.speech-paths { margin-top: 16px; }
 #speech-progress { width: 100%; accent-color: var(--ui-accent); }
 
 @keyframes breathe { 50% { opacity: .3; } }

@@ -3,21 +3,18 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 const read = path => readFileSync(new URL('../' + path, import.meta.url), 'utf8');
 
-test('settings paths are read-only, with native pick actions except managed Python', () => {
-  for (const [file, ids] of [['src/main.ts', ['repository-input', 'setup-repository', 'setup-node']], ['src/speech-settings.ts', ['speech-model_dir', 'speech-python_path', 'speech-native_lib']]]) {
-    const source = read(file);
-    for (const id of ids) {
-      const input = source.match(new RegExp('<input id="' + id + '"[^>]*>'))?.[0];
-      assert.ok(input, id); assert.match(input, /readonly/); assert.match(input, /aria-readonly="true"/);
-    }
+test('project paths retain native pickers while speech installation needs no path selection', () => {
+  const source = read('src/main.ts');
+  for (const id of ['repository-input', 'setup-repository', 'setup-node']) {
+    const input = source.match(new RegExp('<input id="' + id + '"[^>]*>'))?.[0];
+    assert.ok(input, id); assert.match(input, /readonly/); assert.match(input, /aria-readonly="true"/);
   }
   const resource = read('src/speech-resources.ts');
-  assert.doesNotMatch(resource, /browse_speech_path|speech-resource-(?:path|go|parent|browser|entries)/);
-  assert.ok(resource.includes("invoke<unknown>('pick_settings_path'"));
-  assert.doesNotMatch(resource, /speech-resource-(?:python|gpu|found|discover|defaults)|discover_speech_resources/);
-  assert.match(resource, /Python 固定使用托管默认路径/);
-  assert.ok(resource.includes('speech-resource-model-browse')); assert.ok(resource.includes('speech-resource-native-browse'));
-  assert.doesNotMatch(resource + read('src/speech-settings.ts'), /暂不支持 NVIDIA CUDA|当前语音后端仅实现 AMD ROCm/);
+  const speech = read('src/speech-settings.ts');
+  assert.doesNotMatch(resource + speech, /pick_settings_path|browse_speech_path|speech-resource-(?:model-browse|native-browse|python-browse)|id="speech-(?:model_dir|python_path|native_lib|save)"/);
+  assert.ok(resource.includes("invoke<unknown>('install_speech')"));
+  assert.match(resource, /一键安装/);
+  assert.doesNotMatch(resource + speech, /暂不支持 NVIDIA CUDA|当前语音后端仅实现 AMD ROCm/);
 });
 
 test('one native picker command is registered only for local trusted launcher/settings views', () => {

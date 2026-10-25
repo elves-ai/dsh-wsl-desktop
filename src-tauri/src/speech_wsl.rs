@@ -94,6 +94,7 @@ impl WslSpeechRuntime {
             "--resources-initialize",
             "--resources-browse",
             "--resources-download",
+            "--resources-install",
         ]
         .contains(&mode)
         {
@@ -114,6 +115,8 @@ impl WslSpeechRuntime {
             &config.linux_user,
             "--exec",
             "/usr/bin/python3",
+            "-I",
+            "-B",
             "-c",
             BOOTSTRAP,
             mode,
@@ -126,7 +129,9 @@ impl WslSpeechRuntime {
         Ok(c)
     }
     fn spawn(config: &Config, mode: &str, payload: &Value, hold: bool) -> Result<Spawned, String> {
-        let source = if mode.starts_with("--resources-") {
+        let source = if mode == "--resources-install" {
+            include_str!("../helpers/speech_install.py")
+        } else if mode.starts_with("--resources-") {
             include_str!("../helpers/speech_resources.py")
         } else {
             HELPER
@@ -237,7 +242,7 @@ impl WslSpeechRuntime {
             }
             if cancelled_at.is_some() {
                 input.take();
-                let grace = if mode == "--resources-download" {
+                let grace = if matches!(mode, "--resources-download" | "--resources-install") {
                     20
                 } else {
                     2
@@ -273,7 +278,7 @@ impl WslSpeechRuntime {
             if exited && read_done {
                 break;
             }
-            let limit = if mode == "--resources-download" {
+            let limit = if matches!(mode, "--resources-download" | "--resources-install") {
                 25
             } else {
                 5
@@ -480,6 +485,61 @@ fn resource_result(value: Value) -> Result<Value, String> {
         _ => "资源操作失败，请检查路径、权限或网络后重试。",
     };
     Err(message.into())
+}
+impl crate::speech_install::Runtime for WslSpeechRuntime {
+    fn install(
+        &self,
+        cancel: &Cancellation,
+        progress: &dyn Fn(crate::speech_install::Progress),
+    ) -> Result<SpeechConfig, String> {
+        let result = self.exchange(&self.config()?, "--resources-install",
+            json!({"resources": STANDARD.encode(include_bytes!("../helpers/speech_resources.py")),
+                "build_script": STANDARD.encode(include_bytes!("../../services/qwen_tts/build_native.sh"))}),
+            true, cancel, Duration::from_secs(14400), &|value| {
+                if let Ok(p) = serde_json::from_value::<crate::speech_install::Progress>(value.clone()) {
+                    if matches!(p.stage.as_str(), "准备默认语音环境" | "识别可用显卡" | "安装固定版本依赖" | "获取固定版本源码" | "编译原生语音库" | "下载并校验模型")
+                        && p.downloaded_bytes <= 6 * 1024 * 1024 * 1024u64
+                        && p.total_bytes.is_none_or(|n| n <= 6 * 1024 * 1024 * 1024u64) { progress(p); }
+                }
+            })?;
+        if result.get("ok").and_then(Value::as_bool) != Some(true) {
+            let code = result.get("error").and_then(Value::as_str).unwrap_or("");
+            let error = match code {
+                "platform_unsupported" => "一键语音安装需要 x86_64 WSL 和 Python 3.10 或更新版本。",
+                "wsl_gpu_unavailable" => "WSL 未发现 /dev/dxg GPU 桥接；请检查 Windows 显卡驱动和 WSL2，安装器不会修改驱动。",
+                "cuda_driver_old" => "已发现 NVIDIA 显卡，但驱动不支持 CUDA 12.8；请更新 Windows 驱动后重试，不会安装系统驱动。",
+                "cuda_arch_unsupported" => "此 NVIDIA GPU 架构不在固定 CUDA 12.8 安装支持范围内。",
+                "rocm_gpu_unsupported" => "未发现可用 CUDA GPU；ROCm 10.1 仅支持已验证的 gfx1201，当前显卡或 WSL 驱动不可用。",
+                "missing_tool_git" => "WSL 缺少系统工具 git；请准备 git 后重试，安装器不运行 apt 或 root。",
+                "missing_tool_bash" => "WSL 缺少系统工具 bash；请准备 bash 后重试。",
+                "missing_tool_make" => "WSL 缺少系统构建工具 make；请准备 make 后重试。",
+                "missing_tool_cc" => "WSL 缺少 /usr/bin/cc C 编译器；请准备编译工具链后重试。",
+                "missing_tool_cxx" => "WSL 缺少 /usr/bin/c++ C++ 编译器；请准备编译工具链后重试。",
+                "missing_tool_realpath" => "WSL 缺少系统工具 realpath；请准备 coreutils 后重试。",
+                "pip_missing" => "默认虚拟环境缺少 pip，且无法准备固定版本 pip；请检查官方 PyPI 网络访问。",
+                "dependencies_failed" | "dependencies_failed_timeout" => "固定版本 pip/CMake/Ninja 安装失败；请检查 PyPI 网络、磁盘空间和 Python 兼容性后重试。",
+                "rocm_dependencies_failed" | "rocm_dependencies_failed_timeout" => "AMD 官方 ROCm 10.1 开发依赖安装失败；请检查 AMD 源网络、磁盘空间和平台兼容性。",
+                "rocm_sdk_failed" => "ROCm 10.1 用户级 SDK 初始化失败，未完成安装。",
+                "source_fetch_failed" | "source_fetch_failed_timeout" => "固定 commit 的 qwentts.cpp/ggml 获取失败；请检查 GitHub HTTPS 连接后重试。",
+                "source_conflict" => "原生源码与固定 commit 不一致，已拒绝编译。",
+                "native_build_failed" | "native_build_failed_timeout" => "原生 GPU 库编译失败；请检查 C/C++ 编译器与 CUDA 12.8/ROCm 10.1 兼容性、构建内存和磁盘空间后重试。",
+                "unmanaged_venv" => "默认目录已有非本应用管理的虚拟环境；为保护原环境未修改，请检查默认运行环境。",
+                "sdk_hash_mismatch" => "NVIDIA SDK 的 SHA256 校验失败，未发布工具包，可重试。",
+                "unsafe_sdk_archive" | "sdk_redirect_refused" | "sdk_manifest_invalid" => "NVIDIA SDK 清单、重定向或归档不安全，已拒绝安装。",
+                "sdk_conflict" => "默认 CUDA SDK 目录已有未完成或非本应用管理的内容，未覆盖。",
+                "existing_model_mismatch" => "默认模型目录已有 SHA256 不匹配的模型；为保护旧文件未覆盖，请检查这些文件后重试。",
+                "initialize_runtime_conflict" => "默认虚拟环境含未受管理或不安全的内容，未覆盖；请检查默认环境后重试。",
+                "initialize_python_unavailable" => "WSL /usr/bin/python3 缺少 Python 3.10+ 或标准库 venv，未安装系统软件。",
+                "install_failed" => "用户级语音安装失败；请检查官方源网络、磁盘空间和默认目录权限后重试。",
+                _ => return resource_result(result).and_then(|_| Err("安装结果无效。".into())),
+            };
+            return Err(error.into());
+        }
+        let config: SpeechConfig =
+            serde_json::from_value(resource_result(result)?).map_err(|_| "安装返回了无效配置。")?;
+        config.validate()?;
+        Ok(config)
+    }
 }
 impl crate::speech_resources::Runtime for WslSpeechRuntime {
     fn initialize(

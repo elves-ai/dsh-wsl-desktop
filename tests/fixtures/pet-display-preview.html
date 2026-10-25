@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>桌宠显示验收 · 纯模拟预览</title>
+  <link rel="stylesheet" href="/src/assistant.css?direct">
+  <link rel="stylesheet" href="/src/pet/interactions.css?direct">
+  <link rel="stylesheet" href="/src/pet/notifications.css?direct">
+  <style>
+    /* Page harness only: component geometry, typography and colors come from real CSS. */
+    html { height: auto; min-height: 100%; }
+    body { height: auto; min-height: 100vh; overflow: auto; background: #e9edf1; }
+    .preview-page { max-width: 1040px; margin: 0 auto; padding: 20px; color: #243447; }
+    .preview-page > h1 { white-space: normal; }
+    .preview-intro { line-height: 1.6; }
+    .preview-layout { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 24px; }
+    .preview-stage { width: 360px; flex: 0 0 360px; }
+    #assistant-root { width: 360px; height: 320px; position: relative; overflow: hidden; background: #d6dee6; outline: 1px solid #8393a3; }
+    .preview-controls { flex: 1 1 320px; min-width: 0; }
+    .preview-controls fieldset { margin: 0 0 12px; padding: 10px; border: 1px solid #a9b6c3; }
+    .preview-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+    .preview-controls button { font-size: 12px; }
+    .preview-controls button[aria-pressed="true"] { outline: 2px solid #2868aa; outline-offset: -2px; }
+    .preview-note, .preview-attribution { font-size: 12px; line-height: 1.6; }
+    .preview-attribution { margin-top: 10px; }
+    .preview-attribution a { color: #285b87; }
+    #preview-outcome { display: block; padding: 12px; margin-top: 16px; background: #fff; border: 1px solid #a9b6c3; white-space: pre-wrap; overflow-wrap: anywhere; }
+    #preview-diagnostics { padding: 12px; background: #f6f8fa; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 ui-monospace, monospace; }
+  </style>
+</head>
+<body data-view="pet">
+<main class="preview-page">
+  <h1>桌宠气泡 / 确认 / 输入 · 手动验收</h1>
+  <p class="preview-intro"><strong>全部为模拟数据与模拟结果。</strong>不加载 assistant.ts，不调用原生 IPC，不连接 DSH，不发送消息或授权。点击组件中的「在 DSH 打开」「允许一次」「发送」也只更新下方结果。</p>
+  <div class="preview-layout">
+    <div class="preview-stage">
+      <div id="assistant-root">
+        <section class="pet-shell" aria-label="鲸鱼娘桌面助手（模拟）">
+          <div class="pet-stage">
+            <video id="pet-media" class="pet-media" autoplay muted loop playsinline aria-hidden="true" src="/pet/dsh-pet/webm/%E5%BE%85%E6%9C%BA%E5%91%BC%E5%90%B8%E4%BC%91%E9%97%B2.webm"></video>
+            <button id="pet" class="pet-hit" type="button" aria-label="模拟：切换输入" aria-controls="pet-dialogue pet-composer" aria-expanded="false"></button>
+          </div>
+          <section id="pet-dialogue" class="pet-dialogue" aria-label="与鲸鱼娘说话" hidden>
+            <section id="pet-speech" class="pet-speech" hidden>
+              <header class="pet-speech-header"><span id="pet-speech-label">鲸鱼娘</span><button id="cancel" type="button" data-action="cancel" class="pet-speech-stop" hidden>停止</button><button id="pet-speech-close" type="button" aria-label="收起这句话">×</button></header>
+              <div id="pet-speech-text" class="pet-speech-text" role="status" aria-live="polite" aria-atomic="true"></div>
+              <div class="pet-speech-actions"><button id="pet-speech-expand" type="button" aria-expanded="false" hidden>展开全文</button><button id="pet-read" type="button" aria-label="朗读回复" hidden>朗读</button><button id="retry" type="button" data-action="retry" hidden>重新连接 / 重试</button></div>
+              <p id="pet-read-status" class="pet-read-status" role="status" hidden></p>
+            </section>
+          </section>
+          <section id="pet-composer" class="pet-composer" aria-label="给鲸鱼娘输入消息" hidden>
+            <button id="pet-enable" type="button" data-action="toggle_chat" hidden>启用助手</button>
+            <form id="send-form"><label class="sr-only" for="draft">跟鲸鱼娘说点什么</label><div class="pet-compose-row"><textarea id="draft" rows="1" placeholder="跟我说点什么…" maxlength="100000"></textarea><button id="send" type="submit" class="primary" aria-label="发送消息">↑</button><button id="pet-input-close" type="button" aria-label="收起输入，保留草稿">×</button></div><p id="draft-hint">模拟输入 · Enter 仅演示提交 · Shift + Enter 换行</p></form>
+          </section>
+          <div id="pet-bubble" hidden></div>
+          <div id="pet-interaction" hidden></div>
+          <p id="notice" class="pet-notice" role="alert" hidden></p>
+        </section>
+      </div>
+      <p class="preview-attribution"><a href="https://github.com/PC2005-cloud/dsh-pet" target="_blank" rel="noopener noreferrer">dsh-pet · PC2005-cloud ↗</a><br>代码 MIT · 动画素材仅限开源使用，禁止商用。署名位于测试窗口外。</p>
+      <p id="preview-geometry" class="preview-note"></p>
+    </div>
+    <aside class="preview-controls" aria-label="窗口外的验收控件">
+      <fieldset><legend>场景（切换会清空旧卡片 / 草稿 / 状态）</legend><div class="preview-buttons" id="preview-scenarios">
+        <button type="button" data-case="short">短回复</button>
+        <button type="button" data-case="long">长回复 / 无断点路径</button>
+        <button type="button" data-case="thinking">长思考状态</button>
+        <button type="button" data-case="error">长错误状态</button>
+        <button type="button" data-case="input">多行输入 + 可见回复</button>
+        <button type="button" data-case="single">长单选 / 描述</button>
+        <button type="button" data-case="multi">多选 / 描述</button>
+        <button type="button" data-case="plan">长计划 Approve / Keep planning</button>
+        <button type="button" data-case="permission">长权限 JSON（模拟）</button>
+        <button type="button" data-case="failure">提交失败 / 保留回答</button>
+        <button type="button" data-case="notification">完成通知</button>
+        <button type="button" data-case="notification-failed">失败通知</button>
+      </div></fieldset>
+      <fieldset><legend>宽度 / 屏幕边缘（不缩放宠物）</legend><div class="preview-buttons" id="preview-widths">
+        <button type="button" data-edge="normal">正常 · 卡片 348px</button>
+        <button type="button" data-edge="left">左屏幕 inset 112.5px</button>
+        <button type="button" data-edge="right">右屏幕 inset 112.5px</button>
+      </div></fieldset>
+      <fieldset><legend>宿主高度</legend><div class="preview-buttons" id="preview-heights">
+        <button type="button" data-height="320">正常 360 × 320</button>
+        <button type="button" data-height="240">短窗口 360 × 240</button>
+      </div></fieldset>
+      <div class="preview-buttons"><button id="preview-reset" type="button">重置当前场景</button><button id="preview-measure" type="button">重新测量</button></div>
+      <p id="preview-instructions" class="preview-note"></p>
+      <p class="preview-note">手动检查：展开长文本并滚动到底；滚动正文时标题、关闭与底部提交保持可达；Tab 检查焦点。单选默认不选，未明确回答时提交禁用；多选可组合。失败场景请选择后点击提交，真实组件将显示失败并保留回答。通知计时器在此预览中冻结。</p>
+    </aside>
+  </div>
+  <output id="preview-outcome" role="status" aria-live="polite" data-outcome="initializing">SIMULATED · 正在初始化（无真实消息）</output>
+  <h2>当前几何 / 滚动 / 点击诊断</h2>
+  <p class="preview-note">自动测量，无需控制台脚本。hit 检查当前可见交集中心；卷出正文的控件标记 offscreen，不等同于失败。按钮 disabled 是状态而非遮挡。屏幕 inset 是布局约束，不代表浏览器真实裁切。</p>
+  <pre id="preview-diagnostics" aria-label="布局诊断">等待测量…</pre>
+</main>
+<script type="module">
+import { PetInteractions } from '/src/pet/interactions.ts';
+import { PetNotifications } from '/src/pet/notifications.ts';
+import { layoutPetBubbles } from '/src/pet/bubble-positioner.ts';
+import { HIT_BOX } from '/src/vendor/dsh-pet/constants.ts';
+
+const el = id => document.getElementById(id);
+const root = el('assistant-root');
+const shell = root.querySelector('.pet-shell');
+const anchor = el('pet');
+const dialogue = el('pet-dialogue');
+const composer = el('pet-composer');
+const draft = el('draft');
+const outcome = el('preview-outcome');
+const diagnostics = el('preview-diagnostics');
+const longPath = '/simulated/workspace/' + 'unbroken_segment_'.repeat(36) + 'layout-review.txt';
+const paragraphs = Array.from({ length: 8 }, (_, i) => '第 ' + (i + 1) + ' 段：这是一段用于手动验收的模拟长文本。请检查换行、滚动、完整内容选择与阅读，标题和操作按钮不应随正文一起消失。此页面没有真实任务、连接、权限或消息。').join('\n\n');
+const longReply = '模拟回复：检查完整路径与多段落。\n\n' + longPath + '\n\n' + paragraphs + '\n\n【全文结束 · END OF SIMULATED CONTENT】';
+let interactions;
+let notifications;
+let revision = 0;
+let generation = 0;
+let scenario = 'short';
+let edge = 'normal';
+let insets = { left: 0, right: 0 };
+let frame = 0;
+let disposed = false;
+let settledSignature = '';
+let composing = false;
+let layoutCount = 0;
+
+// Same thumb-coordinate anchor as assistant.ts; never use the full video as anchor.
+Object.assign(anchor.style, {
+  left: (HIT_BOX.x0 / 640 * 100) + '%', top: (HIT_BOX.y0 / 360 * 100) + '%',
+  width: ((HIT_BOX.x1 - HIT_BOX.x0) / 640 * 100) + '%',
+  height: ((HIT_BOX.y1 - HIT_BOX.y0) / 360 * 100) + '%',
+});
+const watched = [root, shell, anchor, dialogue, el('pet-speech'), el('pet-speech-text'), composer, draft, el('pet-interaction'), el('pet-bubble')];
+const sizeSignature = () => watched.map(node => {
+  const r = node.getBoundingClientRect();
+  return [r.x, r.y, r.width, r.height, node.hidden].join(',');
+}).join('|');
+function scheduleLayout() {
+  if (disposed || frame) return;
+  frame = requestAnimationFrame(() => {
+    frame = 0;
+    if (disposed) return;
+    // The real positioner toggles expand.hidden while measuring. Do not observe those
+    // transient semantic writes as new UI work, or long compact text would loop forever.
+    mutationObserver.disconnect();
+    try { layoutPetBubbles(root, anchor, insets); }
+    finally { mutationObserver.observe(root, mutationOptions); }
+    layoutCount++;
+    settledSignature = sizeSignature();
+    measure();
+  });
+}
+// Ignore our own settled size changes: no write/resize feedback or perpetual RAF loop.
+const resizeObserver = new ResizeObserver(() => {
+  if (sizeSignature() !== settledSignature) scheduleLayout();
+});
+watched.forEach(node => resizeObserver.observe(node));
+// Real components change status after async callbacks; observe semantic state, never style writes.
+const mutationObserver = new MutationObserver(scheduleLayout);
+const mutationOptions = { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['hidden', 'disabled', 'inert', 'aria-expanded'] };
+mutationObserver.observe(root, mutationOptions);
+
+function report(message, state = 'simulated') {
+  outcome.dataset.outcome = state;
+  outcome.textContent = 'SIMULATED ONLY · ' + message + '\n没有发送真实消息，没有执行操作，也没有授予权限。';
+  scheduleLayout();
+}
+function markButtons(container, key, value) {
+  el(container).querySelectorAll('button').forEach(button => button.setAttribute('aria-pressed', String(button.dataset[key] === String(value))));
+}
+function showSpeech(text, kind = 'reply') {
+  dialogue.hidden = false;
+  el('pet-speech').hidden = false;
+  dialogue.dataset.kind = kind;
+  dialogue.dataset.expanded = 'false';
+  el('pet-speech-label').textContent = kind === 'thinking' ? '鲸鱼娘 · 想一想' : kind === 'error' ? '鲸鱼娘 · 没连上' : '鲸鱼娘';
+  el('pet-speech-text').textContent = text;
+  // Actual overflow detection and expand visibility belong to layoutPetBubbles.
+  el('pet-speech-expand').hidden = true;
+  el('cancel').hidden = kind !== 'thinking';
+  el('retry').hidden = kind !== 'error';
+  el('pet-read').hidden = kind !== 'reply';
+}
+function setComposer(open) {
+  composer.hidden = !open;
+  dialogue.dataset.inputOpen = String(open);
+  anchor.setAttribute('aria-expanded', String(open));
+  scheduleLayout();
+}
+
+function showCard(card) {
+  interactions.update({ revision: ++revision, connected: true, items: [{ id: 'simulated-' + generation, agent_label: '模拟 · 非真实会话', answerable: true, ...card }] });
+}
+function resetCase(next) {
+  scenario = next;
+  generation++;
+  composing = false;
+  interactions?.dispose();
+  notifications?.dispose();
+  for (const id of ['pet-dialogue', 'pet-speech', 'pet-composer', 'pet-bubble', 'pet-interaction', 'notice', 'pet-read-status', 'pet-read', 'retry', 'cancel', 'pet-speech-expand']) {
+    el(id).hidden = true;
+  }
+  for (const id of ['pet-dialogue', 'pet-composer', 'pet-bubble', 'pet-interaction']) {
+    el(id).removeAttribute('style');
+    delete el(id).dataset.placement;
+  }
+  shell.style.removeProperty('--pet-composer-space');
+  dialogue.dataset.expanded = 'false';
+  dialogue.dataset.inputOpen = 'false';
+  el('pet-speech-text').textContent = '';
+  el('pet-speech-text').scrollTop = 0;
+  el('pet-read-status').textContent = '';
+  el('pet-speech-expand').textContent = '展开全文';
+  el('pet-speech-expand').setAttribute('aria-expanded', 'false');
+  draft.value = '';
+  draft.style.removeProperty('height');
+  draft.scrollTop = 0;
+  anchor.setAttribute('aria-expanded', 'false');
+  const thisGeneration = generation;
+  interactions = new PetInteractions(el('pet-interaction'), {
+    onSubmit: async (id, reply) => {
+      if (scenario === 'failure') {
+        report('模拟提交被拒绝：回答应保留，可再次点击提交。\n' + JSON.stringify(reply, null, 2), 'simulated-failure');
+        throw new Error('SIMULATED onSubmit rejection; no transport exists');
+      }
+      report('模拟提交成功（仅本页面记录）：\n' + JSON.stringify(reply, null, 2), 'simulated-success');
+      if (thisGeneration === generation) interactions.update({ revision: ++revision, connected: true, items: [] });
+    },
+    onOpen: async () => report('模拟「在 DSH 打开」：未跳转、未连接。', 'simulated-open'),
+    onChange: scheduleLayout,
+  });
+  notifications = new PetNotifications(el('pet-bubble'), {
+    onOpen: async () => report('模拟打开通知：未跳转任何会话。', 'simulated-open'),
+    onDismiss: () => scheduleLayout(),
+    onChange: scheduleLayout,
+    // Freeze lifetime for stable manual reading, without changing the real notification component.
+    clock: { now: () => 0, setTimeout: () => 0, clearTimeout: () => {} },
+  });
+  const options = [
+    { label: '先检查布局，再进行必要修改（较长的选项标签用于测试自然换行）', description: '模拟描述：检查标题、正文、脚部操作及键盘焦点。\n完整路径：' + longPath },
+    { label: '只输出建议，不修改文件', description: '这是另一个明确选项，没有预先选择。' },
+    { label: '保留现状并记录后续检查步骤', description: '较长说明：' + paragraphs.slice(0, 220) },
+  ];
+  const instructions = {
+    short: '短回复：检查紧凑气泡、关闭和模拟朗读。点击宠物可打开空白输入。',
+    long: '点击「展开全文」，滚动到 END 标记；完整无断点路径不能横向撑开气泡。',
+    thinking: '长思考状态：展开全文并检查停止按钮可达；停止仅写入模拟结果。',
+    error: '长错误状态：展开全文，检查重试按钮与错误正文；重试不联网。',
+    input: '已有多行草稿与长回复。检查 36–72px 输入增长、内部滚动、发送与关闭；可展开回复。',
+    single: '没有默认单选，提交初始禁用。滚动长描述，选择后再提交；也可显式自定义或跳过。',
+    multi: '选择多个复选框后提交，输出列出所有选项；切换场景后没有遗留选择。',
+    plan: '正文很长，滚动到选项。Approve / Keep planning 均不默认选；有反馈时不能批准。',
+    permission: '完整 JSON 与模拟说明均可滚动；允许一次 / 拒绝仅输出模拟决定，不调用权限服务。',
+    failure: '选择一个选项后点击提交，fake onSubmit 拒绝；真实组件显示发送失败、保留选择并允许重试。',
+    notification: '真实 PetNotifications，计时冻结；打开 / 关闭都仅作用于此页面。',
+    'notification-failed': '失败通知使用真实 failed 样式，计时冻结，打开 / 关闭都仅是本地模拟。',
+  };
+  if (next === 'short') showSpeech('模拟回复：已经检查好了，随时可以继续。');
+  if (next === 'long') showSpeech(longReply);
+  if (next === 'thinking') showSpeech('模拟思考中：正在整理以下检查项目，不会运行任何工具。\n\n' + longReply, 'thinking');
+  if (next === 'error') showSpeech('模拟错误：当前未建立连接。以下诊断数据仅用于布局验收。\n\n' + longReply, 'error');
+  if (next === 'input') {
+    showSpeech(longReply);
+    setComposer(true);
+    draft.value = '模拟草稿第一行：请保留可见的回复。\n第二行：输入框增长到上限后应内部滚动。\n第三行：我还在输入。\n第四行：这不会成为真实消息。\n第五行：末尾检查标记。';
+    scheduleLayout();
+  }
+  if (['single', 'multi', 'failure'].includes(next)) showCard({ kind: 'questions', questions: [{ id: 'layout-choice', header: next === 'multi' ? '多选验收' : '单选验收', question: '希望如何检查桌宠显示与输入体验？请选择明确的处理方式。所有选项都只是模拟。', options, multiSelect: next === 'multi' }] });
+  if (next === 'plan') showCard({ kind: 'questions', questions: [{ id: 'plan-review', header: '计划确认', question: '是否批准以下完整的模拟计划？', detail: '# 模拟计划：显示与交互验收\n\n## 范围\n只检查浏览器显示，不执行任何操作。\n\n' + longReply + '\n\n## 完成条件\n标题、滚动正文和底部操作都可达。', options: [{ label: 'Approve', description: '仅模拟批准，不执行计划。' }, { label: 'Keep planning', description: '仅模拟继续规划，可在下面补充反馈。' }], intent: { kind: 'plan-review', approve: 'Approve' } }] });
+  if (next === 'permission') showCard({ kind: 'approval', tool_name: 'simulated-tool · 不存在真实调用', reason: '模拟权限卡片：请阅读全部参数。两个按钮都不授予权限、不执行命令。', details: JSON.stringify({ simulated: true, command: 'PREVIEW_ONLY_NO_EXECUTION', workdir: longPath, justification: paragraphs, parameters: Array.from({ length: 12 }, (_, i) => ({ index: i + 1, scope: 'display-only', description: '长 JSON 行用于滚动和完整阅读检查' })), end: 'END OF SIMULATED JSON' }, null, 2), can_allow: true });
+  if (next.startsWith('notification')) notifications.enqueue({ id: 'simulated-notification-' + generation, kind: next === 'notification-failed' ? 'failed' : 'completed', title: next === 'notification-failed' ? '模拟：本轮未完成' : '模拟：本轮检查完成', body: '仅供布局验收，不对应真实任务。点击查看只会显示模拟结果；关闭也不会改变任何真实消息状态。' });
+  el('preview-instructions').textContent = instructions[next];
+  markButtons('preview-scenarios', 'case', next);
+  report('就绪：' + instructions[next], 'ready');
+  scheduleLayout();
+}
+
+const rounded = value => Math.round(value * 10) / 10;
+function measure() {
+  const host = root.getBoundingClientRect();
+  const bounds = { left: host.left + insets.left + 6, top: host.top + 6, right: host.right - insets.right - 6, bottom: host.bottom - 6 };
+  const inside = rect => rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1 && rect.top >= bounds.top - 1 && rect.bottom <= bounds.bottom + 1;
+  const rectText = rect => 'x=' + rounded(rect.left - host.left) + ' y=' + rounded(rect.top - host.top) + ' w=' + rounded(rect.width) + ' h=' + rounded(rect.height);
+  const lines = ['case=' + scenario + ' | host=' + host.width + '×' + host.height + ' | edge=' + edge, 'insets=' + JSON.stringify(insets) + ' | usable=' + rounded(bounds.right - bounds.left) + '×' + rounded(bounds.bottom - bounds.top), 'layout passes=' + layoutCount + ' (should stop increasing while idle)', 'HIT_BOX anchor: ' + rectText(anchor.getBoundingClientRect())];
+  for (const id of ['pet-dialogue', 'pet-composer', 'pet-interaction', 'pet-bubble']) {
+    const node = el(id);
+    if (node.hidden || !node.getClientRects().length) continue;
+    const rect = node.getBoundingClientRect();
+    lines.push(id + ': ' + rectText(rect) + ' bounds=' + (inside(rect) ? 'PASS' : 'CHECK') + ' placement=' + node.dataset.placement);
+  }
+  for (const node of root.querySelectorAll('.pet-speech-text, .pet-interactions-scroll, .pet-interactions-header, .pet-interactions-actions, #draft')) {
+    if (!node.getClientRects().length) continue;
+    const style = getComputedStyle(node);
+    lines.push((node.id || node.className) + ': client=' + node.clientWidth + '×' + node.clientHeight + ' scroll=' + node.scrollWidth + '×' + node.scrollHeight + ' overflowY=' + style.overflowY + ' horizontal=' + (node.scrollWidth <= node.clientWidth + 1 ? 'PASS' : 'CHECK'));
+  }
+  const choices = [...root.querySelectorAll('input[type=radio], input[type=checkbox]')];
+  const submit = root.querySelector('.pet-interactions-submit');
+  if (choices.length) lines.push('selection=' + choices.filter(input => input.checked).length + '/' + choices.length + ' | submit=' + (submit?.disabled ? 'disabled' : 'enabled'));
+  lines.push('CONTROL HIT TEST (current visible portion):');
+  for (const control of root.querySelectorAll('button, textarea, input')) {
+    if (!control.getClientRects().length || control.closest('[hidden]')) continue;
+    const rect = control.getBoundingClientRect();
+    let left = Math.max(rect.left, bounds.left, 0), right = Math.min(rect.right, bounds.right, innerWidth);
+    let top = Math.max(rect.top, bounds.top, 0), bottom = Math.min(rect.bottom, bounds.bottom, innerHeight);
+    for (let parent = control.parentElement; parent && parent !== root; parent = parent.parentElement) {
+      const style = getComputedStyle(parent), r = parent.getBoundingClientRect();
+      if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) { left = Math.max(left, r.left); right = Math.min(right, r.right); }
+      if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) { top = Math.max(top, r.top); bottom = Math.min(bottom, r.bottom); }
+    }
+    const visible = right > left && bottom > top;
+    const hit = visible ? document.elementFromPoint((left + right) / 2, (top + bottom) / 2) : null;
+    const passed = hit && (hit === control || control.contains(hit));
+    const label = control.id || control.getAttribute('aria-label') || control.textContent.trim().slice(0, 22) || control.type;
+    lines.push('  ' + label + ' [' + rounded(rect.width) + '×' + rounded(rect.height) + '] ' + (control.disabled ? 'disabled; ' : '') + (!visible ? 'offscreen (scroll to reach)' : passed ? 'hit=PASS' : 'hit=CHECK (occluded / outside screen inset)'));
+  }
+  diagnostics.textContent = lines.join('\n');
+  el('preview-geometry').textContent = '宿主 ' + host.width + ' × ' + host.height + 'px；可用卡片宽 ' + rounded(bounds.right - bounds.left) + 'px；左/右 inset ' + insets.left + '/' + insets.right + 'px。';
+}
+
+el('preview-scenarios').addEventListener('click', event => {
+  const button = event.target.closest('button[data-case]');
+  if (button) resetCase(button.dataset.case);
+});
+el('preview-widths').addEventListener('click', event => {
+  const button = event.target.closest('button[data-edge]');
+  if (!button) return;
+  edge = button.dataset.edge;
+  insets = { left: edge === 'left' ? 112.5 : 0, right: edge === 'right' ? 112.5 : 0 };
+  shell.style.setProperty('--pet-visible-left', insets.left + 'px');
+  shell.style.setProperty('--pet-visible-right', insets.right + 'px');
+  markButtons('preview-widths', 'edge', edge);
+  scheduleLayout();
+});
+el('preview-heights').addEventListener('click', event => {
+  const button = event.target.closest('button[data-height]');
+  if (!button) return;
+  root.style.height = button.dataset.height + 'px';
+  markButtons('preview-heights', 'height', button.dataset.height);
+  scheduleLayout();
+});
+el('preview-reset').onclick = () => resetCase(scenario);
+el('preview-measure').onclick = scheduleLayout;
+el('pet-speech-expand').onclick = () => {
+  const expanded = dialogue.dataset.expanded !== 'true';
+  dialogue.dataset.expanded = String(expanded);
+  el('pet-speech-expand').textContent = expanded ? '收起全文' : '展开全文';
+  el('pet-speech-expand').setAttribute('aria-expanded', String(expanded));
+  scheduleLayout();
+};
+el('pet-speech-close').onclick = () => { dialogue.hidden = true; scheduleLayout(); };
+el('pet-input-close').onclick = () => setComposer(false);
+anchor.onclick = () => {
+  if (!el('pet-interaction').hidden) return;
+  setComposer(composer.hidden);
+  if (!composer.hidden) { scheduleLayout(); draft.focus(); }
+};
+el('pet-read').onclick = () => report('模拟朗读按钮：未播放音频、未请求语音服务。');
+el('cancel').onclick = () => report('模拟停止按钮：没有真实运行中的任务。');
+el('retry').onclick = () => report('模拟重试按钮：没有发起连接。');
+el('send-form').addEventListener('submit', event => {
+  event.preventDefault();
+  if (composing || !draft.value.trim()) return;
+  report('模拟输入提交（草稿保留）：\n' + draft.value, 'simulated-input');
+});
+draft.addEventListener('input', scheduleLayout);
+draft.addEventListener('compositionstart', () => { composing = true; });
+draft.addEventListener('compositionend', () => { composing = false; scheduleLayout(); });
+draft.addEventListener('keydown', event => {
+  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && !composing) { event.preventDefault(); el('send-form').requestSubmit(); }
+});
+root.addEventListener('change', scheduleLayout, true);
+root.addEventListener('input', scheduleLayout, true);
+root.addEventListener('scroll', scheduleLayout, true);
+window.addEventListener('resize', scheduleLayout);
+window.addEventListener('scroll', scheduleLayout, { passive: true });
+window.addEventListener('pagehide', () => {
+  disposed = true;
+  if (frame) cancelAnimationFrame(frame);
+  resizeObserver.disconnect();
+  mutationObserver.disconnect();
+  interactions?.dispose();
+  notifications?.dispose();
+}, { once: true });
+markButtons('preview-widths', 'edge', 'normal');
+markButtons('preview-heights', 'height', '320');
+resetCase('short');
+</script>
+</body>
+</html>

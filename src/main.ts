@@ -3,6 +3,8 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import './style.css';
 import { SpeechSettings } from './speech-settings';
 import { SpeechResources } from './speech-resources';
+import { PetWorkspace } from './pet-workspace';
+import { PetMemory } from './pet-memory';
 import appIconUrl from '../app-icon.png';
 
 interface EnvironmentCheck {
@@ -118,6 +120,8 @@ app.innerHTML = settingsView ? `
         <div class="toggle-row"><div><h2>气泡通知</h2><p id="pet-bubble-help">在宠物旁显示任务提醒，可直接回答问题、确认计划或处理授权。收起气泡不会授权或取消请求。</p><details class="setting-details"><summary>通知渠道与提醒规则</summary><p id="pet-bubble-policy" class="setting-help">需要回答、确认计划或授权时，可直接在气泡中选择、输入、允许一次或拒绝。不会自动授权或取消。气泡开关独立于系统通知开关。桌宠显示时不弹 Windows 通知卡片；系统通知开启时仍播放提示音，关闭气泡不影响提示音。桌宠隐藏时按系统通知开关显示通知卡片并播放提示音，不补历史气泡。普通任务提醒前台静默，沿用系统通知中的“窗口聚焦时也通知”选项；待答和授权交互会保留，直到处理或手动收起。</p></details></div><label class="switch"><input id="pet-bubble-notifications" type="checkbox" aria-label="气泡通知" aria-describedby="pet-bubble-help pet-bubble-policy pet-message" disabled><span></span></label></div>
         <p id="pet-message" class="setting-help" role="status" aria-live="polite">正在读取桌面宠物设置。</p><button class="button secondary" id="pet-refresh" type="button" disabled>重新读取</button>
       </div>
+      <div id="settings-pet-memory" class="setting-group" role="region" aria-label="人格与长期记忆"></div>
+      <div id="settings-pet-workspace" class="setting-group" role="region" aria-label="对话工作目录"></div>
       <div id="settings-speech" role="region" aria-label="宠物语音设置"></div>
       <p class="setting-help pet-source">来源：<a href="https://github.com/PC2005-cloud/dsh-pet" target="_blank" rel="noopener noreferrer">PC2005-cloud/dsh-pet</a>。动画素材仅限非商业使用。</p>
     </section>
@@ -181,7 +185,9 @@ let settingsReadyError = '';
 let settingsSectionRevision = 0;
 let settingsPageRevealed = !native;
 const speechSettings = settingsView ? new SpeechSettings(document.getElementById('settings-speech')!, window, native, { invoke, listen },
-  (root, onSelect, getDraft) => new SpeechResources(root, window, native, { invoke, listen }, onSelect, getDraft)) : undefined;
+  (root) => new SpeechResources(root, window, native, { invoke, listen })) : undefined;
+const petWorkspace = settingsView ? new PetWorkspace(document.getElementById('settings-pet-workspace')!, native, { invoke }) : undefined;
+const petMemory = settingsView ? new PetMemory(document.getElementById('settings-pet-memory')!, native, { invoke }) : undefined;
 const repositoryInput = document.getElementById('repository-input') as HTMLInputElement;
 const saveRepositoryButton = document.getElementById('save-repository') as HTMLButtonElement;
 let connected = false;
@@ -763,7 +769,7 @@ function selectSettings(section: string, focus = false): void {
   settingsSection = selected;
   const index = settingsSections.indexOf(selected);
   element('settings-title').textContent = ['环境与目录', '系统通知', '电源管理', '桌面宠物', '软件更新', '诊断日志'][index] || '';
-  element('settings-description').textContent = ['指定已有的 DSH 项目，查看本地运行配置。', '管理后台任务的系统提醒。', '管理任务期间的系统自动休眠保护。', '管理桌面宠物的显示、随机漫游与本地语音。', '检查并安装 Windows 启动器的新版本。', '查看本次启动和服务操作的脱敏记录。'][index] || '';
+  element('settings-description').textContent = ['指定已有的 DSH 项目，查看本地运行配置。', '管理后台任务的系统提醒。', '管理任务期间的系统自动休眠保护。', '管理桌面宠物的显示、人格记忆与本地语音。', '检查并安装 Windows 启动器的新版本。', '查看本次启动和服务操作的脱敏记录。'][index] || '';
   for (const item of settingsSections) {
     element('settings-' + item).hidden = item !== selected;
     element('nav-' + item).dataset.active = String(item === selected);
@@ -771,6 +777,8 @@ function selectSettings(section: string, focus = false): void {
   }
   element('nav-' + selected).scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
   speechSettings?.setVisible(selected === 'pet' && !document.hidden && settingsPageRevealed);
+  petWorkspace?.setVisible(selected === 'pet' && !document.hidden && settingsPageRevealed);
+  petMemory?.setVisible(selected === 'pet' && !document.hidden && settingsPageRevealed);
   if (focus) element('settings-title').focus({ preventScroll: true });
 }
 function showUpdates(): void { selectSettings('updates'); }
@@ -1004,7 +1012,7 @@ if (settingsView) {
   petStartupVisible.addEventListener('change', () => { void performPetSettings('set_pet_settings', { patch: { startup_visible: petStartupVisible.checked } }); });
   petRoamingEnabled.addEventListener('change', () => { void performPetSettings('set_pet_settings', { patch: { roaming_enabled: petRoamingEnabled.checked } }); });
   petBubbleNotifications.addEventListener('change', () => { void performPetSettings('set_pet_settings', { patch: { bubble_notifications: petBubbleNotifications.checked } }); });
-  petRefreshButton.addEventListener('click', () => { void performPetSettings('get_pet_settings'); });
+  petRefreshButton.addEventListener('click', () => { void performPetSettings('get_pet_settings'); void petWorkspace?.refresh(); void petMemory?.refresh(); });
   testNotificationButton.addEventListener('click', () => { void performNotification('test_notification'); });
   checkUpdateButton.addEventListener('click', () => { void performUpdate('check_update'); });
   installUpdateButton.addEventListener('click', () => { void performUpdate('install_update'); });
@@ -1044,6 +1052,8 @@ window.addEventListener('beforeunload', () => {
   setupDisposed = true; setupIdentityRevision += 1;
   settingsDisposed = true;
   speechSettings?.dispose();
+  petWorkspace?.dispose();
+  petMemory?.dispose();
   notificationsDisposed = true; unlistenNotifications?.(); unlistenNotifications = undefined;
   powerDisposed = true; unlistenPower?.(); unlistenPower = undefined;
   petDisposed = true; unlistenPet?.(); unlistenPet = undefined;
@@ -1052,8 +1062,10 @@ window.addEventListener('beforeunload', () => {
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) pathPickerEpoch++;
   speechSettings?.setVisible(settingsSection === 'pet' && !document.hidden && settingsPageRevealed);
+  petWorkspace?.setVisible(settingsSection === 'pet' && !document.hidden && settingsPageRevealed);
+  petMemory?.setVisible(settingsSection === 'pet' && !document.hidden && settingsPageRevealed);
 });
-window.addEventListener('pagehide', () => speechSettings?.dispose(), { once: true });
+window.addEventListener('pagehide', () => { speechSettings?.dispose(); petWorkspace?.dispose(); petMemory?.dispose(); }, { once: true });
 render();
 const initialization = initialize();
 const updatesInitialization = initializeUpdates();

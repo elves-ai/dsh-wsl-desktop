@@ -166,13 +166,48 @@ impl Client {
         workspace_id: &str,
         session_id: Option<&str>,
     ) -> Result<Value, Error> {
+        self.session_create_for_preset(workspace_id, session_id, None)
+    }
+    /// Explicit pet-only selection; never changes the backend default preset.
+    pub fn session_create_for_preset(
+        &self,
+        workspace_id: &str,
+        session_id: Option<&str>,
+        agent_preset: Option<&str>,
+    ) -> Result<Value, Error> {
         valid_id(workspace_id)?;
         let mut request = json!({"workspaceId":workspace_id});
+        if let Some(preset) = agent_preset {
+            if preset != "desktop-pet" {
+                return Err(Error::InvalidArgument);
+            }
+            request["agentPreset"] = json!(preset);
+        }
         if let Some(id) = session_id {
             valid_id(id)?;
             request["sessionId"] = json!(id);
         }
         self.call("session/create", json!({"request":request}))
+    }
+    pub fn pet_preset_available(&self) -> Result<bool, Error> {
+        let value = self.call("agentPresets/list", json!({}))?;
+        let rows = value["presets"].as_array().ok_or(Error::Protocol)?;
+        let matching: Vec<_> = rows
+            .iter()
+            .filter(|row| row["id"] == "desktop-pet")
+            .collect();
+        Ok(matching.len() == 1 && matching[0].get("broken").is_none())
+    }
+    pub fn session_uses_pet_preset(&self, id: &str) -> Result<bool, Error> {
+        valid_id(id)?;
+        let value = self.session_list()?;
+        let rows = value["items"].as_array().ok_or(Error::Protocol)?;
+        let matching: Vec<_> = rows.iter().filter(|row| row["sessionId"] == id).collect();
+        Ok(matching.len() == 1
+            && matching[0]
+                .pointer("/projections/values/agentPreset")
+                .and_then(Value::as_str)
+                == Some("desktop-pet"))
     }
     pub fn session_page(
         &self,
@@ -646,6 +681,56 @@ mod tests {
         sync::{mpsc, Arc},
         thread,
     };
+    #[test]
+    fn pet_preset_routes_are_read_only_and_create_is_explicit() {
+        let (listener, origin) = listener();
+        let server = thread::spawn(move || {
+            for (method, args, value) in [
+                (
+                    "agentPresets/list",
+                    json!({}),
+                    json!({"presets":[{"id":"standard","isDefault":true},{"id":"desktop-pet","isDefault":false}]}),
+                ),
+                (
+                    "session/list",
+                    json!({"_request":{}}),
+                    json!({"items":[{"sessionId":"s","projections":{"values":{"agentPreset":"desktop-pet"}}}]}),
+                ),
+                (
+                    "session/create",
+                    json!({"request":{"workspaceId":"w","sessionId":"s","agentPreset":"desktop-pet"}}),
+                    json!({"sessionId":"s"}),
+                ),
+            ] {
+                let (mut socket, _) = listener.accept().unwrap();
+                let (header, body) = read_http(&mut socket);
+                assert!(header.starts_with(&format!("POST /api/{method} HTTP/1.1")));
+                assert_eq!(body["payload"]["args"], args);
+                let response = json!({"type":"server-response","rpcId":body["rpcId"],"result":{"ok":true,"value":value}}).to_string();
+                write!(
+                    socket,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    response.len(),
+                    response
+                )
+                .unwrap();
+            }
+        });
+        let client = Client::new(&origin, "auth=secret".into()).unwrap();
+        assert!(client.pet_preset_available().unwrap());
+        assert!(client.session_uses_pet_preset("s").unwrap());
+        assert_eq!(
+            client
+                .session_create_for_preset("w", Some("s"), Some("desktop-pet"))
+                .unwrap()["sessionId"],
+            "s"
+        );
+        assert_eq!(
+            client.session_create_for_preset("w", Some("s"), Some("other")),
+            Err(Error::InvalidArgument)
+        );
+        server.join().unwrap();
+    }
     fn listener() -> (TcpListener, String) {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let origin = format!("http://{}", l.local_addr().unwrap());

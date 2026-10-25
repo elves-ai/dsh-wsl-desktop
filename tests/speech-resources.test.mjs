@@ -4,32 +4,25 @@ import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
 const raw = await readFile(new URL('../src/speech-resources.ts', import.meta.url), 'utf8');
 const compiled = ts.transpileModule(raw, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText.replace("import './speech-resources.css';", '');
-const { SpeechResources, isSpeechDownloadStatus, isSpeechInitializationResult } = await import('data:text/javascript;base64,' + Buffer.from(compiled).toString('base64'));
+const { SpeechResources, isSpeechInstallStatus } = await import('data:text/javascript;base64,' + Buffer.from(compiled).toString('base64'));
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
-const config = { python_path: '/env/bin/python', model_dir: '/models/current', native_lib: '/lib/current.so' };
-const initialized = (extra = {}) => ({ config: { python_path: '/home/user/.dsh-wsl-desktop/speech/runtime/venv/bin/python', model_dir: '/home/user/.dsh-wsl-desktop/speech/models/qwen3-tts-q8', native_lib: '' }, config_path: '/home/user/.dsh-wsl-desktop/speech/config.json', reused_python: false, created_venv: true, ...extra });
-const state = (extra = {}) => ({ id: 0, status: 'idle', model_dir: '', file: null, downloaded_bytes: 0, total_bytes: null, error: null, ...extra });
+const state = (extra = {}) => ({ id: 0, status: 'idle', stage: '', downloaded_bytes: 0, total_bytes: null, error: null, ...extra });
+const installing = (extra = {}) => state({ id: 1, status: 'installing', stage: '下载并校验模型', ...extra });
 class Node extends EventTarget {
-  constructor(tag = 'div', document) { super(); this.tagName = tag.toUpperCase(); this.ownerDocument = document; this.children = []; this.value = ''; this.disabled = false; this.hidden = false; this.textContent = ''; this.attributes = new Map(); }
-  append(...children) { this.children.push(...children); }
-  replaceChildren(...children) { this.children = children; }
-  removeAttribute(key) { this.attributes.delete(key); if (key === 'value') this.value = undefined; }
-  querySelectorAll(selector) { return this.children.flatMap(child => [...(selector === 'button' && child.tagName === 'BUTTON' ? [child] : []), ...child.querySelectorAll(selector)]); }
+  constructor() { super(); this.disabled = false; this.hidden = false; this.textContent = ''; this.value = 0; }
+  removeAttribute(key) { if (key === 'value') this.value = undefined; }
   emit(type) { this.dispatchEvent(new Event(type)); }
 }
-function fixture({ native = true, draft = config, invoke: custom, listen: customListen } = {}) {
-  const document = { createElement(tag) { return new Node(tag, document); } }, nodes = new Map(), calls = [], listeners = new Map(), patches = [];
-  const root = new Node('div', document); let htmlWrites = 0, current = { ...draft }, unlistens = 0, busyEvents = 0;
-  Object.defineProperty(root, 'innerHTML', { set(html) { htmlWrites++; for (const m of html.matchAll(/<(\w+)[^>]*\bid="(speech-resource-[^"]+)"[^>]*>/g)) { const node = new Node(m[1], document); node.disabled = /\bdisabled\b/.test(m[0]); node.hidden = /\bhidden\b/.test(m[0]); nodes.set(m[2], node); root.append(node); } } });
+function fixture({ native = true, initial = state(), invoke: custom, listen: customListen } = {}) {
+  const nodes = new Map(), calls = [], listeners = new Map(), root = new Node();
+  let unlistens = 0, busyEvents = 0, completedEvents = 0;
+  Object.defineProperty(root, 'innerHTML', { set(html) { for (const m of html.matchAll(/id="(speech-resource-[^"]+)"/g)) nodes.set(m[1], new Node()); } });
   root.querySelector = selector => nodes.get(selector.slice(1));
-  const fallback = (name, args) => {
-    if (name === 'initialize_speech_environment') return initialized();
-    if (name === 'cancel_speech_initialization') return;
-    if (name === 'get_speech_download') return state();
-    if (name === 'pick_settings_path') return '/selected/' + args.kind;
-    if (name === 'download_speech_model') return state({ id: 1, status: 'downloading', model_dir: args.modelDir });
-    if (name === 'cancel_speech_download') return state({ id: 1, status: 'cancelled', model_dir: current.model_dir });
+  const fallback = name => {
+    if (name === 'get_speech_install') return initial;
+    if (name === 'install_speech') return installing();
+    if (name === 'cancel_speech_install') return state({ id: 1, status: 'cancelled' });
     throw Error('Unexpected RPC: ' + name);
   };
   const bridge = {
@@ -37,299 +30,180 @@ function fixture({ native = true, draft = config, invoke: custom, listen: custom
     async listen(name, callback) { listeners.set(name, callback); if (customListen) await customListen(name, callback); return () => { unlistens++; if (listeners.get(name) === callback) listeners.delete(name); }; },
   };
   root.addEventListener('speech-resources-busy', () => busyEvents++);
-  const resources = new SpeechResources(root, {}, native, bridge, patch => { patches.push(patch); current = { ...current, ...patch }; }, () => ({ ...current }));
+  root.addEventListener('speech-resources-completed', () => completedEvents++);
+  const resources = new SpeechResources(root, {}, native, bridge);
   const node = id => nodes.get('speech-resource-' + id);
-  return { resources, root, node, calls, listeners, patches, get draft() { return current; }, setDraft(patch) { current = { ...current, ...patch }; }, get htmlWrites() { return htmlWrites; }, get unlistens() { return unlistens; }, get busyEvents() { return busyEvents; },
-    show() { resources.setVisible(true); }, hide() { resources.setVisible(false); }, click(id) { node(id).emit('click'); }, event(payload) { listeners.get('launcher-speech-download')?.({ payload }); } };
+  return { resources, root, node, calls, listeners, get unlistens() { return unlistens; }, get busyEvents() { return busyEvents; }, get completedEvents() { return completedEvents; },
+    show() { resources.setVisible(true); }, hide() { resources.setVisible(false); }, click(id) { node(id).emit('click'); }, event(payload) { listeners.get('launcher-speech-install')?.({ payload }); } };
 }
 
-test('preview disables every control and never invokes or subscribes, including synthetic events', async () => {
+test('preview disables all controls and ignores synthetic clicks', async () => {
   const f = fixture({ native: false }); f.show();
-  for (const id of ['initialize', 'initialize-cancel', 'model-browse', 'native-browse', 'download', 'confirm-yes', 'download-cancel', 'download-retry']) { assert.equal(f.node(id).disabled, true); f.click(id); }
-  assert.deepEqual(f.calls, []); assert.deepEqual(f.patches, []); assert.equal(f.listeners.size, 0); assert.match(f.node('message').textContent, /浏览器预览/); f.resources.dispose();
+  for (const id of ['install', 'cancel']) { assert.equal(f.node(id).disabled, true); f.click(id); }
+  await tick(); assert.deepEqual(f.calls, []); assert.equal(f.listeners.size, 0); assert.match(f.node('message').textContent, /浏览器预览/); f.resources.dispose();
 });
-
-test('opening, reopening and owner unlock only read download status, never discover or probe Python', async () => {
+test('opening and reopening only read installation status, with no path or save controls', async () => {
   const f = fixture(); assert.equal(f.calls.length, 0); f.show(); await tick();
-  assert.deepEqual(f.calls.map(c => c.name), ['get_speech_download']);
-  assert.deepEqual(f.patches, []); assert.equal(f.listeners.size, 1);
-  assert.equal(f.node('initialize').disabled, false);
-  for (const id of ['discover', 'defaults', 'gpu', 'python', 'found', 'python-browse']) assert.equal(f.node(id), undefined, id);
-  f.resources.setBlocked(true); f.resources.setBlocked(false); await tick();
-  assert.equal(f.calls.length, 1);
+  assert.deepEqual(f.calls.map(c => c.name), ['get_speech_install']); assert.equal(f.node('install').disabled, false);
+  assert.match(f.node('message').textContent, /已有可用资源将复用/);
+  assert.doesNotMatch(raw, /pick_settings_path|save_speech_config|speech_action|initialize_speech_environment|download_speech_model|<input|<select/);
+  assert.match(raw, /联网.*较大的 Q8 模型/); assert.match(raw, /无需选择目录或手动保存/);
   f.hide(); assert.equal(f.unlistens, 1); f.show(); await tick();
-  assert.deepEqual(f.calls.map(c => c.name), ['get_speech_download', 'get_speech_download']);
-  assert.deepEqual(f.patches, []); f.resources.dispose();
+  assert.deepEqual(f.calls.map(c => c.name), ['get_speech_install', 'get_speech_install']); f.resources.dispose();
 });
-
-test('resource guidance is static and offers managed Python initialization, not discovery or manual Python', () => {
-  assert.match(raw, /Python 固定使用托管默认路径.*不支持手动选择/);
-  assert.match(raw, /点击“初始化语音环境”离线创建或复用默认 venv/);
-  assert.doesNotMatch(raw, /discover_speech_resources|SpeechResourcesFound|pythonStatusLabels|gpuGuidance|discovered|discovering|speech-resource-(?:discover|defaults|gpu|python|found)|python-browse|<select/);
+test('single click invokes install with no arguments and no selector or manual save; duplicate clicks are guarded', async () => {
+  const gate = deferred(), f = fixture({ invoke: (name, args, fallback) => name === 'install_speech' ? gate.promise : fallback(name) });
+  f.show(); await tick(); f.click('install'); f.click('install');
+  assert.deepEqual(f.calls.at(-1), { name: 'install_speech', args: undefined });
+  assert.equal(f.calls.filter(c => c.name === 'install_speech').length, 1); assert.equal(f.resources.isBusy(), true); assert.equal(f.node('cancel').disabled, false);
+  gate.resolve(installing()); await tick(); f.click('install'); assert.equal(f.calls.length, 2);
+  f.event(installing({ stage: '下载并校验模型', downloaded_bytes: 75, total_bytes: 100 }));
+  assert.equal(f.node('message').textContent, '下载并校验模型'); assert.equal(f.node('progress').value, 75); assert.match(f.node('progress-label').textContent, /75%/);
+  f.event(state({ id: 1, status: 'completed' })); assert.equal(f.completedEvents, 1); assert.equal(f.resources.isBusy(), false);
+  assert.match(f.node('message').textContent, /已检测并保存/); assert.equal(f.node('install').textContent, '已安装'); assert.equal(f.node('install').disabled, true);
+  f.event(state({ id: 1, status: 'completed' })); assert.equal(f.completedEvents, 1); assert.equal(f.calls.length, 2); f.resources.dispose();
 });
-
-test('system picker uses latest drafts and a single narrow command without web path browsing', async () => {
-  const f = fixture(); f.show(); await tick();
-  for (const [id, kind] of [['model-browse', 'model_dir'], ['native-browse', 'native_lib']]) {
-    f.setDraft({ [kind]: '/latest/' + kind }); f.click(id); await tick();
-    assert.deepEqual(f.calls.at(-1), { name: 'pick_settings_path', args: { kind, currentPath: '/latest/' + kind } });
-    assert.equal(f.draft[kind], '/selected/' + kind);
+test('error has bounded plain text and a single-click retry with a newer id', async () => {
+  let id = 0; const f = fixture({ invoke: (name, args, fallback) => name === 'install_speech' ? installing({ id: ++id }) : fallback(name) });
+  f.show(); await tick(); f.click('install'); await tick();
+  f.event(state({ id: 1, status: 'error', error: '<img src=x>下载失败\n' + '错误'.repeat(400) }));
+  assert.match(f.node('message').textContent, /<img src=x>下载失败/); assert.ok(f.node('message').textContent.length < 420);
+  assert.equal(f.node('install').textContent, '重试安装'); assert.equal(f.node('install').disabled, false);
+  f.click('install'); f.click('install'); await tick(); assert.equal(id, 2); assert.equal(f.resources.isBusy(), true);
+  f.event(state({ id: 1, status: 'completed' })); assert.equal(f.completedEvents, 0); assert.equal(f.resources.isBusy(), true); f.resources.dispose();
+});
+test('cancel is deduplicated, terminal cancellation beats late start reply, and retry is safe', async () => {
+  const start = deferred(), cancel = deferred(); let attempts = 0;
+  const f = fixture({ invoke: (name, args, fallback) => name === 'install_speech' ? ++attempts === 1 ? start.promise : installing({ id: 2 }) : name === 'cancel_speech_install' ? cancel.promise : fallback(name) });
+  f.show(); await tick(); f.click('install'); f.click('cancel'); f.click('cancel');
+  assert.equal(f.calls.filter(c => c.name === 'cancel_speech_install').length, 1); assert.equal(f.node('cancel').disabled, true);
+  cancel.resolve(state({ id: 1, status: 'cancelled' })); await tick(); assert.equal(f.resources.isBusy(), false); assert.match(f.node('message').textContent, /已取消/);
+  f.click('install'); await tick(); start.resolve(installing({ id: 1 })); await tick();
+  assert.equal(attempts, 2); assert.equal(f.resources.isBusy(), true); assert.equal(f.node('message').textContent, '下载并校验模型'); f.resources.dispose();
+});
+test('cancel failure does not pretend installation stopped and permits retry', async () => {
+  let cancels = 0; const f = fixture({ initial: installing(), invoke: (name, args, fallback) => { if (name === 'cancel_speech_install' && ++cancels === 1) throw Error('raw secret'); return fallback(name); } });
+  f.show(); await tick(); f.resources.setBlocked(true); f.click('cancel'); await tick();
+  assert.equal(f.resources.isBusy(), true); assert.equal(f.node('cancel').disabled, false); assert.match(f.node('message').textContent, /未成功/); assert.doesNotMatch(f.node('message').textContent, /secret/);
+  f.click('cancel'); await tick(); assert.equal(f.resources.isBusy(), false); f.resources.dispose();
+});
+test('events during the initial query and start RPC beat stale same-id replies', async () => {
+  const query = deferred(), start = deferred();
+  const f = fixture({ invoke: (name, args, fallback) => name === 'get_speech_install' ? query.promise : name === 'install_speech' ? start.promise : fallback(name) });
+  f.show(); await tick(); assert.equal(f.node('install').disabled, true); f.click('install'); assert.equal(f.calls.length, 1);
+  f.event(installing({ stage: '编译原生库', downloaded_bytes: 80, total_bytes: 100 })); query.resolve(installing({ stage: '下载模型', downloaded_bytes: 20, total_bytes: 100 })); await tick();
+  assert.equal(f.node('message').textContent, '编译原生库'); assert.equal(f.node('progress').value, undefined);
+  f.event(state({ id: 1, status: 'error', error: '失败' })); f.click('install');
+  f.event(installing({ id: 2, stage: '检测并保存' })); start.resolve(installing({ id: 2, stage: '下载模型' })); await tick();
+  assert.equal(f.node('message').textContent, '检测并保存'); f.resources.dispose();
+});
+test('terminal status cannot be resurrected by late events or old RPC failures', async () => {
+  const gate = deferred(), f = fixture({ invoke: (name, args, fallback) => name === 'install_speech' ? gate.promise : fallback(name) });
+  f.show(); await tick(); f.click('install'); f.event(state({ id: 1, status: 'completed' }));
+  f.event(installing()); f.event(state({ id: 0, status: 'error', error: 'late' })); gate.reject(Error('late RPC failure')); await tick();
+  assert.equal(f.node('install').textContent, '已安装'); assert.equal(f.resources.isBusy(), false); assert.doesNotMatch(f.node('message').textContent, /未能|late/); f.resources.dispose();
+});
+test('leaving continues backend installation, reentry restores it and ignores old listeners/replies', async () => {
+  const gate = deferred(); let reads = 0;
+  const f = fixture({ invoke: (name, args, fallback) => name === 'install_speech' ? gate.promise : name === 'get_speech_install' && ++reads > 1 ? installing({ id: 2, stage: '恢复安装进度' }) : fallback(name) });
+  f.show(); await tick(); const late = f.listeners.get('launcher-speech-install'); f.click('install'); f.hide();
+  assert.equal(f.listeners.size, 0); assert.equal(f.calls.some(c => c.name === 'cancel_speech_install'), false);
+  f.show(); await tick(); late({ payload: state({ id: 99, status: 'completed' }) }); gate.resolve(state({ id: 1, status: 'completed' })); await tick();
+  assert.equal(f.node('message').textContent, '恢复安装进度'); assert.equal(f.completedEvents, 0); assert.equal(f.node('install').disabled, true); f.resources.dispose();
+});
+test('leaving while subscription pending cleans late listeners and performs no query', async () => {
+  const gate = deferred(), f = fixture({ listen: () => gate.promise }); f.show(); f.hide(); gate.resolve(); await tick();
+  assert.equal(f.listeners.size, 0); assert.deepEqual(f.calls, []); f.resources.dispose();
+});
+test('existing completed state is read without installing or loading and remains completed on reentry', async () => {
+  const f = fixture({ initial: state({ id: 8, status: 'completed' }) }); f.show(); await tick(); f.click('install');
+  assert.equal(f.node('install').textContent, '已安装'); assert.equal(f.completedEvents, 1); assert.deepEqual(f.calls.map(c => c.name), ['get_speech_install']);
+  f.hide(); f.show(); await tick(); assert.equal(f.node('install').textContent, '已安装'); assert.equal(f.completedEvents, 1); f.resources.dispose();
+});
+test('unknown or failed read locks conflicting work; retry reads only and recovers', async () => {
+  let reads = 0; const f = fixture({ invoke: (name, args, fallback) => { if (name === 'get_speech_install' && ++reads === 1) throw Error('private'); return fallback(name); } });
+  f.show(); await tick(); assert.equal(f.resources.isBusy(), true); assert.equal(f.node('install').textContent, '重试读取状态');
+  f.click('install'); f.click('install'); await tick(); assert.deepEqual(f.calls.map(c => c.name), ['get_speech_install', 'get_speech_install']); assert.equal(f.listeners.size, 1); assert.equal(f.resources.isBusy(), false); f.resources.dispose();
+});
+test('late callback from a failed read subscription cannot contaminate its retry', async () => {
+  let reads = 0, old;
+  const f = fixture({ listen: (name, callback) => { old ??= callback; }, invoke: (name, args, fallback) => { if (name === 'get_speech_install' && ++reads === 1) throw Error('failed read'); return fallback(name); } });
+  f.show(); await tick(); f.click('install'); await tick();
+  old({ payload: state({ id: 999, status: 'completed' }) });
+  assert.equal(f.completedEvents, 0); assert.equal(f.node('install').textContent, '一键安装'); f.resources.dispose();
+});
+test('transport failure reconciles state before any second install request', async () => {
+  let reads = 0; const f = fixture({ invoke: (name, args, fallback) => { if (name === 'install_speech') throw Error('raw private token'); if (name === 'get_speech_install' && ++reads > 1) return installing(); return fallback(name); } });
+  f.show(); await tick(); f.click('install'); await tick(); assert.equal(f.resources.isBusy(), true); assert.doesNotMatch(f.node('message').textContent, /private|token/);
+  f.click('install'); await tick(); assert.equal(f.node('install').textContent, '正在安装…'); assert.equal(f.calls.filter(c => c.name === 'install_speech').length, 1); f.resources.dispose();
+});
+test('malformed DTOs never unlock controls or overwrite valid progress', async () => {
+  assert.equal(isSpeechInstallStatus(state()), true);
+  for (const patch of [{ id: -1 }, { id: 0.5 }, { id: Number.MAX_SAFE_INTEGER + 1 }, { status: 'ready' }, { stage: null }, { downloaded_bytes: NaN }, { downloaded_bytes: -1 }, { downloaded_bytes: 1.5 }, { total_bytes: Infinity }, { total_bytes: 1, downloaded_bytes: 2 }, { error: {} }]) assert.equal(isSpeechInstallStatus(state(patch)), false, JSON.stringify(patch));
+  const f = fixture({ initial: installing() }); f.show(); await tick();
+  f.event({ ...state({ id: 99, status: 'completed' }), stage: null }); assert.equal(f.resources.isBusy(), true); assert.equal(f.completedEvents, 0);
+  assert.equal(f.node('progress').value, undefined); f.event(installing({ downloaded_bytes: 100, total_bytes: null })); assert.match(f.node('progress-label').textContent, /总大小待确定/); f.resources.dispose();
+});
+test('every real installer phase shows explanatory text and indeterminate activity without invented percentages', async () => {
+  const phases = [
+    ['准备安装', /启动安装任务/], ['检查已有语音配置', /直接复用/],
+    ['准备默认语音环境', /Python/], ['识别可用显卡', /检测显卡/],
+    ['安装固定版本依赖', /体积较大/], ['获取固定版本源码', /源码/],
+    ['编译原生语音库', /可能较久/], ['检测并保存语音配置', /还不是安装完成/],
+  ];
+  const f = fixture({ initial: installing() }); f.show(); await tick();
+  for (const [stage, hint] of phases) {
+    f.event(installing({ stage, downloaded_bytes: 100, total_bytes: 100 }));
+    assert.equal(f.node('message').textContent, stage);
+    assert.equal(f.node('detail').hidden, false); assert.match(f.node('detail').textContent, hint);
+    assert.equal(f.node('progress').hidden, false); assert.equal(f.node('progress').value, undefined);
+    assert.doesNotMatch(f.node('progress-label').textContent, /100%|已下载/);
   }
-  assert.equal(f.htmlWrites, 1); assert.doesNotMatch(raw, /speech-resource-(?:browser|path|entries)|browse_speech_path/);
-  assert.equal(f.calls.some(c => /save|speech_action/.test(c.name)), false); f.resources.dispose();
-});
-
-test('native picker cancellation, malformed results and errors never change drafts or expose raw errors', async () => {
-  for (const result of [null, 'C:/host', String.raw`\\wsl.localhost\Other\home`, '/bad\\path', {}, undefined]) {
-    const f = fixture({ invoke(name, args, fallback) { return name === 'pick_settings_path' ? result : fallback(name, args); } });
-    f.show(); await tick(); f.click('model-browse'); await tick();
-    assert.deepEqual(f.patches, []); assert.deepEqual(f.draft, config); assert.equal(f.resources.isBusy(), false); f.resources.dispose();
-  }
-});
-
-test('system picker busy blocks duplicate synthetic events and all draft-changing controls', async () => {
-  const pending = deferred(); const f = fixture({ invoke(name, args, fallback) { return name === 'pick_settings_path' ? pending.promise : fallback(name, args); } });
-  f.show(); await tick(); f.click('model-browse'); const count = f.calls.length;
-  assert.equal(f.resources.isBusy(), true);
-  for (const id of ['model-browse', 'native-browse', 'initialize', 'download', 'confirm-yes']) { assert.equal(f.node(id).disabled, true); f.click(id); }
-  assert.equal(f.calls.length, count); assert.deepEqual(f.patches, []);
-  pending.resolve('/selected/models'); await tick(); assert.deepEqual(f.patches, [{ model_dir: '/selected/models' }]);
-  assert.equal(f.resources.isBusy(), false); f.resources.dispose();
-});
-
-test('late picker replies cannot overwrite a newer draft, hidden visit, owner block or disposed view', async () => {
-  for (const mode of ['draft', 'hide', 'block', 'dispose']) {
-    const pending = deferred(); const f = fixture({ invoke(name, args, fallback) { return name === 'pick_settings_path' ? pending.promise : fallback(name, args); } });
-    f.show(); await tick(); f.click('native-browse');
-    if (mode === 'draft') f.setDraft({ model_dir: '/newer/models' });
-    if (mode === 'hide') { f.hide(); f.show(); await tick(); }
-    if (mode === 'block') f.resources.setBlocked(true);
-    if (mode === 'dispose') f.resources.dispose();
-    pending.resolve('/stale/lib.so'); await tick(); assert.deepEqual(f.patches, []); f.resources.dispose();
-  }
-});
-
-test('hidden download getter cannot mutate a reopened epoch', async () => {
-  const old = deferred(); let reads = 0;
-  const f = fixture({ invoke(name, args, fallback) { return name === 'get_speech_download' && ++reads === 1 ? old.promise : fallback(name, args); } });
-  f.show(); await tick(); f.hide(); f.show(); await tick();
-  old.resolve(state({ id: 99, status: 'downloading', model_dir: '/stale' })); await tick();
-  assert.equal(f.resources.isBusy(), false); assert.doesNotMatch(f.node('download-message').textContent, /下载中|stale/);
-  assert.deepEqual(f.patches, []); assert.equal(f.unlistens, 1); f.resources.dispose();
-});
-
-test('late download subscriptions are released after hiding or disposal without a status read', async () => {
-  for (const dispose of [false, true]) {
-    const stop = deferred(); const f = fixture({ listen() { return stop.promise; } });
-    f.show(); dispose ? f.resources.dispose() : f.hide(); stop.resolve(); await tick();
-    assert.equal(f.unlistens, 1); assert.deepEqual(f.calls, []); assert.deepEqual(f.patches, []);
-    if (!dispose) { f.show(); await tick(); assert.deepEqual(f.calls.map(c => c.name), ['get_speech_download']); }
-    f.resources.dispose();
-  }
-});
-
-test('download requires explicit source and target confirmation, rejects changed target and never starts on open', async () => {
-  const f = fixture(); f.show(); await tick(); f.click('download'); assert.equal(f.node('confirm').hidden, false); assert.match(f.node('source').textContent, /Serveurperso\/Qwen3-TTS-GGUF/); assert.equal(f.node('target').textContent, config.model_dir);
-  assert.equal(f.calls.some(c => c.name === 'download_speech_model'), false); f.click('confirm-no'); assert.equal(f.node('confirm').hidden, true);
-  f.click('download'); f.setDraft({ model_dir: '/changed' }); f.click('confirm-yes'); await tick(); assert.equal(f.calls.some(c => c.name === 'download_speech_model'), false); assert.match(f.node('message').textContent, /重新确认/);
-  f.click('download'); f.click('confirm-yes'); f.click('confirm-yes'); await tick(); assert.equal(f.calls.filter(c => c.name === 'download_speech_model').length, 1); assert.deepEqual(f.calls.at(-1).args, { modelDir: '/changed' }); assert.equal(f.resources.isBusy(), true); assert.equal(f.busyEvents, 1); f.resources.dispose();
-});
-
-test('download event wins over stale getter and malformed progress, with unknown-size progress', async () => {
-  const initial = deferred(); const f = fixture({ invoke(name, args, fallback) { return name === 'get_speech_download' ? initial.promise : fallback(name, args); } }); f.show(); await tick();
-  f.event(state({ id: 5, status: 'downloading', model_dir: '/active', downloaded_bytes: 1048576, file: '<script>file</script>' })); initial.resolve(state()); await tick();
-  assert.equal(f.resources.isBusy(), true); assert.equal(f.node('progress').value, undefined); assert.match(f.node('download-message').textContent, /1.0 MiB \/ 总体积未知/); assert.match(f.node('download-message').textContent, /<script>file<\/script>/);
-  f.event(state({ status: 'completed', downloaded_bytes: NaN })); assert.equal(f.resources.isBusy(), true); assert.equal(f.htmlWrites, 1); f.resources.dispose();
-});
-
-test('cancel during pending download prevents late initial response from resurrecting it', async () => {
-  const pending = deferred(); const f = fixture({ invoke(name, args, fallback) { return name === 'download_speech_model' ? pending.promise : fallback(name, args); } }); f.show(); await tick();
-  f.click('download'); f.click('confirm-yes'); f.click('download-cancel'); await tick(); pending.resolve(state({ id: 1, status: 'downloading', model_dir: config.model_dir })); await tick();
-  assert.match(f.node('download-message').textContent, /已取消/); assert.equal(f.resources.isBusy(), false); assert.equal(f.node('download-retry').hidden, false); assert.equal(f.busyEvents, 2); f.resources.dispose();
-});
-
-test('completion selects only initiated current target once; newer path drafts are never overwritten', async () => {
-  const f = fixture(); f.show(); await tick(); f.click('download'); f.click('confirm-yes'); await tick();
-  const completed = state({ id: 1, status: 'completed', model_dir: config.model_dir, downloaded_bytes: 100, total_bytes: 100 }); f.event(completed); f.event(completed);
-  assert.deepEqual(f.patches, [{ model_dir: config.model_dir }]); assert.equal(f.resources.isBusy(), false); f.event({ ...completed, status: 'downloading' }); assert.equal(f.resources.isBusy(), false); f.resources.dispose();
-  const g = fixture(); g.show(); await tick(); g.click('download'); g.click('confirm-yes'); await tick(); g.setDraft({ model_dir: '/new/draft' }); g.event(completed); assert.deepEqual(g.patches, []); assert.equal(g.draft.model_dir, '/new/draft'); g.resources.dispose();
-});
-
-test('retry requires a new explicit confirmation and reads the latest draft', async () => {
-  const f = fixture(); f.show(); await tick(); f.click('download'); f.click('confirm-yes'); await tick(); f.event(state({ id: 1, status: 'error', model_dir: config.model_dir, error: 'network failed' }));
-  f.setDraft({ model_dir: '/retry/here' }); f.click('download-retry'); assert.equal(f.node('target').textContent, '/retry/here'); assert.equal(f.calls.filter(c => c.name === 'download_speech_model').length, 1);
-  f.click('confirm-yes'); await tick(); assert.equal(f.calls.filter(c => c.name === 'download_speech_model').length, 2); assert.equal(f.calls.at(-1).args.modelDir, '/retry/here'); f.resources.dispose();
-});
-
-test('RPC errors remain bounded static guidance and failed browser cannot select old listings', async () => {
-  const f = fixture({ invoke(name, args, fallback) { if (name === 'pick_settings_path' || name === 'download_speech_model') throw Error('SECRET /home/token'); return fallback(name, args); } }); f.show(); await tick(); f.click('model-browse'); await tick();
-  assert.match(f.node('message').textContent, /无法选择/); assert.doesNotMatch(f.node('message').textContent, /SECRET|token/); assert.deepEqual(f.patches, []);
-  f.click('download'); f.click('confirm-yes'); await tick(); assert.match(f.node('message').textContent, /未能开始/); assert.doesNotMatch(f.node('message').textContent, /SECRET|token/); assert.equal(f.resources.isBusy(), false); f.resources.dispose();
-});
-
-test('download payload validation rejects malformed states and negative totals', () => {
-  assert.equal(isSpeechDownloadStatus(state()), true); assert.equal(isSpeechDownloadStatus(state({ status: 'fake-ready' })), false); assert.equal(isSpeechDownloadStatus(state({ total_bytes: -1 })), false);
-});
-
-test('numeric download IDs and same-ID byte counts never regress from stale events', async () => {
-  const f = fixture(); f.show(); await tick();
-  f.event(state({ id: 7, status: 'downloading', model_dir: '/seven', downloaded_bytes: 1000 }));
-  f.event(state({ id: 6, status: 'completed', model_dir: '/six', downloaded_bytes: 9000 }));
-  assert.equal(f.resources.isBusy(), true); assert.match(f.node('download-message').textContent, /0.0 MiB/);
-  f.event(state({ id: 7, status: 'downloading', model_dir: '/seven', downloaded_bytes: 1048576 }));
-  f.event(state({ id: 7, status: 'downloading', model_dir: '/seven', downloaded_bytes: 1 }));
-  assert.match(f.node('download-message').textContent, /1.0 MiB/);
-  assert.equal(isSpeechDownloadStatus(state({ id: '7' })), false); assert.equal(isSpeechDownloadStatus(state({ id: -1 })), false);
+  f.event(installing({ stage: '后端新增阶段' })); assert.match(f.node('detail').textContent, /当前步骤/);
   f.resources.dispose();
 });
-
-test('events delivered synchronously while subscribing beat a stale initial idle getter', async () => {
-  const f = fixture({ listen(name, callback) { callback({ payload: state({ id: 4, status: 'downloading', model_dir: '/active' }) }); } });
-  f.show(); await tick(); assert.equal(f.resources.isBusy(), true); assert.match(f.node('download-message').textContent, /下载中/); f.resources.dispose();
+test('download byte percentage is distinct from final validation and completed installation', async () => {
+  const f = fixture({ initial: installing() }); f.show(); await tick();
+  f.event(installing({ downloaded_bytes: 50, total_bytes: 100 }));
+  assert.equal(f.node('progress').value, 50); assert.match(f.node('progress-label').textContent, /模型文件.*50%/);
+  f.event(installing({ downloaded_bytes: 100, total_bytes: 100 }));
+  assert.equal(f.node('progress').value, 100); assert.equal(f.node('install').textContent, '正在安装…');
+  f.event(installing({ stage: '检测并保存语音配置', downloaded_bytes: 100, total_bytes: null }));
+  assert.equal(f.node('progress').value, undefined); assert.doesNotMatch(f.node('progress-label').textContent, /总大小待确定|100%/);
+  f.event(state({ id: 1, status: 'completed' }));
+  assert.equal(f.node('progress').value, 100); assert.equal(f.node('progress').hidden, false);
+  assert.equal(f.node('progress-label').textContent, '安装完成'); assert.equal(f.node('detail').hidden, true);
+  f.resources.dispose();
 });
-
-test('completion read after leaving preserves a draft edited while the module was hidden', async () => {
-  let current = state();
-  const f = fixture({ invoke(name, args, fallback) { return name === 'get_speech_download' ? current : fallback(name, args); } });
-  f.show(); await tick(); f.click('download'); f.click('confirm-yes'); await tick(); f.hide(); f.setDraft({ model_dir: '/typed/while/hidden' });
-  current = state({ id: 1, status: 'completed', model_dir: config.model_dir, downloaded_bytes: 10, total_bytes: 10 });
-  f.show(); await tick(); assert.equal(f.resources.isBusy(), false); assert.deepEqual(f.patches, []); assert.equal(f.draft.model_dir, '/typed/while/hidden'); f.resources.dispose();
+test('cancel and retry discard old download progress while awaiting confirmation', async () => {
+  const start = deferred(), cancel = deferred();
+  const f = fixture({ initial: installing({ downloaded_bytes: 90, total_bytes: 100 }), invoke: (name, args, fallback) => name === 'cancel_speech_install' ? cancel.promise : name === 'install_speech' ? start.promise : fallback(name) });
+  f.show(); await tick(); f.click('cancel');
+  assert.equal(f.node('progress').value, undefined); assert.match(f.node('detail').textContent, /清理临时文件/);
+  f.event(installing({ stage: '正在取消并清理', downloaded_bytes: 90, total_bytes: 100 }));
+  cancel.resolve(installing({ stage: '正在取消并清理', downloaded_bytes: 90, total_bytes: 100 })); await tick();
+  assert.equal(f.node('progress').value, undefined); assert.match(f.node('progress-label').textContent, /正在取消/);
+  f.event(state({ id: 1, status: 'cancelled', downloaded_bytes: 90, total_bytes: 100 }));
+  assert.equal(f.node('progress').hidden, true); assert.equal(f.node('detail').hidden, true);
+  f.click('install'); assert.equal(f.node('progress').hidden, false); assert.equal(f.node('progress').value, undefined);
+  assert.match(f.node('detail').textContent, /启动安装任务/);
+  start.resolve(installing({ id: 2, stage: '准备安装' })); await tick(); f.resources.dispose();
 });
-
-test('explicit initialization sends the latest draft and only fills unsaved paths', async () => {
-  const f = fixture(); f.show(); await tick(); f.setDraft({ python_path: '/latest/python' });
-  const before = f.calls.length; f.click('initialize'); await tick();
-  assert.deepEqual(f.calls.slice(before), [{ name: 'initialize_speech_environment', args: { config: { ...config, python_path: '/latest/python' } } }]);
-  assert.deepEqual(f.draft, initialized().config); assert.deepEqual(f.patches, [initialized().config]);
-  assert.match(f.node('message').textContent, /离线创建 Python venv.*本地配置存储于：.*speech\/config.json/);
-  assert.match(f.node('message').textContent, /不代表依赖、GPU、ABI 或模型检测通过/);
-  assert.match(f.node('message').textContent, /未保存为应用有效配置/);
-  assert.equal(f.resources.isBusy(), false); assert.equal(f.busyEvents, 2); f.resources.dispose();
+test('progress remains unknown while reconnecting to an in-flight installation', async () => {
+  const query = deferred(); let reads = 0;
+  const f = fixture({ initial: installing({ downloaded_bytes: 50, total_bytes: 100 }), invoke: (name, args, fallback) => name === 'get_speech_install' && ++reads > 1 ? query.promise : fallback(name) });
+  f.show(); await tick(); f.hide(); f.show(); await tick();
+  assert.equal(f.node('progress').value, undefined); assert.match(f.node('detail').textContent, /确认后台任务状态/);
+  query.resolve(installing({ stage: '编译原生语音库' })); await tick();
+  assert.match(f.node('detail').textContent, /可能较久/); f.resources.dispose();
 });
-
-test('initialization preserves paths edited after clicking while filling unchanged fields', async () => {
-  const pending = deferred(); const f = fixture({ invoke(name, args, fallback) { return name === 'initialize_speech_environment' ? pending.promise : fallback(name, args); } });
-  f.show(); await tick(); f.click('initialize'); f.setDraft({ model_dir: '/later/models', native_lib: '/later/lib.so' });
-  pending.resolve(initialized({ reused_python: true, created_venv: false })); await tick();
-  assert.deepEqual(f.patches, [{ python_path: initialized().config.python_path }]);
-  assert.equal(f.draft.model_dir, '/later/models'); assert.equal(f.draft.native_lib, '/later/lib.so');
-  assert.match(f.node('message').textContent, /复用现有 Python/); f.resources.dispose();
+test('progress is accessible, visibly animated only when indeterminate and respects reduced motion', async () => {
+  const css = await readFile(new URL('../src/speech-resources.css', import.meta.url), 'utf8');
+  assert.match(raw, /aria-label="本地语音安装进度" aria-describedby="speech-resource-detail speech-resource-progress-label"/);
+  assert.match(css, /progress:indeterminate/); assert.match(css, /@keyframes speech-install-activity/);
+  assert.match(css, /prefers-reduced-motion: reduce/); assert.match(css, /animation: none/);
 });
-
-test('initialization busy disables picker, download and duplicate synthetic actions, not download progress', async () => {
-  const pending = deferred(); const f = fixture({ invoke(name, args, fallback) { return name === 'initialize_speech_environment' ? pending.promise : fallback(name, args); } });
-  f.show(); await tick(); f.click('download'); f.click('initialize'); const count = f.calls.length;
-  assert.equal(f.resources.isBusy(), true); assert.equal(f.node('initialize-cancel').disabled, false);
-  for (const id of ['initialize', 'model-browse', 'native-browse', 'download', 'confirm-yes', 'download-cancel', 'download-retry']) {
-    assert.equal(f.node(id).disabled, true, id); f.click(id);
-  }
-  assert.equal(f.calls.length, count); assert.deepEqual(f.patches, []); assert.equal(f.node('progress').hidden, true);
-  assert.equal(f.node('confirm').hidden, true); assert.doesNotMatch(f.node('download-message').textContent, /下载中/);
-  pending.resolve(initialized()); await tick(); assert.equal(f.node('initialize').disabled, false); f.resources.dispose();
-});
-
-test('explicit cancellation ignores an old success and cannot unlock a newer initialization', async () => {
-  const first = deferred(), second = deferred(), cancel = deferred(); let runs = 0;
-  const f = fixture({ invoke(name, args, fallback) {
-    if (name === 'initialize_speech_environment') return ++runs === 1 ? first.promise : second.promise;
-    return name === 'cancel_speech_initialization' ? cancel.promise : fallback(name, args);
-  } });
-  f.show(); await tick(); f.click('initialize'); f.click('initialize-cancel'); f.click('initialize-cancel');
-  assert.equal(f.calls.filter(c => c.name === 'cancel_speech_initialization').length, 1);
-  assert.equal(f.resources.isBusy(), true); first.resolve(initialized()); await tick();
-  assert.deepEqual(f.patches, []); assert.equal(f.resources.isBusy(), true);
-  cancel.resolve(); await tick(); assert.equal(f.resources.isBusy(), false); assert.match(f.node('message').textContent, /已取消/);
-  f.click('initialize'); assert.equal(f.resources.isBusy(), true);
-  second.resolve(initialized()); await tick(); assert.equal(f.patches.length, 1); f.resources.dispose();
-});
-
-test('hide and dispose cancel pending initialization and old callbacks never affect a later visit', async () => {
-  for (const dispose of [false, true]) {
-    const first = deferred(), second = deferred(), cancel = deferred(); let runs = 0;
-    const f = fixture({ invoke(name, args, fallback) {
-      if (name === 'initialize_speech_environment') return ++runs === 1 ? first.promise : second.promise;
-      return name === 'cancel_speech_initialization' ? cancel.promise : fallback(name, args);
-    } });
-    f.show(); await tick(); f.click('initialize'); dispose ? f.resources.dispose() : f.hide();
-    assert.equal(f.calls.filter(c => c.name === 'cancel_speech_initialization').length, 1);
-    if (!dispose) { f.show(); await tick(); f.click('initialize'); }
-    first.resolve(initialized({ config_path: '/stale/config' })); cancel.resolve(); await tick();
-    assert.deepEqual(f.patches, []); assert.doesNotMatch(f.node('message').textContent, /stale/);
-    assert.equal(f.node('initialize').disabled, true);
-    if (!dispose) { assert.equal(f.resources.isBusy(), true); second.resolve(initialized()); await tick(); assert.equal(f.patches.length, 1); }
-    f.resources.dispose();
-  }
-});
-
-test('cancelled initializer replying after a new run cannot apply paths or clear its busy state', async () => {
-  const first = deferred(), second = deferred(); let runs = 0;
-  const f = fixture({ invoke(name, args, fallback) { return name === 'initialize_speech_environment' ? (++runs === 1 ? first.promise : second.promise) : fallback(name, args); } });
-  f.show(); await tick(); f.click('initialize'); f.click('initialize-cancel'); await tick(); f.click('initialize');
-  first.resolve(initialized({ config_path: '/stale/config' })); await tick();
-  assert.deepEqual(f.patches, []); assert.equal(f.resources.isBusy(), true); assert.equal(f.node('initialize').disabled, true);
-  assert.doesNotMatch(f.node('message').textContent, /stale/); second.resolve(initialized()); await tick();
-  assert.equal(f.patches.length, 1); assert.equal(f.resources.isBusy(), false); f.resources.dispose();
-});
-
-test('initialization cannot overlap pending browse, download or an owner block', async () => {
-  for (const activity of ['browse', 'download', 'owner']) {
-    const pending = deferred(); const f = fixture({ invoke(name, args, fallback) {
-      if (activity === 'browse' && name === 'pick_settings_path') return pending.promise;
-      return fallback(name, args);
-    } });
-    f.show(); await tick();
-    if (activity === 'browse') f.click('model-browse');
-    if (activity === 'download') { f.click('download'); f.click('confirm-yes'); await tick(); }
-    if (activity === 'owner') f.resources.setBlocked(true);
-    assert.equal(f.node('initialize').disabled, true, activity); f.click('initialize'); await tick();
-    assert.equal(f.calls.some(call => call.name === 'initialize_speech_environment'), false, activity);
-    if (activity === 'download') assert.equal(f.node('download-cancel').disabled, false);
-    pending.resolve('/selected/models'); await tick(); f.resources.dispose();
-  }
-});
-
-test('initialization failures and malformed results retain drafts, show static errors and allow explicit retry', async () => {
-  for (const invalid of [null, { config: initialized().config }, initialized({ config_path: '' }), initialized({ reused_python: true })]) {
-    let runs = 0; const f = fixture({ invoke(name, args, fallback) {
-      if (name === 'initialize_speech_environment') { if (++runs === 1) return invalid; if (runs === 2) throw Error('SECRET raw subprocess /token'); return initialized(); }
-      return fallback(name, args);
-    } });
-    f.show(); await tick();
-    for (let i = 0; i < 2; i++) {
-      f.click('initialize'); await tick(); assert.deepEqual(f.patches, []); assert.deepEqual(f.draft, config);
-      assert.match(f.node('message').textContent, /初始化未完成/); assert.doesNotMatch(f.node('message').textContent, /SECRET|subprocess|token/);
-      assert.equal(f.resources.isBusy(), false); assert.equal(f.node('initialize').disabled, false);
-    }
-    f.click('initialize'); await tick(); assert.equal(f.patches.length, 1); f.resources.dispose();
-  }
-});
-
-test('failed cancellation stays locked until original settlement and never applies its success', async () => {
-  const pending = deferred(); const f = fixture({ invoke(name, args, fallback) {
-    if (name === 'initialize_speech_environment') return pending.promise;
-    if (name === 'cancel_speech_initialization') throw Error('SECRET cancel'); return fallback(name, args);
-  } });
-  f.show(); await tick(); f.click('initialize'); f.click('initialize-cancel'); await tick();
-  assert.equal(f.resources.isBusy(), true); assert.equal(f.node('initialize-cancel').disabled, false);
-  assert.match(f.node('message').textContent, /取消初始化未成功/); assert.doesNotMatch(f.node('message').textContent, /SECRET/);
-  pending.resolve(initialized()); await tick(); assert.equal(f.resources.isBusy(), false); assert.deepEqual(f.patches, []); f.resources.dispose();
-});
-
-test('initialization result validates absolute bounded paths, optional native lib and exclusive typed flags', () => {
-  assert.equal(isSpeechInitializationResult(initialized()), true);
-  assert.equal(isSpeechInitializationResult(initialized({ config: { ...config, python_path: '/external/bin/python' } })), false);
-  assert.equal(isSpeechInitializationResult(initialized({ created_venv: false, reused_python: true })), true);
-  for (const key of ['python_path', 'model_dir', 'native_lib', 'config_path']) {
-    for (const value of ['', 'relative', '//host/path', 'C:/bad', '/bad\\path', '/bad\npath', '/bad' + String.fromCharCode(127), '/' + 'x'.repeat(4096), 1, null]) {
-      const result = initialized(); if (key === 'config_path') result[key] = value; else result.config[key] = value;
-      assert.equal(isSpeechInitializationResult(result), key === 'native_lib' && value === '', key + ':' + String(value));
-    }
-  }
-  for (const invalidPath of ['/home/user/.dsh-wsl-desktop/speech-config.json', '/home/user/.dsh-wsl-desktop/speech/config.json.bak', '/other/config.json']) assert.equal(isSpeechInitializationResult(initialized({ config_path: invalidPath })), false);
-  for (const flags of [{ reused_python: true, created_venv: true }, { reused_python: false, created_venv: false }, { reused_python: 'true' }, { created_venv: 1 }]) assert.equal(isSpeechInitializationResult(initialized(flags)), false);
-});
-
-test('dispose removes subscription and ignores deferred responses and synthetic clicks', async () => {
-  const pending = deferred(); const f = fixture({ invoke(name, args, fallback) { return name === 'pick_settings_path' ? pending.promise : fallback(name, args); } }); f.show(); await tick(); f.click('model-browse'); f.resources.dispose(); const count = f.calls.length;
-  pending.resolve('/old'); await tick(); f.click('initialize'); f.click('download'); f.resources.setVisible(true); assert.equal(f.calls.length, count); assert.equal(f.listeners.size, 0); assert.equal(f.patches.length, 0); assert.equal(f.node('model-browse').disabled, true);
+test('owner blocking prevents synthetic install but never prevents cancellation of existing work', async () => {
+  const f = fixture(); f.show(); await tick(); f.resources.setBlocked(true); f.click('install'); assert.equal(f.calls.length, 1);
+  f.event(installing()); assert.equal(f.node('cancel').disabled, false); f.click('cancel'); await tick(); assert.equal(f.calls.at(-1).name, 'cancel_speech_install'); f.resources.dispose();
 });

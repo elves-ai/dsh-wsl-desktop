@@ -133,7 +133,7 @@ test('pet controls share actual visibility without inheriting DSH or service pri
   const cap=JSON.parse(read('src-tauri/capabilities/pet-settings.json'));
   assert.equal(cap.local,true);assert.equal(cap.remote,undefined);assert.equal(cap.windows,undefined);
   assert.deepEqual(cap.webviews,['launcher-settings','dsh-settings']);
-  assert.deepEqual(cap.permissions,['allow-get-pet-settings','allow-set-pet-settings','allow-set-pet-visibility']);
+  assert.deepEqual(cap.permissions,['allow-get-pet-memory','allow-pet-memory-action','allow-get-pet-workspace','allow-open-pet-workspace','allow-get-pet-settings','allow-set-pet-settings','allow-set-pet-visibility']);
   const source=read('src-tauri/src/desktop_pet_settings.rs');
   assert.ok(source.includes('assert_local(view)?'));
   assert.ok(source.includes('"launcher-settings" | "dsh-settings"'));

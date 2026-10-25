@@ -4,7 +4,7 @@ use crate::{
     notification_channels::{ChannelGate, SystemDelivery},
     notification_transport::RpcClient,
     notifications::{
-        notification_session_url, task_notice_body, CursorTracker, NoticeKind,
+        notification_session_url, task_notice_body, task_notice_title, CursorTracker, NoticeKind,
         NotificationSettings, NotificationSnapshot,
     },
     pet_notifications::BubbleKind,
@@ -329,6 +329,7 @@ fn deliver(
     target: Url,
     title: &str,
     body: &str,
+    task_title: &str,
     kind: BubbleKind,
     key: &str,
 ) {
@@ -343,7 +344,8 @@ fn deliver(
         data.snapshot.notify_when_focused
     };
     if channels.allows_bubble(state.gate(app)) && (!is_foreground || notify_when_focused) {
-        super::pet_notifications::emit(app, target.clone(), kind, title, body, key);
+        // Keep task identity separate from status/help text in the compact pet bubble.
+        super::pet_notifications::emit(app, target.clone(), kind, task_title, "", key);
     }
     let Some(delivery) =
         channels.system_delivery(state.gate(app), is_foreground, notify_when_focused)
@@ -524,8 +526,9 @@ pub(super) fn start(app: tauri::AppHandle, controller: Arc<Controller>, state: A
                         epoch,
                         channels,
                         target,
-                        "DSH · 需要你回答",
+                        "需要你回答",
                         &body,
+                        &task_notice_title(&list, &notice.session_id),
                         BubbleKind::Waiting,
                         &format!("waiting:{}:{}", notice.session_id, notice.call_id),
                     );
@@ -542,10 +545,10 @@ pub(super) fn start(app: tauri::AppHandle, controller: Arc<Controller>, state: A
                     if let Some(notice) = notice {
                         let (title, body) = match notice.kind {
                             NoticeKind::Completed => (
-                                "DSH · 本轮执行已结束",
+                                "本轮执行已结束",
                                 "打开 DSH 查看结果。本轮结束不代表整个长任务目标已完成。",
                             ),
-                            NoticeKind::Failed => ("DSH · 本轮执行失败", "打开 DSH 查看错误详情。"),
+                            NoticeKind::Failed => ("本轮执行失败", "打开 DSH 查看错误详情。"),
                         };
                         let body = task_notice_body(&list, &notice.session_id, body);
                         let target = notification_session_url(
@@ -570,6 +573,7 @@ pub(super) fn start(app: tauri::AppHandle, controller: Arc<Controller>, state: A
                             target,
                             title,
                             &body,
+                            &task_notice_title(&list, &notice.session_id),
                             kind,
                             &key,
                         );
