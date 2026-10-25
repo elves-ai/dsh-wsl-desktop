@@ -26,11 +26,11 @@ I = module("speech_install", ROOT / "src-tauri/helpers/speech_install.py")
 R = module("speech_resources", ROOT / "src-tauri/helpers/speech_resources.py")
 
 def process_stopped(pid):
-    # The kernel may reap the process between an exists() check and a read.
-    # A missing proc entry or a zombie is stopped; all live states still fail.
+    # The kernel can reap a process before open (ENOENT) or during read
+    # (ESRCH). Both mean stopped; zombies are stopped, live states still fail.
     try:
         state = (Path("/proc") / str(pid) / "stat").read_text()
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
         return True
     return state.split()[2] == "Z"
 
@@ -98,8 +98,9 @@ class InstallerTests(unittest.TestCase):
         self.assertTrue(process_stopped(pid))
     def test_process_stop_check_handles_reaped_zombie_and_live_processes(self):
         with patch.object(Path,"exists",side_effect=AssertionError("racy pre-check")):
-            with patch.object(Path,"read_text",side_effect=FileNotFoundError):
-                self.assertTrue(process_stopped(123))
+            for error in [FileNotFoundError, ProcessLookupError]:
+                with self.subTest(error=error), patch.object(Path,"read_text",side_effect=error):
+                    self.assertTrue(process_stopped(123))
             for state, stopped in [("Z", True), ("S", False), ("R", False)]:
                 with self.subTest(state=state), patch.object(Path,"read_text",return_value=f"123 (sleep) {state} 1 1"):
                     self.assertEqual(process_stopped(123),stopped)
