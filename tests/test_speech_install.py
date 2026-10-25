@@ -25,6 +25,16 @@ def module(name, path):
 I = module("speech_install", ROOT / "src-tauri/helpers/speech_install.py")
 R = module("speech_resources", ROOT / "src-tauri/helpers/speech_resources.py")
 
+def process_stopped(pid):
+    # The kernel may reap the process between an exists() check and a read.
+    # A missing proc entry or a zombie is stopped; all live states still fail.
+    try:
+        state = (Path("/proc") / str(pid) / "stat").read_text()
+    except FileNotFoundError:
+        return True
+    return state.split()[2] == "Z"
+
+
 class InstallerTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -85,8 +95,17 @@ class InstallerTests(unittest.TestCase):
         self.assertTrue(pidfile.exists()); pid=int(pidfile.read_text())
         cancel.set();thread.join(3);self.assertFalse(thread.is_alive())
         self.assertEqual(str(errors[0]),"cancelled")
-        stat=Path('/proc') / str(pid) / 'stat'
-        self.assertTrue(not stat.exists() or stat.read_text().split()[2]=='Z')
+        self.assertTrue(process_stopped(pid))
+    def test_process_stop_check_handles_reaped_zombie_and_live_processes(self):
+        with patch.object(Path,"exists",side_effect=AssertionError("racy pre-check")):
+            with patch.object(Path,"read_text",side_effect=FileNotFoundError):
+                self.assertTrue(process_stopped(123))
+            for state, stopped in [("Z", True), ("S", False), ("R", False)]:
+                with self.subTest(state=state), patch.object(Path,"read_text",return_value=f"123 (sleep) {state} 1 1"):
+                    self.assertEqual(process_stopped(123),stopped)
+    def test_process_stop_check_does_not_hide_permission_errors(self):
+        with patch.object(Path,"read_text",side_effect=PermissionError),self.assertRaises(PermissionError):
+            process_stopped(123)
     def test_subprocess_timeout_and_no_shell(self):
         with self.assertRaisesRegex(I.InstallError,"fixture_timeout"):
             I.run([sys.executable,"-c","import time;time.sleep(10)"],lambda:False,"fixture",timeout=.01)
