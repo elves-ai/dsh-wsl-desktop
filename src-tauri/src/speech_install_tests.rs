@@ -14,6 +14,7 @@ struct Fixture {
     good: AtomicBool,
     inspect_error_once: AtomicBool,
     service_running: AtomicBool,
+    status_error: AtomicBool,
     installs: AtomicU64,
     inspections: AtomicU64,
 }
@@ -74,6 +75,9 @@ impl crate::speech_settings::Runtime for Fixture {
         })
     }
     fn status(&self, _: &Cancellation) -> Result<ServiceStatus, String> {
+        if self.status_error.load(Ordering::SeqCst) {
+            return Err("语音服务无响应，暂不能确认运行状态。".into());
+        }
         Ok(ServiceStatus {
             identity_valid: false,
             instance_id: None,
@@ -137,6 +141,37 @@ fn terminal(manager: &Manager) -> SpeechInstallStatus {
     }
     state.status.clone()
 }
+#[test]
+fn status_timeout_blocks_mutation_preserves_config_and_allows_retry() {
+    let (m, s, f, path) = setup();
+    f.status_error.store(true, Ordering::SeqCst);
+    m.start(s.clone()).unwrap();
+    let failed = terminal(&m);
+    assert_eq!(failed.status, InstallState::Error);
+    assert!(failed.error.unwrap().contains("暂不能确认运行状态"));
+    assert_eq!(f.installs.load(Ordering::SeqCst), 0);
+    assert!(!path.exists());
+
+    f.status_error.store(false, Ordering::SeqCst);
+    f.install_gate.store(true, Ordering::SeqCst);
+    f.inspect_gate.store(true, Ordering::SeqCst);
+    f.good.store(true, Ordering::SeqCst);
+    m.start(s.clone()).unwrap();
+    assert_eq!(terminal(&m).status, InstallState::Completed);
+    assert_eq!(f.installs.load(Ordering::SeqCst), 1);
+    let original = std::fs::read(&path).unwrap();
+
+    // A failed existing environment must not be rebuilt under an unknown service.
+    f.good.store(false, Ordering::SeqCst);
+    f.status_error.store(true, Ordering::SeqCst);
+    m.start(s.clone()).unwrap();
+    assert_eq!(terminal(&m).status, InstallState::Error);
+    assert_eq!(f.installs.load(Ordering::SeqCst), 1);
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+    assert_eq!(s.get_snapshot().config, config());
+    std::fs::remove_file(path).unwrap();
+}
+
 #[test]
 fn completed_requires_inspection_save_and_never_autoread_or_service() {
     let (m, s, f, path) = setup();

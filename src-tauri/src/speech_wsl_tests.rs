@@ -1,4 +1,46 @@
 use super::*;
+
+#[test]
+fn refused_loopback_port_is_stopped_not_a_timeout() {
+    // In particular, run this on Windows: refusal takes slightly over 2 seconds,
+    // unlike Linux's immediate ECONNREFUSED. The old connect timeout failed here.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    drop(listener);
+    let runtime = WslSpeechRuntime::new(Arc::new(|| panic!("status must not spawn WSL"))).unwrap();
+    let status = runtime
+        .status_at(&endpoint, &Cancellation::default())
+        .unwrap();
+    assert_eq!(status.service_state, ServiceState::Stopped);
+    assert_eq!(status.model_state, ModelState::Unloaded);
+    assert!(!status.identity_valid);
+}
+
+#[test]
+fn unresponsive_loopback_listener_is_not_stopped() {
+    // Keep the bound listener alive without accepting/replying: TCP connects,
+    // but HTTP must time out. Increasing the refusal budget must not allow
+    // installation to mutate dependencies under a hung or foreign service.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let runtime = WslSpeechRuntime::new(Arc::new(|| panic!("status must not spawn WSL"))).unwrap();
+    let error = runtime
+        .status_at(&endpoint, &Cancellation::default())
+        .unwrap_err();
+    assert!(error.contains("暂不能确认运行状态"));
+}
+
+#[test]
+fn status_cancellation_does_not_probe_a_port() {
+    let runtime = WslSpeechRuntime::new(Arc::new(|| panic!("status must not spawn WSL"))).unwrap();
+    let cancel = Cancellation::default();
+    cancel.cancel();
+    assert!(runtime
+        .status_at("not a URL", &cancel)
+        .unwrap_err()
+        .contains("取消"));
+}
+
 fn fixture() -> Config {
     Config::parse(br#"{"Distribution":"Ubuntu","LinuxUser":"user","LinuxLauncher":"/home/user/dsh","LinuxConfig":"/home/user/config.json"}"#).unwrap()
 }

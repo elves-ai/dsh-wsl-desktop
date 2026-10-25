@@ -3,9 +3,14 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
-const wav = readFileSync(new URL('../src-tauri/src/assets/notification-basin.wav', import.meta.url));
+// Approved source bytes are pinned here; the tests need only bundled assets, not outputs/.
+const voices = [
+  { name: 'completed', sha256: '348d633480fbf44b3227cd17e435569d425411c6ae7c66dccf5e365a4d5c68c5', duration: 1.70 },
+  { name: 'failed', sha256: '69126a2a45dd5b67fe983ccabd398c629aea6d09a0fd6560b80ba865b32182c9', duration: 2.32 },
+  { name: 'waiting', sha256: '30b8b1816a4c208af41f6fb3018d8139755abfb7a16f0d098e1c7aa92a22b515', duration: 2.32 },
+];
 
-function chunks() {
+function chunks(wav) {
   const result = new Map();
   assert.equal(wav.toString('ascii', 0, 4), 'RIFF');
   assert.equal(wav.readUInt32LE(4) + 8, wav.length);
@@ -15,43 +20,48 @@ function chunks() {
     assert.ok(offset + 8 <= wav.length, 'complete chunk header');
     const size = wav.readUInt32LE(offset + 4);
     assert.ok(offset + 8 + size <= wav.length, 'complete chunk payload');
-    result.set(wav.toString('ascii', offset, offset + 4), wav.subarray(offset + 8, offset + 8 + size));
+    const name = wav.toString('ascii', offset, offset + 4);
+    assert.ok(!result.has(name), 'no duplicate WAV chunks');
+    result.set(name, wav.subarray(offset + 8, offset + 8 + size));
     offset += 8 + size + (size % 2);
   }
+  assert.equal(offset, wav.length, 'complete chunk padding');
   return result;
 }
 
-test('bundled notification is exactly the approved stainless bowl v2, in native PCM WAV format', () => {
-  assert.equal(createHash('sha256').update(wav).digest('hex'), '3be00932d291fe1a268e54ebf891bb8fa15c0cc956a1955a111551ba0a0aa38a');
-  const parts = chunks();
-  const fmt = parts.get('fmt ');
-  assert.ok(fmt);
-  assert.equal(fmt.readUInt16LE(0), 1, 'uncompressed PCM needs no codec');
-  assert.equal(fmt.readUInt16LE(2), 2);
-  assert.equal(fmt.readUInt32LE(4), 48000);
-  assert.equal(fmt.readUInt32LE(8), 192000);
-  assert.equal(fmt.readUInt16LE(12), 4);
-  assert.equal(fmt.readUInt16LE(14), 16);
-  assert.equal(parts.get('data').length / 192000, 1.65);
-});
+for (const voice of voices) {
+  const wav = readFileSync(new URL(`../src-tauri/src/assets/notification-${voice.name}.wav`, import.meta.url));
 
-test('notification has three separate short strikes and an unclipped, quiet ending', () => {
-  const data = chunks().get('data');
-  function rms(start, end) {
-    const first = Math.round(start * 48000) * 4;
-    const last = Math.round(end * 48000) * 4;
+  test(`bundled ${voice.name} voice is exactly the approved PCM16 24kHz mono WAV`, () => {
+    assert.equal(createHash('sha256').update(wav).digest('hex'), voice.sha256);
+    const parts = chunks(wav);
+    const fmt = parts.get('fmt ');
+    assert.ok(fmt && fmt.length >= 16, 'complete PCM format');
+    assert.equal(fmt.readUInt16LE(0), 1, 'uncompressed PCM needs no codec');
+    assert.equal(fmt.readUInt16LE(2), 1, 'mono');
+    assert.equal(fmt.readUInt32LE(4), 24000, '24kHz sample rate');
+    assert.equal(fmt.readUInt32LE(8), 48000, 'PCM byte rate');
+    assert.equal(fmt.readUInt16LE(12), 2, 'PCM block alignment');
+    assert.equal(fmt.readUInt16LE(14), 16, '16-bit samples');
+    const data = parts.get('data');
+    assert.ok(data && data.length > 0, 'nonempty audio data');
+    assert.equal(data.length % 2, 0, 'complete PCM samples');
+    assert.equal(data.length / 48000, voice.duration, 'approved duration in seconds');
+  });
+
+  test(`bundled ${voice.name} voice is audible, quiet and has zero endpoints`, () => {
+    const data = chunks(wav).get('data');
+    assert.ok(data && data.length >= 2 && data.length % 2 === 0, 'complete nonempty PCM data');
+    let peak = 0;
     let energy = 0;
-    for (let i = first; i < last; i += 2) energy += (data.readInt16LE(i) / 32768) ** 2;
-    return Math.sqrt(energy / ((last - first) / 2));
-  }
-  assert.equal(rms(0, .04), 0, 'no click before the first strike');
-  for (const onset of [.045, .435, .825]) {
-    const attack = rms(onset, onset + .04);
-    assert.ok(attack > .06, 'audible attack');
-    assert.ok(rms(onset + .27, onset + .36) < attack * .04, 'short decay before next strike');
-  }
-  assert.equal(rms(1.55, 1.65), 0, 'no truncated ringing or end click');
-  let peak = 0;
-  for (let i = 0; i < data.length; i += 2) peak = Math.max(peak, Math.abs(data.readInt16LE(i)));
-  assert.ok(peak > 25000 && peak < 30000, 'headroom without clipping');
-});
+    for (let i = 0; i < data.length; i += 2) {
+      const sample = data.readInt16LE(i) / 32768;
+      peak = Math.max(peak, Math.abs(sample));
+      energy += sample ** 2;
+    }
+    assert.ok(peak <= .301, 'quiet peak with no clipping');
+    assert.ok(energy > 0, 'nonzero effective audio signal');
+    assert.equal(data.readInt16LE(0), 0, 'no start click');
+    assert.equal(data.readInt16LE(data.length - 2), 0, 'no end click');
+  });
+}

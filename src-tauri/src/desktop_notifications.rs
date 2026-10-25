@@ -246,12 +246,12 @@ fn send(app: &tauri::AppHandle, title: &str, body: &str) -> Result<(), String> {
         .title(title)
         .body(body)
         // Omitted sound maps to <audio silent="true" /> in the pinned Windows backend.
-        // Use the same embedded bowl sound as task toasts, never the OS default.
+        // Test the embedded completion voice, never the OS default or live synthesis.
         .show()
         .map_err(|_| {
             "无法提交系统通知，请在 Windows 安装版中重试，并检查系统通知设置。".to_owned()
         })?;
-    super::toasts::play_notification_sound()
+    super::toasts::play_notification_sound(BubbleKind::Completed)
 }
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -367,11 +367,11 @@ fn deliver(
         return;
     }
     let result = match delivery {
-        SystemDelivery::SoundOnly => super::toasts::play_notification_sound(),
+        SystemDelivery::SoundOnly => super::toasts::play_notification_sound(kind),
         SystemDelivery::Toast => {
             let click_app = app.clone();
             let app_id = toast_app_id(app);
-            state.toasts.show(&app_id, title, body, move || {
+            state.toasts.show(&app_id, title, body, kind, move || {
                 if let Err(message) = open_notified_session(&click_app, &target) {
                     if let Some(controller) = click_app.try_state::<Arc<Controller>>() {
                         // Fixed diagnostics only: no session name, ID, URL or credentials in logs.

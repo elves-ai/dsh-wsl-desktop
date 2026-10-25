@@ -291,7 +291,7 @@ test('notification clicks capture a same-origin session target without scripts o
   assert.ok(open.includes('view.navigate(destination)'));
   assert.ok(open.includes('super::show_dsh(app)'));
   assert.doesNotMatch(open, /eval\(|initialization_script|ensure_ready\(|dispatch\(|open_dsh\(|open::|WindowBuilder|WebviewBuilder/);
-  assert.ok(native.includes('state.toasts.show(&app_id, title, body, move ||'));
+  assert.ok(native.includes('state.toasts.show(&app_id, title, body, kind, move ||'));
   assert.ok(native.includes('open_notified_session(&click_app, &target)'));
   const worker = native.slice(native.indexOf('pub(super) fn start('));
   assert.equal((worker.match(/notification_session_url\(/g) || []).length, 2);
@@ -306,9 +306,10 @@ test('clickable Windows toasts retain native handles, escape text and clean up w
   assert.ok(source.includes('CreateTextNode(&HSTRING::from(value))'));
   assert.ok(source.includes('<audio silent="true"/>'));
   assert.doesNotMatch(source, /ms-winsoundevent:|SystemNotification|SND_ALIAS/);
+  assert.match(source, /pub\(super\) fn show\(\s*&self,\s*app_id: &str,\s*title: &str,\s*body: &str,\s*kind: BubbleKind,/);
   const acknowledged = source.slice(source.indexOf('match result.recv_timeout(timeout)'), source.indexOf('pub(super) fn shutdown'));
-  assert.match(acknowledged, /Ok\(result\) => \{\s*result\?;\s*play_notification_sound\(\)/);
-  assert.equal((acknowledged.match(/play_notification_sound\(\)/g) || []).length, 1);
+  assert.match(acknowledged, /Ok\(result\) => \{\s*result\?;\s*play_notification_sound\(kind\)/);
+  assert.equal((acknowledged.match(/play_notification_sound\(/g) || []).length, 1);
   assert.doesNotMatch(acknowledged.slice(acknowledged.indexOf('Err(_) =>')), /play_notification_sound/);
   assert.ok(source.includes('ToastDismissalReason::TimedOut'));
   assert.ok(source.includes('sender.send(Event::Clicked(id))'));
@@ -338,12 +339,12 @@ test('focus policy saves before updating memory and does not reset notification 
   assert.ok(source.includes('listening_message(data.snapshot.notify_when_focused)'));
 });
 
-test('test notifications submit a silent card before the same embedded bowl sound', () => {
+test('test notifications submit a silent card before the embedded completed voice', () => {
   const source = read('src-tauri/src/desktop_notifications.rs');
   const send = source.slice(source.indexOf('fn send('), source.indexOf('fn now_ms('));
   assert.doesNotMatch(send, /[.]sound\(|PlaySound|SoundPlayer|Notification[.]Looping/);
-  assert.match(send, /[.]show\(\)[\s\S]*[.]map_err\([\s\S]*\?;\s*super::toasts::play_notification_sound\(\)/);
-  assert.equal((send.match(/play_notification_sound\(\)/g) || []).length, 1);
+  assert.match(send, /[.]show\(\)[\s\S]*[.]map_err\([\s\S]*\?;\s*super::toasts::play_notification_sound\(BubbleKind::Completed\)/);
+  assert.equal((send.match(/play_notification_sound\(/g) || []).length, 1);
 });
 
 test('visible-pet notifications choose sound-only after shared guards without creating a toast', () => {
@@ -354,16 +355,22 @@ test('visible-pet notifications choose sound-only after shared guards without cr
     assert.ok(delivery.includes(guard) && delivery.indexOf(guard) < delivery.indexOf('match delivery'), guard);
   }
   const soundBranch = delivery.slice(delivery.indexOf('SystemDelivery::SoundOnly =>'), delivery.indexOf('SystemDelivery::Toast =>'));
-  assert.match(soundBranch, /super::toasts::play_notification_sound[(][)]/);
+  assert.match(soundBranch, /super::toasts::play_notification_sound[(]kind[)]/);
   assert.doesNotMatch(soundBranch, /[.]show[(]|send[(]|open_notified_session|notification[(]/);
-  assert.equal((delivery.match(/play_notification_sound[(][)]/g) || []).length, 1);
-  assert.match(delivery.slice(delivery.indexOf('SystemDelivery::Toast =>')), /state[.]toasts[.]show/);
+  assert.equal((delivery.match(/play_notification_sound[(]/g) || []).length, 1);
+  assert.match(delivery.slice(delivery.indexOf('SystemDelivery::Toast =>')), /state[.]toasts[.]show\(&app_id, title, body, kind, move \|\|/);
   const source = read('src-tauri/src/desktop_toasts.rs');
   const sound = source.slice(source.indexOf('pub(super) fn play_notification_sound('), source.indexOf('type Click'));
-  for (const token of ['PlaySoundW', 'NOTIFICATION_SOUND.0.as_ptr().cast()', 'SND_MEMORY', 'SND_ASYNC', 'SND_NODEFAULT', 'SND_SYSTEM']) assert.ok(sound.includes(token), token);
-  assert.match(source, /#\[repr\(C, align\(4\)\)\]/);
-  assert.match(source, /static NOTIFICATION_SOUND:/);
-  assert.ok(source.includes('include_bytes!("assets/notification-basin.wav")'));
+  assert.match(sound, /fn play_notification_sound\(kind: BubbleKind\)/);
+  for (const token of ['let sound = notification_sound(kind);', 'PlaySoundW', 'sound.as_ptr().cast()', 'SND_MEMORY', 'SND_ASYNC', 'SND_NODEFAULT', 'SND_SYSTEM']) assert.ok(sound.includes(token), token);
+  const audio = read('src-tauri/src/notification_audio.rs');
+  assert.ok(audio.includes('use crate::pet_notifications::BubbleKind;'));
+  assert.match(audio, /#\[repr\(C, align\(4\)\)\]/);
+  assert.match(audio, /pub fn notification_sound\(kind: BubbleKind\) -> &'static \[u8\]/);
+  for (const name of ['COMPLETED', 'FAILED', 'WAITING']) {
+    assert.ok(audio.includes('static ' + name + '_SOUND:'), name + ' has static lifetime');
+    assert.ok(audio.includes('include_bytes!("assets/notification-' + name.toLowerCase() + '.wav")'), name + ' is embedded');
+  }
   assert.doesNotMatch(sound, /SystemNotification|SND_ALIAS|SND_FILENAME|ToastNotification|ToastNotifier|[.]Show[(]|[.]show[(]|Webview|Command::|thread::spawn/);
 });
 

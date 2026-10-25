@@ -70,7 +70,10 @@ impl WslSpeechRuntime {
         let client = Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(Duration::from_secs(2))
+            // Windows retries a refused loopback connection for about two seconds.
+            // A two-second deadline turns ECONNREFUSED into a timeout and blocks
+            // first-time installation before any component can be installed.
+            .connect_timeout(Duration::from_secs(5))
             .build()
             .map_err(|_| "无法初始化语音服务连接。")?;
         Ok(Self {
@@ -78,6 +81,37 @@ impl WslSpeechRuntime {
             client,
             owned: Mutex::new(HashMap::new()),
         })
+    }
+    // Private endpoint seam for isolated loopback tests; production always uses ENDPOINT.
+    fn status_at(&self, endpoint: &str, cancel: &Cancellation) -> Result<ServiceStatus, String> {
+        cancel.check()?;
+        let request = self
+            .client
+            .get(format!("{endpoint}/v1/status"))
+            .timeout(Duration::from_secs(6))
+            .send();
+        let result = match request {
+            Ok(r) if r.status().is_success() => Self::parse_status(&Self::body(r)?),
+            Ok(_) => {
+                let r = self
+                    .client
+                    .get(format!("{endpoint}/health"))
+                    .timeout(Duration::from_secs(6))
+                    .send()
+                    .map_err(|_| "无法确认语音服务状态。")?;
+                Self::parse_status(&Self::body(r)?)
+            }
+            Err(e) if e.is_connect() && !e.is_timeout() => ServiceStatus {
+                identity_valid: false,
+                instance_id: None,
+                service_state: ServiceState::Stopped,
+                model_state: ModelState::Unloaded,
+                gpu_name: None,
+            },
+            Err(_) => return Err("语音服务无响应，暂不能确认运行状态。".into()),
+        };
+        cancel.check()?;
+        Ok(result)
     }
     fn config(&self) -> Result<Config, String> {
         let c = (self.provider)()?;
@@ -653,34 +687,7 @@ impl Runtime for WslSpeechRuntime {
         Self::parse_inspection(&v)
     }
     fn status(&self, cancel: &Cancellation) -> Result<ServiceStatus, String> {
-        cancel.check()?;
-        let request = self
-            .client
-            .get(format!("{ENDPOINT}/v1/status"))
-            .timeout(Duration::from_secs(3))
-            .send();
-        let result = match request {
-            Ok(r) if r.status().is_success() => Self::parse_status(&Self::body(r)?),
-            Ok(_) => {
-                let r = self
-                    .client
-                    .get(format!("{ENDPOINT}/health"))
-                    .timeout(Duration::from_secs(3))
-                    .send()
-                    .map_err(|_| "无法确认语音服务状态。")?;
-                Self::parse_status(&Self::body(r)?)
-            }
-            Err(e) if e.is_connect() && !e.is_timeout() => ServiceStatus {
-                identity_valid: false,
-                instance_id: None,
-                service_state: ServiceState::Stopped,
-                model_state: ModelState::Unloaded,
-                gpu_name: None,
-            },
-            Err(_) => return Err("语音服务无响应，暂不能确认运行状态。".into()),
-        };
-        cancel.check()?;
-        Ok(result)
+        self.status_at(ENDPOINT, cancel)
     }
     fn start(
         &self,

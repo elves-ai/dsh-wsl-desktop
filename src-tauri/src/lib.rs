@@ -7,6 +7,7 @@ pub mod config;
 #[cfg(windows)]
 mod desktop;
 pub mod environment;
+pub mod notification_audio;
 pub mod notification_channels;
 pub mod notification_transport;
 pub mod notifications;

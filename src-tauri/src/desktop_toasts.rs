@@ -1,4 +1,5 @@
 //! In-process Windows toast activation. No protocol handler, external URL, or page IPC.
+use crate::{notification_audio::notification_sound, pet_notifications::BubbleKind};
 use std::{
     collections::VecDeque,
     sync::{
@@ -23,33 +24,26 @@ const LIMIT: usize = 128;
 const GROUP: &str = "dsh-task";
 const SEND_ERROR: &str = "无法提交可点击的系统通知，请检查 Windows 通知设置。";
 
-// Embed the approved three stainless-steel bowl strikes; no external file or codec.
-// PlaySound requires DWORD-aligned WAVE data that outlives asynchronous playback.
-#[repr(C, align(4))]
-struct NotificationSound<const N: usize>([u8; N]);
-static NOTIFICATION_SOUND: NotificationSound<
-    { include_bytes!("assets/notification-basin.wav").len() },
-> = NotificationSound(*include_bytes!("assets/notification-basin.wav"));
-
 /// Plays only the custom sound; creates no toast or Notification Center entry.
 /// The caller controls the app notification switch and foreground suppression.
-pub(super) fn play_notification_sound() -> Result<(), String> {
+pub(super) fn play_notification_sound(kind: BubbleKind) -> Result<(), String> {
     use windows_sys::Win32::Media::Audio::{
         PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT, SND_SYSTEM,
     };
 
+    let sound = notification_sound(kind);
     // Keep the Windows system-sounds volume/mute, but never fall back to its scheme.
     // SAFETY: with SND_MEMORY the argument is an aligned WAVE buffer, not UTF-16.
     // Static storage remains valid until async playback completes; no module is used.
     let started = unsafe {
         PlaySoundW(
-            NOTIFICATION_SOUND.0.as_ptr().cast(),
+            sound.as_ptr().cast(),
             std::ptr::null_mut(),
             SND_MEMORY | SND_ASYNC | SND_NODEFAULT | SND_SYSTEM,
         )
     };
     if started == 0 {
-        Err("无法播放敲盆通知音效，请检查 Windows 声音设置。".to_owned())
+        Err("无法播放通知语音，请检查 Windows 声音设置。".to_owned())
     } else {
         Ok(())
     }
@@ -94,6 +88,7 @@ impl Toasts {
         app_id: &str,
         title: &str,
         body: &str,
+        kind: BubbleKind,
         click: impl FnOnce() + Send + 'static,
     ) -> Result<(), String> {
         let (reply, result) = mpsc::channel();
@@ -116,7 +111,7 @@ impl Toasts {
             // request was acknowledged in time. Sound-only delivery skips this path.
             Ok(result) => {
                 result?;
-                play_notification_sound()
+                play_notification_sound(kind)
             }
             Err(_) => {
                 canceled.store(true, Ordering::SeqCst);
