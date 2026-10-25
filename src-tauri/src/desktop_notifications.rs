@@ -4,8 +4,8 @@ use crate::{
     notification_channels::{ChannelGate, SystemDelivery},
     notification_transport::RpcClient,
     notifications::{
-        notification_session_url, task_notice_body, task_notice_title, CursorTracker, NoticeKind,
-        NotificationSettings, NotificationSnapshot,
+        is_silent_pet_completion, notification_session_url, task_notice_body, task_notice_title,
+        CursorTracker, NoticeKind, NotificationSettings, NotificationSnapshot,
     },
     pet_notifications::BubbleKind,
     user_attention::AttentionTracker,
@@ -545,6 +545,19 @@ pub(super) fn start(app: tauri::AppHandle, controller: Arc<Controller>, state: A
                     // foreground: hiding it later must not replay this result.
                     let notice = tracker.consume(&request, &page)?;
                     if let Some(notice) = notice {
+                        let binding = app
+                            .try_state::<Arc<super::assistant::Assistant>>()
+                            .and_then(|assistant| {
+                                assistant.with_workspace_binding(|binding| binding.cloned())
+                            });
+                        if is_silent_pet_completion(
+                            &notice,
+                            &list,
+                            binding.as_ref(),
+                            &crate::pet_memory::backend_identity(&backend.config),
+                        ) {
+                            continue;
+                        }
                         let (title, body) = match notice.kind {
                             NoticeKind::Completed => (
                                 "本轮执行已结束",

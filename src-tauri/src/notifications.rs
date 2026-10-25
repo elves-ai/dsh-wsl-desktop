@@ -1,4 +1,5 @@
 //! Cross-platform notification policy. No native IPC or notification transport lives here.
+use crate::assistant::{BackendIdentity, Binding};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -127,6 +128,47 @@ pub struct Notice {
     pub session_id: String,
     pub kind: NoticeKind,
     pub seq: i64,
+}
+
+/// Pet chat replies are not task completions. Apply after cursor consumption, before
+/// any bubble, toast or sound delivery. Failures and questions keep their own policy.
+pub fn is_silent_pet_completion(
+    notice: &Notice,
+    list: &Value,
+    binding: Option<&Binding>,
+    current: &BackendIdentity,
+) -> bool {
+    if notice.kind != NoticeKind::Completed {
+        return false;
+    }
+    let session = list
+        .get("items")
+        .and_then(Value::as_array)
+        .and_then(|items| {
+            items.iter().find(|item| {
+                item.get("sessionId").and_then(Value::as_str) == Some(&notice.session_id)
+            })
+        });
+    // The preset identifies pet Sessions even after switching the selected chat.
+    if session
+        .and_then(|item| item.pointer("/projections/values/agentPreset"))
+        .and_then(Value::as_str)
+        == Some("desktop-pet")
+    {
+        return true;
+    }
+    // Legacy/non-memory chats use the default Agent. Trust only this backend's
+    // native binding, and exact IDs/paths (never titles or directory prefixes).
+    binding
+        .filter(|binding| &binding.backend == current)
+        .is_some_and(|binding| {
+            binding.session_id.as_deref() == Some(notice.session_id.as_str())
+                || (!binding.workspace_path.is_empty()
+                    && session
+                        .and_then(|item| item.get("cwd"))
+                        .and_then(Value::as_str)
+                        == Some(binding.workspace_path.as_str()))
+        })
 }
 
 /// Add task identity using only session-list metadata, never history/question text.
@@ -545,6 +587,160 @@ mod tests {
                 .unwrap()
                 .fragment()
         );
+    }
+
+    fn pet_binding() -> Binding {
+        Binding {
+            backend: BackendIdentity {
+                distribution: "Ubuntu".into(),
+                user: "pet-user".into(),
+                origin: "http://127.0.0.1:3080".into(),
+            },
+            workspace_id: "pet-workspace".into(),
+            session_id: Some("selected-pet".into()),
+            workspace_path: "/home/pet-user/pet".into(),
+            session_pending: false,
+        }
+    }
+
+    #[test]
+    fn pet_completions_are_silent_for_preset_selected_and_previous_chats() {
+        let binding = pet_binding();
+        for (id, cwd, preset) in [
+            ("preset-pet", "/other", "desktop-pet"),
+            ("selected-pet", "/other", "standard"),
+            ("previous-pet", "/home/pet-user/pet", "standard"),
+        ] {
+            let rows = list(vec![json!({"sessionId":id,"cwd":cwd,
+                "projections":{"values":{"agentPreset":preset}}})]);
+            for kind in [NoticeKind::Completed, NoticeKind::Failed] {
+                let notice = Notice {
+                    session_id: id.into(),
+                    kind,
+                    seq: 15,
+                };
+                assert_eq!(
+                    is_silent_pet_completion(&notice, &rows, Some(&binding), &binding.backend),
+                    kind == NoticeKind::Completed,
+                    "{id}: {kind:?}",
+                );
+            }
+        }
+        let notice = Notice {
+            session_id: "preset-pet".into(),
+            kind: NoticeKind::Completed,
+            seq: 15,
+        };
+        assert!(is_silent_pet_completion(
+            &notice,
+            &list(vec![json!({
+                "sessionId":"preset-pet","projections":{"values":{"agentPreset":"desktop-pet"}}
+            })]),
+            None,
+            &binding.backend
+        ));
+    }
+
+    #[test]
+    fn ordinary_tasks_and_similar_names_paths_or_presets_are_not_silenced() {
+        let binding = pet_binding();
+        let notice = Notice {
+            session_id: "task".into(),
+            kind: NoticeKind::Completed,
+            seq: 15,
+        };
+        for cwd in [
+            "/home/pet-user/pet-project",
+            "/home/pet-user/pet/subdir",
+            "/work",
+        ] {
+            let rows = list(vec![
+                json!({"sessionId":"task","cwd":cwd,
+                "projections":{"values":{"title":"desktop-pet 宠物对话", "agentPreset":"desktop-pet-copy"}}}),
+                json!({"sessionId":"another-pet","projections":{"values":{"agentPreset":"desktop-pet"}}}),
+            ]);
+            assert!(!is_silent_pet_completion(
+                &notice,
+                &rows,
+                Some(&binding),
+                &binding.backend
+            ));
+        }
+        for rows in [
+            json!({}),
+            json!({"items":null}),
+            list(vec![json!({"sessionId":"task"})]),
+        ] {
+            assert!(!is_silent_pet_completion(
+                &notice,
+                &rows,
+                None,
+                &binding.backend
+            ));
+        }
+    }
+
+    #[test]
+    fn pet_binding_from_another_backend_does_not_silence_tasks() {
+        let binding = pet_binding();
+        for field in ["distribution", "user", "origin"] {
+            let mut current = binding.backend.clone();
+            match field {
+                "distribution" => current.distribution = "other".into(),
+                "user" => current.user = "other".into(),
+                _ => current.origin = "http://127.0.0.1:4000".into(),
+            }
+            for id in ["selected-pet", "previous-pet"] {
+                let notice = Notice {
+                    session_id: id.into(),
+                    kind: NoticeKind::Completed,
+                    seq: 15,
+                };
+                let rows = list(vec![json!({"sessionId":id,"cwd":binding.workspace_path})]);
+                assert!(!is_silent_pet_completion(
+                    &notice,
+                    &rows,
+                    Some(&binding),
+                    &current
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn silent_pet_completion_is_consumed_without_replay_and_next_task_still_notifies() {
+        let binding = pet_binding();
+        let mut tracker = tracker();
+        let mut pet = row("root", 15, false);
+        pet["projections"]["values"] = json!({"agentPreset":"desktop-pet"});
+        let rows = list(vec![pet]);
+        let request = tracker.scan(&rows).unwrap().pop().unwrap();
+        let notice = tracker
+            .consume(&request, &page(vec![end(15, 1001, "completed")]))
+            .unwrap()
+            .unwrap();
+        assert!(is_silent_pet_completion(
+            &notice,
+            &rows,
+            None,
+            &binding.backend
+        ));
+        // Switching chat/preset cannot replay the already acknowledged completion.
+        assert!(tracker
+            .scan(&list(vec![row("root", 15, false)]))
+            .unwrap()
+            .is_empty());
+        let request = changed(&mut tracker, 16);
+        let notice = tracker
+            .consume(&request, &page(vec![end(16, 1002, "completed")]))
+            .unwrap()
+            .unwrap();
+        assert!(!is_silent_pet_completion(
+            &notice,
+            &list(vec![row("root", 16, false)]),
+            None,
+            &binding.backend
+        ));
     }
 
     #[test]

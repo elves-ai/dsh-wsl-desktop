@@ -86,10 +86,10 @@ export class PetMotion {
 
   get isActive(): boolean { return this.mode !== 'idle' && !this.disposed; }
 
-  /** Disable immediately, including a pending pull or an already released sling. */
+  /** Disable all release flight immediately; ordinary dragging and roaming remain available. */
   setSlingshotEnabled(enabled: boolean): void {
     this.slingshotEnabled = enabled;
-    if (!enabled && this.sling && this.isActive && this.mode !== 'roam') this.stop();
+    if (!enabled && this.isActive && (this.mode === 'throw' || (this.sling && this.mode !== 'roam'))) this.stop();
   }
 
   begin(slingshot = false): void {
@@ -257,7 +257,10 @@ export class PetMotion {
     if (this.mode !== 'drag') return;
     const g = this.geometry!;
     let velocity;
-    if (this.sling) {
+    if (!this.slingshotEnabled) {
+      // The preference covers ordinary flicks too: releasing only places the pet.
+      velocity = undefined;
+    } else if (this.sling) {
       const dx = g.cursor.x - this.origin.x, dy = g.cursor.y - this.origin.y;
       velocity = slingshotVelocity(pullAngle(dx, dy), slingshotPower(Math.hypot(dx, dy), g.size.width), this.physics.throwPower);
     } else velocity = estimateReleaseVelocity(this.trail, this.clock.now(), this.physics);

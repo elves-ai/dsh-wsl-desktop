@@ -10,6 +10,17 @@ const voices = [
   { name: 'waiting', sha256: '30b8b1816a4c208af41f6fb3018d8139755abfb7a16f0d098e1c7aa92a22b515', duration: 2.32 },
 ];
 
+test('pet completion filtering follows consumption and precedes bubble, toast and sound routing', () => {
+  const native = readFileSync(new URL('../src-tauri/src/desktop_notifications.rs', import.meta.url), 'utf8');
+  const consume = native.indexOf('let notice = tracker.consume(&request, &page)?;');
+  const filter = native.indexOf('if is_silent_pet_completion(', consume);
+  const deliver = native.indexOf('deliver(', consume);
+  assert.ok(consume >= 0 && filter > consume && deliver > filter);
+  assert.match(native.slice(filter, deliver), /\)\s*\{\s*continue;/);
+  assert.match(native.slice(consume, filter), /with_workspace_binding/);
+  assert.match(native.slice(filter, deliver), /backend_identity\(&backend.config\)/);
+});
+
 function chunks(wav) {
   const result = new Map();
   assert.equal(wav.toString('ascii', 0, 4), 'RIFF');

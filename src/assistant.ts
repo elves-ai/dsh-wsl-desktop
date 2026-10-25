@@ -35,8 +35,8 @@ root.innerHTML = view === 'pet' ?
 <hr class="pet-menu-separator">
 <button id="pet-auto-read" type="button" role="switch" aria-label="自动朗读回复" aria-checked="false" data-pet-command="auto-read" title="仅自动朗读新完成的短回复，使用本地千问音色"><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m11 5-5 4H3v6h3l5 4ZM15 8a6 6 0 0 1 0 8M18 5a10 10 0 0 1 0 14"/></svg><span class="pet-menu-label">自动朗读</span><span class="pet-menu-indicator" aria-hidden="true"></span></button>
 <button id="pet-animation-trigger" type="button" aria-haspopup="menu" aria-controls="pet-animation" aria-expanded="false"><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m9 5 11 7-11 7Z"/></svg><span class="pet-menu-label">选择动作</span><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m9 6 6 6-6 6"/></svg></button>
-<button id="pet-slingshot" type="button" role="switch" aria-label="允许弹弓" data-pet-command="slingshot" disabled><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m5 3 7 7 7-7M12 10v11M5 3l2 10 5 4 5-4 2-10"/></svg><span class="pet-menu-label">允许弹弓</span><span class="pet-menu-indicator" aria-hidden="true"></span></button>'
-'<button id="pet-topmost" type="button" role="switch" aria-label="窗口置顶" data-pet-command="topmost"><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M8 3h8l-1 6 4 4v2H5v-2l4-4ZM12 15v6"/></svg><span class="pet-menu-label">窗口置顶</span><span class="pet-menu-indicator" aria-hidden="true"></span></button>
+<button id="pet-slingshot" type="button" role="switch" aria-label="允许弹弓" data-pet-command="slingshot" disabled><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m5 3 7 7 7-7M12 10v11M5 3l2 10 5 4 5-4 2-10"/></svg><span class="pet-menu-label">允许弹弓</span><span class="pet-menu-indicator" aria-hidden="true"></span></button>
+<button id="pet-topmost" type="button" role="switch" aria-label="窗口置顶" data-pet-command="topmost"><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M8 3h8l-1 6 4 4v2H5v-2l4-4ZM12 15v6"/></svg><span class="pet-menu-label">窗口置顶</span><span class="pet-menu-indicator" aria-hidden="true"></span></button>
 <hr class="pet-menu-separator">
 <button type="button" data-action="pet_settings"><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3" fill="var(--ui-bg)"/><circle cx="15" cy="17" r="3" fill="var(--ui-bg)"/></svg><span class="pet-menu-label">宠物设置</span></button>
 <button type="button" data-action="hide"><svg class="pet-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 3l18 18M10 5a11 11 0 0 1 11 7 14 14 0 0 1-3 4M6 6a14 14 0 0 0-3 6 11 11 0 0 0 14 6M10 10a3 3 0 0 0 4 4"/></svg><span class="pet-menu-label">隐藏宠物</span></button>
@@ -407,6 +407,9 @@ function mountPetConversation() {
   const composer = el('pet-composer');
   if (!composer) return;
   petInput = new PetMenuController(composer, {
+    // Native window/WebView focus transfer is not an outside click. Keep typing open
+    // through blur; DOM/native outside presses, Escape and explicit close still dismiss.
+    dismissOnBlur: false,
     dismissBoundary: el('pet-dialogue') ?? composer,
     getGeometry: native ? async () => {
       const geometry = await requestPetGeometry('get_pet_geometry');
@@ -772,7 +775,7 @@ function renderPetSlingshot() {
   if (slingshotKnown) button.setAttribute('aria-checked', String(slingshotEnabled));
   else button.removeAttribute('aria-checked');
   button.setAttribute('data-state', !native ? 'unavailable' : slingshotKnown ? 'ready' : 'unknown');
-  button.title = !native ? '仅桌面应用可用' : slingshotPending ? '正在读取/切换弹弓…' : !slingshotKnown ? '重新读取弹弓设置' : slingshotEnabled ? '弹弓已开启，快速连按再拖可蓄力弹射' : '弹弓已关闭，不影响普通拖拽和甩抛';
+  button.title = !native ? '仅桌面应用可用' : slingshotPending ? '正在读取/切换弹弓…' : !slingshotKnown ? '重新读取弹弓设置' : slingshotEnabled ? '弹弓已开启，快速连按再拖可蓄力弹射' : '弹弓已关闭，拖动松手即停，不再弹射或甩抛';
   button.setAttribute('aria-description', button.title);
 }
 async function togglePetSlingshot() {

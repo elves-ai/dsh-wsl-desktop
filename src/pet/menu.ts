@@ -16,6 +16,8 @@ export interface PetMenuOptions {
   clock?: PetMenuClock;
   /** Keep adjacent speech actions stable while an inline composer is open. */
   dismissBoundary?: HTMLElement;
+  /** Disable for input surfaces whose native focus handoff can emit a transient blur. */
+  dismissOnBlur?: boolean;
   submenu?: { trigger: HTMLElement; panel: HTMLElement };
   /** Schedule positioning and native hit-region updates after submenu visibility changes. */
   onLayout?: () => void;
@@ -233,7 +235,7 @@ export class PetMenuController {
     if (back && panel && !panel.hidden && panel.contains(back)) this.returnToTrigger();
   };
   private readonly onBlur = (event: Event): void => {
-    if (!event.target || event.target === this.view) this.close();
+    if (this.options.dismissOnBlur !== false && (!event.target || event.target === this.view)) this.close();
   };
   private valid(token: number): boolean {
     return !this.disposed && this.opened && token === this.token;

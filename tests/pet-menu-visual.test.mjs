@@ -14,6 +14,20 @@ const render = name => ts.transpileModule(ast.statements.find(node => ts.isFunct
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
 }).outputText;
 
+// Parse the evaluated HTML, not the source literal: template delimiters and
+// concatenation must not hide visible text between rows. JSX shares this markup's
+// element/text structure once HTML's void separators are made self-closing.
+function unexpectedMenuText(markup) {
+  const parsed = ts.createSourceFile('pet-menu.tsx', markup.replace(/<hr\b([^>]*)>/g, '<hr$1 />'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  assert.deepEqual(parsed.parseDiagnostics.map(diagnostic => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')), []);
+  const element = parsed.statements[0].expression;
+  assert.ok(ts.isJsxElement(element));
+  return element.children
+    .filter(node => !ts.isJsxElement(node) && !ts.isJsxSelfClosingElement(node))
+    .map(node => ts.isJsxText(node) ? node.text : node.getText(parsed))
+    .filter(text => text.trim());
+}
+
 // Unlike the integration mock, these nodes reject destructive textContent writes:
 // SVG icons and the stable label must survive every async state render.
 function toggleNode() {
@@ -42,6 +56,25 @@ test('pet menu groups existing actions, exposes an action submenu and uses unifo
   assert.equal(icons.length, 12); // Ten action rows, close, submenu chevron.
   for (const [icon] of icons) {
     for (const attribute of ['viewBox="0 0 24 24"','stroke-width="1.5"','stroke-linecap="round"','aria-hidden="true"','focusable="false"']) assert.ok(icon.includes(attribute));
+  }
+});
+
+test('evaluated menu markup contains only whitespace text nodes between menu elements', () => {
+  assert.deepEqual(unexpectedMenuText(menu), [], 'stray text becomes visible punctuation or extra menu rows');
+});
+
+test('menu text regression guard rejects punctuation and words at every row boundary', () => {
+  // Cover header/button, button/button, button/separator and separator/button gaps.
+  const boundaries = [...menu.matchAll(/(?:<\/header>|<\/button>|<hr\b[^>]*>)(\s*)(?=<(?:button|hr)\b)/g)];
+  assert.ok(boundaries.length >= 10, 'must exercise the actual evaluated menu rows');
+  for (const boundary of boundaries) {
+    const offset = boundary.index + boundary[0].length;
+    const prefix = menu.slice(0, offset);
+    const suffix = menu.slice(offset);
+    assert.deepEqual(unexpectedMenuText(`${prefix} \t\n${suffix}`), []);
+    for (const stray of ["'\n'", '.', 'unexpected text', '。', '{stray}']) {
+      assert.deepEqual(unexpectedMenuText(`${prefix}${stray}${suffix}`).map(text => text.trim()), [stray]);
+    }
   }
 });
 

@@ -652,6 +652,7 @@ test('right-click slingshot switch persists both directions without changing top
   assert.equal(ui.calls.filter(c=>c.name==='get_pet_preferences').length,2,'menu shares one preference refresh');
   clickSlingshot(ui);await tick();
   assert.equal(button.getAttribute('aria-checked'),'false');
+  assert.match(button.title,/拖动松手即停，不再弹射或甩抛/);
   assert.deepEqual(JSON.parse(JSON.stringify(ui.calls.find(c=>c.name==='set_pet_slingshot_enabled').args)),{enabled:false});
   assert.equal(ui.nodes.get('pet-menu').hidden,true);
   assert.equal(ui.nodes.get('pet-topmost').getAttribute('aria-checked'),'true');
@@ -944,6 +945,33 @@ test('pet click opens inline input with explicit focus, never the chat window; c
   assert.equal(ui.calls.filter(c=>c.args?.request?.action==='pet_input').at(-1).args.request.active,false);
   ui.nodes.get('pet').emit('click',{detail:1});await tick();assert.equal(draft.value,'明天继续聊');
   ui.window.emit('pagehide');
+});
+
+for (const entry of ['click', 'talk']) test('pet '+entry+' input survives native focus handoff blur and still dismisses explicitly', async () => {
+  const activation=deferred();
+  const ui=setup({view:'pet',actionResult:request=>request.action==='pet_input'&&request.active?activation.promise:undefined});await tick();
+  if(entry==='click') ui.nodes.get('pet').emit('click',{detail:1});
+  else {
+    ui.nodes.get('pet').emit('contextmenu');
+    const talk=new Node();talk.dataset.petCommand='talk';
+    ui.nodes.get('assistant-root').emit('click',{target:talk});
+  }
+  await tick();
+  const composer=ui.nodes.get('pet-composer'),draft=ui.nodes.get('draft');
+  draft.value='保留这句话';draft.emit('input');
+  // WebView2 can emit blur while the initially non-focusable pet gains native focus.
+  ui.window.emit('blur');
+  assert.equal(composer.hidden,false,'focus handoff must not close the input lease');
+  activation.resolve();await tick();
+  assert.equal(ui.document.activeElement,draft);
+  ui.window.emit('blur');
+  assert.equal(composer.hidden,false,'a late native blur is not an explicit outside click');
+  assert.equal(ui.calls.filter(c=>c.args?.request?.action==='pet_input'&&!c.args.request.active).length,0);
+  ui.document.emit('pointerdown',{button:0,target:new Node()});await tick();
+  assert.equal(composer.hidden,true);
+  assert.equal(draft.value,'保留这句话');
+  assert.equal(ui.calls.filter(c=>c.args?.request?.action==='pet_input').at(-1).args.request.active,false);
+  ui.window.emit('pagehide');assert.equal(ui.menuTimers.size,0);
 });
 
 test('pet shows current-turn thinking then streamed reply without stealing keyboard focus', async () => {

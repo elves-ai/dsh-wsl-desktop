@@ -198,17 +198,31 @@ test('native full-window clamp feedback, not requested or 16:9 stage position, s
   f.pet.dispose();
 });
 
-test('disabled slingshot uses ordinary drag and preserves forward release velocity', async () => {
-  const f = fixture(); await flush(); f.pet.setSlingshotEnabled(false); f.pet.begin(true); await flush();
-  f.g.cursor.x += 100; await f.clock.advance();
-  near(f.moves.at(-1).x, 200);
-  f.g.cursor.x += 100; f.g.cursor_down = false; await f.clock.advance();
+for (const sling of [false, true]) for (const fused of [false, true]) for (const nativeRelease of [false, true])
+test(`disabled slingshot leaves drag in place: sling=${sling}, fused=${fused}, nativeRelease=${nativeRelease}`, async () => {
+  const f = fixture();
+  if (fused) f.api.drag = async (grabX, grabY) => {
+    if (f.g.cursor_down) return f.api.move(f.g.cursor.x - grabX, f.g.cursor.y - grabY);
+    return structuredClone(f.g);
+  };
+  await flush(); f.pet.setSlingshotEnabled(false); f.pet.begin(sling); await flush();
+  for (let i = 0; i < 3; i++) {
+    f.g.cursor.x += 100; f.g.cursor.y += 50; await f.clock.advance();
+    near(f.g.position.x, f.g.cursor.x - 40); near(f.g.position.y, f.g.cursor.y - 50);
+  }
+  f.g.cursor_down = false;
+  if (nativeRelease) await f.clock.advance(); else { f.pet.end(); f.pet.end(); await flush(); }
+  const position = { ...f.g.position }, count = f.moves.length;
+  assert.equal(f.pet.isActive, false); assert.equal(f.clock.tasks.size, 0);
+  for (let i = 0; i < 10; i++) await f.clock.advance(100);
+  assert.deepEqual(f.g.position, position); assert.equal(f.moves.length, count);
+  assert.deepEqual(f.active, [true, false]); assert.deepEqual(f.events, ['start', 'end']);
+  f.pet.setSlingshotEnabled(true); f.g.cursor_down = true;
+  f.pet.begin(sling); await flush();
+  f.g.cursor.x += 100; await f.clock.advance(); f.pet.end(); await flush();
   const releaseX = f.g.position.x; await f.clock.advance();
-  assert.ok(f.g.position.x > releaseX, 'ordinary throw follows the cursor, not reverse sling pull');
-  f.pet.stop(); await flush(); f.pet.setSlingshotEnabled(true); f.g.cursor_down = true;
-  f.pet.begin(true); await flush(); const before = f.g.position.x;
-  f.g.cursor.x += 100; await f.clock.advance();
-  assert.notEqual(f.g.position.x, before + 100, 're-enabling restores elastic pulling');
+  assert.equal(f.pet.isActive, true);
+  assert.ok(sling ? f.g.position.x < releaseX : f.g.position.x > releaseX, 're-enabling restores sling and ordinary throw');
   f.pet.dispose(); await flush();
 });
 
@@ -232,14 +246,39 @@ for (const phase of ['pending', 'pull', 'throw']) test('disabling slingshot canc
   f.pet.dispose(); await flush();
 });
 
-test('slingshot preference changes do not stop ordinary drag, throw or roaming', async () => {
+test('disabling slingshot preserves ordinary dragging and roaming but prevents release flight', async () => {
   const f = fixture(); await flush(); f.pet.begin(); await flush();
+  f.g.cursor.x += 100; await f.clock.advance();
   f.pet.setSlingshotEnabled(false); assert.equal(f.pet.isActive, true);
-  f.g.cursor.x += 100; await f.clock.advance(); f.pet.end(); await flush();
-  f.pet.setSlingshotEnabled(true); f.pet.setSlingshotEnabled(false); assert.equal(f.pet.isActive, true);
-  f.pet.stop(); await flush();
+  f.g.cursor.x += 100; await f.clock.advance();
+  near(f.g.position.x, 300);
+  f.pet.end(); await flush();
+  assert.equal(f.pet.isActive, false);
+  const count = f.moves.length; await f.clock.advance(1000); assert.equal(f.moves.length, count);
   assert.equal(f.pet.startRoam('walk', { minDist: 50, maxDist: 50, margin: 0 }), true);
   f.pet.setSlingshotEnabled(true); f.pet.setSlingshotEnabled(false); assert.equal(f.pet.isActive, true);
+  f.pet.dispose(); await flush();
+});
+
+for (const phase of ['flight', 'release IPC', 'move IPC'])
+test('disabling slingshot cancels ordinary throw during ' + phase, async () => {
+  const f = fixture(); await flush(); f.pet.begin(); await flush();
+  for (let i = 0; i < 3; i++) { f.g.cursor.x += 100; await f.clock.advance(); }
+  const pending = deferred();
+  if (phase === 'release IPC') f.api.setActive = async value => { f.active.push(value); if (!value) await pending.promise; };
+  f.pet.end(); await flush();
+  if (phase === 'move IPC') {
+    f.api.move = async (x, y) => { f.moves.push({ x, y }); await pending.promise; return structuredClone(f.g); };
+    await f.clock.advance();
+  } else if (phase === 'flight') await f.clock.advance();
+  assert.equal(f.pet.isActive, true);
+  f.pet.setSlingshotEnabled(false); f.pet.setSlingshotEnabled(false);
+  assert.equal(f.pet.isActive, false);
+  pending.resolve(); await flush();
+  const count = f.moves.length;
+  for (let i = 0; i < 5; i++) await f.clock.advance(1000);
+  assert.equal(f.moves.length, count); assert.equal(f.clock.tasks.size, 0);
+  assert.deepEqual(f.active, [true, false]); assert.deepEqual(f.events, ['start', 'end']);
   f.pet.dispose(); await flush();
 });
 

@@ -383,6 +383,16 @@ test('existing pet toggles preserve a disabled slingshot preference in both dire
   assert.equal(petCalls(app).some(([, args]) => args?.patch && 'slingshot_enabled' in args.patch), false);
 });
 
+test('automatic walking uses a plain label and explains what disabling does', async () => {
+  const app = await mount(true);
+  const input = app.template.match(/<input[^>]*id="pet-roaming-enabled"[^>]*>/)?.[0];
+  assert.ok(input);
+  assert.match(input, /aria-label="自动走动"/);
+  assert.ok(app.template.includes('<h2>自动走动</h2>'));
+  assert.ok(app.template.includes('id="pet-roaming-help">宠物空闲时会自己在桌面上走动；关闭后只在原地播放动作，仍可手动拖动。</p>'));
+  assert.doesNotMatch(app.template, /漫游/);
+});
+
 test('slingshot checkbox has accessible help and sits between roaming and bubble controls', async () => {
   const app = await mount(true);
   const input = app.template.match(/<input[^>]*id="pet-slingshot-enabled"[^>]*>/)?.[0];
@@ -392,6 +402,7 @@ test('slingshot checkbox has accessible help and sits between roaming and bubble
   assert.match(input, /aria-describedby="pet-slingshot-help pet-message"/);
   assert.match(input, /\bdisabled\b/);
   assert.equal(app.has('pet-slingshot-help'), true);
+  assert.match(app.template, /id="pet-slingshot-help"[^>]*>[^<]*关闭后仅拖动，松手即停/);
   assert.ok(app.template.indexOf('id="pet-roaming-enabled"') < app.template.indexOf('id="pet-slingshot-enabled"'));
   assert.ok(app.template.indexOf('id="pet-slingshot-enabled"') < app.template.indexOf('id="pet-bubble-notifications"'));
 });
