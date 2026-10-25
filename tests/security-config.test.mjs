@@ -338,6 +338,24 @@ test('native notifications explicitly request the Windows default sound', () => 
   assert.doesNotMatch(send, /PlaySound|SoundPlayer|Notification[.]Looping/);
 });
 
+test('visible-pet notifications choose sound-only after shared guards without creating a toast', () => {
+  const native = read('src-tauri/src/desktop_notifications.rs');
+  const delivery = native.slice(native.indexOf('fn deliver('), native.indexOf('// Match the existing plugin'));
+  assert.ok(delivery.includes('channels.system_delivery(state.gate(app), is_foreground, notify_when_focused)'));
+  for (const guard of ['!settings.should_notify(is_foreground)', 'data.epoch != epoch', 'controller.exiting.load', 'controller.snapshot().state != "ready"']) {
+    assert.ok(delivery.includes(guard) && delivery.indexOf(guard) < delivery.indexOf('match delivery'), guard);
+  }
+  const soundBranch = delivery.slice(delivery.indexOf('SystemDelivery::SoundOnly =>'), delivery.indexOf('SystemDelivery::Toast =>'));
+  assert.match(soundBranch, /super::toasts::play_notification_sound[(][)]/);
+  assert.doesNotMatch(soundBranch, /[.]show[(]|send[(]|open_notified_session|notification[(]/);
+  assert.equal((delivery.match(/play_notification_sound[(][)]/g) || []).length, 1);
+  assert.match(delivery.slice(delivery.indexOf('SystemDelivery::Toast =>')), /state[.]toasts[.]show/);
+  const source = read('src-tauri/src/desktop_toasts.rs');
+  const sound = source.slice(source.indexOf('pub(super) fn play_notification_sound('), source.indexOf('type Click'));
+  for (const token of ['PlaySoundW', 'SystemNotification', 'SND_ALIAS', 'SND_ASYNC', 'SND_NODEFAULT', 'SND_SYSTEM']) assert.ok(sound.includes(token), token);
+  assert.doesNotMatch(sound, /ToastNotification|ToastNotifier|[.]Show[(]|[.]show[(]|Webview|Command::|thread::spawn|include_bytes!/);
+});
+
 test('notification commands stay local, fixed-purpose and independent of DSH IPC', () => {
   const source = read('src-tauri/src/desktop_notifications.rs');
   const capability = JSON.parse(read('src-tauri/capabilities/launcher.json'));

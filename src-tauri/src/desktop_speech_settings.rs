@@ -1,7 +1,7 @@
 //! Narrow trusted settings facade; runtime paths never become JS commands.
 use super::{assert_local, settings_page, Controller};
 use crate::{
-    speech_resources::{Discovery, DownloadStatus, Initialization, Manager as ResourceManager},
+    speech_resources::{DownloadStatus, Initialization, Manager as ResourceManager},
     speech_settings::{
         Manager as SpeechManager, PreferencesPatch, SpeechAction, SpeechConfig, SpeechPreferences,
         SpeechSnapshot,
@@ -188,15 +188,6 @@ pub(super) async fn cancel_speech_initialization(view: Webview) -> Result<(), St
         .await
         .map_err(|_| "语音初始化取消尚未完成。".to_string())?;
     Ok(())
-}
-#[tauri::command]
-pub(super) async fn discover_speech_resources(view: Webview) -> Result<Discovery, String> {
-    assert_page(&view, true)?;
-    let resources = resource_controls(view.app_handle())?;
-    let config = controls(view.app_handle())?.get_snapshot().config;
-    tauri::async_runtime::spawn_blocking(move || resources.discover(&config))
-        .await
-        .map_err(|_| "资源发现任务未完成。".to_string())?
 }
 pub(super) fn assert_picker_available(app: &tauri::AppHandle) -> Result<(), String> {
     let state = controls(app)?.get_snapshot();

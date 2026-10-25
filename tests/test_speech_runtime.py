@@ -74,6 +74,27 @@ class StageTests(unittest.TestCase):
         self.files = files_for()
         self.request = stage_request(self.files)
 
+    def test_python_must_equal_default_in_current_wsl_home_not_just_suffix(self):
+        expected = str(self.home / ".dsh-wsl-desktop/speech/runtime/venv/bin/python")
+        self.assertEqual(runtime.default_python(expected), expected)
+        for path in ("/usr/bin/python3", str(self.home / "venv/bin/python"),
+                     "/home/other/.dsh-wsl-desktop/speech/runtime/venv/bin/python",
+                     "/tmp/forged/.dsh-wsl-desktop/speech/runtime/venv/bin/python",
+                     expected + "3", expected + "/../python", "relative"):
+            with self.subTest(path=path), self.assertRaises(runtime.Refused):
+                runtime.default_python(path)
+
+    def test_launch_and_supervisor_refuse_external_python_before_spawning(self):
+        request = {"script_path": "/fixture/server.py", "python_path": "/usr/bin/python3",
+                   "model_dir": "/manual/models", "native_lib": "/manual/native.so"}
+        for action, value in ((runtime.launch, request), (runtime.supervise,
+                dict(request, instance_id="a" * 64, control_token="b" * 64))):
+            with self.subTest(action=action.__name__), mock.patch.object(runtime.subprocess, "Popen") as spawn:
+                with self.assertRaises(runtime.Refused) as refused:
+                    action(value)
+                self.assertEqual(refused.exception.code, "default_python_required")
+                spawn.assert_not_called()
+
     def test_fixed_digest_private_files_and_reuse_without_overwrite(self):
         result = runtime.stage(self.request)
         sha = hashlib.sha256()
@@ -411,6 +432,9 @@ class ProcessTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="speech-runtime-process-")
         self.home = Path(self.temp.name)
         self.env = dict(os.environ, HOME=str(self.home), PYTHONDONTWRITEBYTECODE="1")
+        self.python = self.home / ".dsh-wsl-desktop/speech/runtime/venv/bin/python"
+        self.python.parent.mkdir(parents=True)
+        self.python.symlink_to("/usr/bin/python3")
         self.launched = []
         self.addCleanup(self.cleanup)
 
@@ -445,7 +469,7 @@ class ProcessTests(unittest.TestCase):
         self.assertTrue(staged["ok"], staged)
         model = self.home / ("model-" + str(len(self.launched)))
         model.mkdir()
-        launch = self.cli("--launch", {"script_path": staged["script_path"], "python_path": "/usr/bin/python3",
+        launch = self.cli("--launch", {"script_path": staged["script_path"], "python_path": str(self.python),
                            "model_dir": str(model), "native_lib": str(self.home / "libfixture.so")})
         self.assertTrue(launch["ok"], launch)
         self.launched.append(launch)
@@ -526,7 +550,7 @@ class ProcessTests(unittest.TestCase):
         staged = self.cli("--stage", stage_request(files_for(SLEEP_SERVER.encode())))
         model = self.home / "held-model"
         model.mkdir()
-        request = {"script_path": staged["script_path"], "python_path": "/usr/bin/python3",
+        request = {"script_path": staged["script_path"], "python_path": str(self.python),
                    "model_dir": str(model), "native_lib": "/fixture/native.so"}
         child = subprocess.Popen(["/usr/bin/python3", "-c", CODE, "--launch-held"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=self.env)
@@ -617,7 +641,7 @@ class ProcessTests(unittest.TestCase):
         staged = self.cli("--stage", stage_request(files_for(SLEEP_SERVER.encode())))
         model = self.home / "broken-reply-model"
         model.mkdir()
-        request = {"script_path": staged["script_path"], "python_path": "/usr/bin/python3",
+        request = {"script_path": staged["script_path"], "python_path": str(self.python),
                    "model_dir": str(model), "native_lib": "/fixture/native.so"}
         child = subprocess.Popen(["/usr/bin/python3", "-c", CODE, "--launch"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=self.env)
@@ -657,7 +681,7 @@ os._exit(1)
         model = self.home / "failed-supervisor"
         model.mkdir()
         result = self.cli("--launch", {"script_path": staged["script_path"],
-            "python_path": "/usr/bin/python3", "model_dir": str(model), "native_lib": "/fixture/native.so"})
+            "python_path": str(self.python), "model_dir": str(model), "native_lib": "/fixture/native.so"})
         self.assertEqual(result, {"ok": False, "error": "launch_failed"})
         pids = json.loads((model / "pids.json").read_text())
         self.assertFalse(running(pids["supervisor"]))
@@ -673,9 +697,26 @@ os._exit(1)
         self.assertEqual(result.stderr, b"")
         self.assertEqual(json.loads(result.stdout), {"ok": True, "alive": False})
 
+    def test_external_and_forged_home_python_never_run_for_launch_or_inspect(self):
+        staged = self.cli("--stage", stage_request(files_for()))
+        marker = self.home / "external-python-ran"
+        external = self.home / "other/.dsh-wsl-desktop/speech/runtime/venv/bin/python"
+        external.parent.mkdir(parents=True)
+        external.write_text("#!/bin/sh\ntouch '" + str(marker) + "'\n")
+        external.chmod(0o700)
+        for python in ("/usr/bin/python3", str(external)):
+            request = {"script_path": staged["script_path"], "python_path": python,
+                       "model_dir": "/manual/models", "native_lib": "/manual/native.so"}
+            self.assertEqual(self.cli("--launch", request),
+                             {"ok": False, "error": "default_python_required"})
+            result = self.cli("--inspect", raw=json.dumps(request).encode() + b"\n")
+            self.assertFalse(result["environment_ok"])
+            self.assertEqual(result["error_code"], "default_python_required")
+            self.assertFalse(marker.exists())
+
     def test_external_script_bad_paths_and_private_errors(self):
         staged = self.cli("--stage", stage_request(files_for()))
-        request = {"script_path": staged["script_path"], "python_path": "/usr/bin/python3",
+        request = {"script_path": staged["script_path"], "python_path": str(self.python),
                    "model_dir": str(self.home / "model"), "native_lib": str(self.home / "private-secret-path")}
         for key, value in (("script_path", "/external/server.py"), ("python_path", "relative"),
                            ("model_dir", "/path\nsecret"), ("native_lib", "/path/../other")):
@@ -685,7 +726,7 @@ os._exit(1)
             self.assertNotIn(str(self.home), json.dumps(result))
         result = self.cli("--launch", dict(request, python_path="/nonexistent-private-python"))
         self.assertFalse(result["ok"])
-        self.assertEqual(result["error"], "launch_failed")
+        self.assertEqual(result["error"], "default_python_required")
 
     def inspect_start(self, checker, timeout=None):
         files = files_for()
@@ -697,7 +738,7 @@ os._exit(1)
         code = CODE if timeout is None else CODE.replace("INSPECT_TIMEOUT = 180.0", "INSPECT_TIMEOUT = " + str(timeout))
         child = subprocess.Popen(["/usr/bin/python3", "-c", code, "--inspect"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=self.env)
-        request = {"script_path": stage["script_path"], "python_path": "/usr/bin/python3",
+        request = {"script_path": stage["script_path"], "python_path": str(self.python),
                    "model_dir": str(model), "native_lib": "/fixture/native.so"}
         child.stdin.write(json.dumps(request).encode() + b"\n")
         child.stdin.flush()

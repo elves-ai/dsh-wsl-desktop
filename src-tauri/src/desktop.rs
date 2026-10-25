@@ -897,7 +897,6 @@ pub fn run() {
             speech_settings::cancel_speech_test,
             speech_settings::initialize_speech_environment,
             speech_settings::cancel_speech_initialization,
-            speech_settings::discover_speech_resources,
             path_picker::pick_settings_path,
             speech_settings::get_speech_download,
             speech_settings::download_speech_model,

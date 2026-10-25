@@ -9,7 +9,7 @@ const raw = await readFile(new URL('../src/speech-settings.ts', import.meta.url)
 const { SpeechSettings, speechDiagnostics, isSpeechSnapshot, isSpeechPreferences } = await import(moduleUrl(compile(raw).replace("'./pet/qwen-speech'", JSON.stringify(qwen))));
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const deferred = () => { let resolve, reject; const promise = new Promise((a,b) => { resolve=a; reject=b; }); return { promise, resolve, reject }; };
-const config = { model_dir:'/models/q8', python_path:'/env/bin/python', native_lib:'/lib/qwen.so' };
+const config = { model_dir:'/models/q8', python_path:'/home/user/.dsh-wsl-desktop/speech/runtime/venv/bin/python', native_lib:'/lib/qwen.so' };
 const prefs = (extra={}) => ({ revision:0, initialized:true, auto_read:false, volume:100, ...extra });
 const snapshot = (extra={}) => ({ revision:0, configured:true, config, distribution:'Ubuntu', busy:false, operation:null, environment_state:'unknown', models_state:'unknown', model_progress:null, service_state:'unknown', ownership:'unknown', model_state:'unknown', gpu_name:null, message:'', error:null, logs:[], ...extra });
 const ready = (extra={}) => snapshot({ service_state:'running', model_state:'ready', ownership:'managed', ...extra });
@@ -37,11 +37,11 @@ test('resource selections are unsaved drafts and lifecycle follows trusted visib
  let select, getDraft, visible=false, disposed=false;
  const f=fixture({resources(root,onSelect,read){select=onSelect;getDraft=read;return{isBusy:()=>false,setVisible:v=>{visible=v;},setBlocked(){},dispose(){disposed=true;}};}});
  assert.equal(visible,false);f.show();await tick();assert.equal(visible,true);
- assert.deepEqual(getDraft(),config);select({python_path:'/detected/bin/python'});
- assert.equal(f.node('python_path').value,'/detected/bin/python');assert.match(f.node('draft').textContent,/未保存/);
+ assert.deepEqual(getDraft(),config);select({model_dir:'/detected/models'});
+ assert.equal(f.node('model_dir').value,'/detected/models');assert.match(f.node('draft').textContent,/未保存/);
  assert.equal(f.calls.some(c=>c.name==='save_speech_config'),false);
- f.event('launcher-speech-state',snapshot({revision:3}));assert.equal(f.node('python_path').value,'/detected/bin/python');
- f.hide();assert.equal(visible,false);select({model_dir:'/late'});assert.equal(f.node('model_dir').value,config.model_dir);
+ f.event('launcher-speech-state',snapshot({revision:3}));assert.equal(f.node('model_dir').value,'/detected/models');
+ f.hide();assert.equal(visible,false);select({model_dir:'/late'});assert.equal(f.node('model_dir').value,'/detected/models');
  f.settings.dispose();assert.equal(disposed,true);
 });
 test('resource busy blocks save, check, start and audition without blocking cancel or preferences',async()=>{
@@ -71,6 +71,28 @@ test('preview stays unknown, disabled and entirely non-mutating even for synthet
 });
 test('opening visible speech subscribes first then reads only lightweight state and preferences',async()=>{
  const f=fixture();assert.equal(f.calls.length,0);f.show();await tick();assert.deepEqual(f.calls.map(c=>c.name),['get_speech_settings','get_speech_preferences']);assert.equal(f.listeners.size,3);assert.ok(f.order.indexOf('listen:launcher-speech-stop')<f.order.indexOf('get_speech_settings'));assert.equal(f.node('test').disabled,true);assert.equal(f.node('model_state').textContent,'未知');assert.equal(f.node('progress').hidden,true);await f.poll();assert.deepEqual(f.calls.at(-1),{name:'speech_action',args:{action:'refresh'}});f.hide();assert.equal(f.listeners.size,0);assert.equal(f.timers.size,0);
+});
+test('empty first use keeps Python blank and read-only until a valid snapshot supplies the managed path',async()=>{
+ const empty={model_dir:'',python_path:'',native_lib:''};
+ const f=fixture({initial:snapshot({configured:false,config:empty})});f.show();await tick();
+ assert.equal(f.node('python_path').value,'');
+ assert.match(raw, /id="speech-python_path"[^>]*readonly[^>]*aria-readonly="true"/);
+ assert.match(raw, /首次使用请点击“初始化语音环境”准备默认路径/);
+ assert.doesNotMatch(raw, /使用检测结果|按检测到的显卡类型/);
+ f.event('launcher-speech-state',snapshot({revision:1,ownership:'invalid'}));
+ assert.equal(f.node('python_path').value,'');
+ f.event('launcher-speech-state',snapshot({revision:2}));
+ assert.equal(f.node('python_path').value,config.python_path);
+ f.event('launcher-speech-state',snapshot({revision:3,config:{...config,python_path:'/external/bin/python'}}));
+ assert.equal(f.node('python_path').value,'');
+ assert.deepEqual(f.calls.map(c=>c.name),['get_speech_settings','get_speech_preferences']);f.settings.dispose();
+});
+test('opening, reopening and polling never dispatch discovery or Python runtime validation',async()=>{
+ const f=fixture();f.show();await tick();await f.poll();f.hide();f.show();await tick();await f.poll();
+ assert.deepEqual(f.calls.map(c=>c.name),['get_speech_settings','get_speech_preferences','speech_action','get_speech_settings','get_speech_preferences','speech_action']);
+ assert.ok(f.calls.filter(c=>c.name==='speech_action').every(c=>c.args.action==='refresh'));
+ assert.equal(f.calls.some(c=>c.name==='discover_speech_resources'||/python|runtime_check/.test(c.name)||['check','start'].includes(c.args?.action)),false);
+ f.settings.dispose();
 });
 test('read-only polling never toggles resource locks or status guidance',async()=>{
  let blocked=false;const locks=[];

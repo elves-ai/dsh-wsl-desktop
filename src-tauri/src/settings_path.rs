@@ -1,4 +1,15 @@
 //! Strict lexical conversion for the single configured WSL distribution. No filesystem or process access.
+/// Native picker IPC kinds. Kept platform-independent so forged kinds are tested on Linux.
+#[derive(Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PathKind {
+    Repository,
+    ModelDir,
+    NativeLib,
+    SetupRepository,
+    SetupNode,
+}
+
 fn distribution_valid(distribution: &str) -> bool {
     distribution.len() <= 256 && !distribution.contains('/') && component_valid(distribution)
 }
@@ -69,6 +80,19 @@ pub fn from_unc(distribution: &str, selected: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_picker_ipc_refuses_python_and_keeps_model_native_selection() {
+        assert!(serde_json::from_str::<PathKind>(r#""python_path""#).is_err());
+        for kind in [
+            "repository",
+            "model_dir",
+            "native_lib",
+            "setup_repository",
+            "setup_node",
+        ] {
+            assert!(serde_json::from_value::<PathKind>(serde_json::json!(kind)).is_ok());
+        }
+    }
     #[test]
     fn roundtrip_configured_distribution_and_unicode_hidden_paths() {
         for path in [

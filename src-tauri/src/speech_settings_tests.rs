@@ -228,7 +228,7 @@ impl Runtime for FakeRuntime {
 }
 fn config(name: &str) -> SpeechConfig {
     SpeechConfig {
-        python_path: "/home/test/venv/bin/python".into(),
+        python_path: "/home/test/.dsh-wsl-desktop/speech/runtime/venv/bin/python".into(),
         model_dir: format!("/models/{name}"),
         native_lib: "/home/test/lib/libqwen.so".into(),
     }
@@ -296,6 +296,69 @@ p",
     let mut good = config("good");
     good.model_dir = "/home/测试 user/Q8".into();
     assert!(good.validate().is_ok());
+}
+#[test]
+fn external_python_save_is_rejected_without_running_checks() {
+    let (_dir, runtime, manager) = setup();
+    for python in [
+        "/usr/bin/python3",
+        "/home/test/venv/bin/python",
+        "/tmp/custom-python",
+    ] {
+        let mut candidate = config("manual-model");
+        candidate.python_path = python.into();
+        assert!(manager
+            .save_config(candidate)
+            .unwrap_err()
+            .contains("初始化"));
+    }
+    assert_eq!(runtime.inspections.load(Ordering::Relaxed), 0);
+    assert_eq!(runtime.starts.load(Ordering::Relaxed), 0);
+}
+#[test]
+fn legacy_external_python_is_not_projected_or_executed_and_choices_survive() {
+    let dir = Directory::new();
+    let mut legacy = config("manual-model");
+    legacy.python_path = "/home/test/old-environment/bin/python".into();
+    let data = Persisted {
+        config: Some(legacy.clone()),
+        ..Persisted::default()
+    };
+    let bytes = serde_json::to_vec(&data).unwrap();
+    fs::write(dir.file(), &bytes).unwrap();
+    let runtime = Arc::new(FakeRuntime::default());
+    let manager = Manager::new(dir.file(), runtime.clone(), None).unwrap();
+    let snapshot = manager.get_snapshot();
+    assert!(!snapshot.configured);
+    assert!(snapshot.config.python_path.is_empty());
+    assert_eq!(snapshot.config.model_dir, legacy.model_dir);
+    assert_eq!(snapshot.config.native_lib, legacy.native_lib);
+    assert!(snapshot.message.contains("已忽略"));
+    assert!(snapshot.message.contains("初始化"));
+    assert_eq!(fs::read(dir.file()).unwrap(), bytes);
+    for action in [SpeechAction::Check, SpeechAction::Start] {
+        assert!(manager.action(action).unwrap_err().contains("初始化"));
+    }
+    assert!(manager
+        .ensure_ready("legacy-auto-start")
+        .unwrap_err()
+        .contains("初始化"));
+    assert_eq!(runtime.inspections.load(Ordering::Relaxed), 0);
+    assert_eq!(runtime.starts.load(Ordering::Relaxed), 0);
+    manager
+        .set_preferences(PreferencesPatch {
+            volume: Some(32),
+            ..Default::default()
+        })
+        .unwrap();
+    let reloaded = Manager::new(dir.file(), runtime, None).unwrap();
+    assert!(!reloaded.get_snapshot().configured);
+    assert!(reloaded.get_snapshot().config.python_path.is_empty());
+    // A newly initialized default interpreter can reuse the existing model/native choices.
+    let mut initialized = reloaded.get_snapshot().config;
+    initialized.python_path = config("unused").python_path;
+    reloaded.save_config(initialized).unwrap();
+    assert!(idle(&reloaded).configured);
 }
 #[test]
 fn defaults_and_preferences_work_without_config_or_runtime_jobs() {

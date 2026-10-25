@@ -195,7 +195,13 @@ test('bubble notifications are pet-only opaque-id actions and suppress automatic
   assert.ok(open.includes('id: String'));assert.doesNotMatch(open,/(?:target|url|path|session_id):/);
   const native=read('src-tauri/src/desktop_notifications.rs');
   assert.ok(native.includes('ChannelGate::route'));
-  assert.ok(native.includes('!toast_channel_current'));
+  assert.ok(native.includes('channels.system_delivery(state.gate(app), is_foreground, notify_when_focused)'));
+  assert.ok(native.includes('SystemDelivery::SoundOnly => super::toasts::play_notification_sound()'));
+  const soundBranch=native.slice(native.indexOf('SystemDelivery::SoundOnly =>'),native.indexOf('SystemDelivery::Toast =>'));
+  assert.ok(!soundBranch.includes('toasts.show'));
+  const toastBranch=native.slice(native.indexOf('SystemDelivery::Toast =>'),native.indexOf('if let Err(message) = result'));
+  assert.ok(toastBranch.includes('state.toasts.show'));
+  assert.ok(!toastBranch.includes('play_notification_sound'));
   assert.ok(native.includes('BubbleKind::Waiting'));assert.ok(native.includes('BubbleKind::Completed'));assert.ok(native.includes('BubbleKind::Failed'));
   const baseline=native.slice(native.indexOf('if !channels.continuous'),native.indexOf('generation = Some(channels)'));
   assert.ok(baseline.includes('attention.disconnected()'));assert.ok(!baseline.includes('attention.reset()'));

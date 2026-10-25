@@ -16,7 +16,6 @@
     "allow-cancel-speech-test",
     "allow-initialize-speech-environment",
     "allow-cancel-speech-initialization",
-    "allow-discover-speech-resources",
     "allow-get-speech-download",
     "allow-download-speech-model",
     "allow-cancel-speech-download"

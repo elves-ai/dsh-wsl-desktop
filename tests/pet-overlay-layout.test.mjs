@@ -16,7 +16,7 @@ test('real browser keeps speech above, input below and controls inside either ed
   const root = {};
   // Use the actual pet host markup, not a second hand-maintained copy.
   vm.runInNewContext(source.slice(source.indexOf('const face ='), source.indexOf('function el<')), {root, view:'pet'});
-  const css = (await Promise.all(['assistant.css','pet/notifications.css','pet/interactions.css'].map(file => readFile(new URL('../src/' + file, import.meta.url), 'utf8')))).join('\n');
+  const css = (await Promise.all(['ui-tokens.css','assistant.css','pet/notifications.css','pet/interactions.css'].map(file => readFile(new URL('../src/' + file, import.meta.url), 'utf8')))).join('\n');
   const placementSources = await Promise.all(['bubble-layout.ts','bubble-positioner.ts'].map(file => readFile(new URL('../src/pet/' + file, import.meta.url), 'utf8')));
   const placementScript = placementSources.map(source => ts.transpileModule(source.replace(/^import .*;$/gm, '').replace(/^export /gm, ''), {compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.None}}).outputText).join('\n');
   const html = '<!doctype html><meta charset="utf-8"><style>' + css + '</style><body data-view="pet"><main id="assistant-root" style="width:360px;height:320px">' + root.innerHTML + '</main><pre id="result"></pre><script>' + placementScript + '</script><script>(' + (() => {
@@ -27,7 +27,7 @@ test('real browser keeps speech above, input below and controls inside either ed
       pet.style.cssText = 'left:31.25%;top:13.8889%;width:37.5%;height:79.1667%';
       if (document.getElementById('pet-status')) failures.push(['pet head status remains']);
       document.getElementById('notice').textContent = '移动失败后仍可打开设置';
-      document.getElementById('pet-topmost').textContent = '窗口置顶：已开启';
+      document.getElementById('pet-topmost').setAttribute('aria-checked', 'true');
       document.getElementById('pet-animation').innerHTML = '<option>被鼠标拖拽悬空反馈</option>';
       if (document.querySelector('#pet-menu .pet-menu-credit, #pet-menu .asset-license, #pet-menu .pet-credit')) failures.push(['menu material attribution remains']);
       const bubble = document.getElementById('pet-bubble');
@@ -71,9 +71,16 @@ test('real browser keeps speech above, input below and controls inside either ed
           // Native hit reporting reads these same post-layout bounding boxes.
           if (panel === 'pet-menu') {
             const element = document.getElementById('pet-menu'), menu = element.getBoundingClientRect();
-            if (menu.width > 180 || menu.height > 308) failures.push(['menu too large',menu.width,menu.height]);
+            if (menu.width !== 196 || menu.height > 308) failures.push(['menu too large',menu.width,menu.height]);
             if (element.scrollHeight > element.clientHeight || element.scrollWidth > element.clientWidth) failures.push(['menu needs scrolling',left,right,element.scrollHeight,element.clientHeight]);
-            if (getComputedStyle(element).overflowY !== 'visible') failures.push(['menu still has a scroll container']);
+            if (getComputedStyle(element).overflowY !== 'auto') failures.push(['menu lacks tiny-bounds scrolling fallback']);
+            for (const row of element.querySelectorAll(':scope > button, .pet-menu-animation')) {
+              if (row.getBoundingClientRect().height !== 26) failures.push(['menu row height', row.textContent]);
+            }
+            for (const icon of element.querySelectorAll('.pet-menu-icon')) {
+              const rect = icon.getBoundingClientRect();
+              if (rect.width !== 16 || rect.height !== 16) failures.push(['menu icon size',rect.width,rect.height]);
+            }
             for (const control of element.querySelectorAll('button,select')) {
               const rect = control.getBoundingClientRect();
               if (rect.top < menu.top || rect.bottom > menu.bottom || rect.top < 0 || rect.bottom > 320) failures.push(['menu control clipped',control.textContent,rect.top,rect.bottom,menu.bottom]);
@@ -86,6 +93,19 @@ test('real browser keeps speech above, input below and controls inside either ed
           }
         }
       }
+      // Tiny visible bounds must scroll rather than hide the final action.
+      for (const id of ['pet-bubble','pet-interaction','notice','pet-composer','pet-dialogue']) document.getElementById(id).hidden = true;
+      const menu = document.getElementById('pet-menu');
+      menu.hidden = false;
+      menu.style.maxHeight = '100px';
+      menu.style.maxWidth = '140px';
+      if (menu.scrollHeight <= menu.clientHeight) failures.push(['tiny menu does not scroll']);
+      const hide = menu.querySelector('[data-action="hide"]');
+      hide.focus();
+      hide.scrollIntoView({block:'nearest'});
+      const last = hide.getBoundingClientRect(), bounds = menu.getBoundingClientRect();
+      if (last.top < bounds.top || last.bottom > bounds.bottom) failures.push(['last action unreachable in tiny menu']);
+      if (menu.scrollWidth > menu.clientWidth) failures.push(['tiny menu overflows horizontally']);
       document.getElementById('result').textContent = JSON.stringify(failures);
     }).toString() + ')();</script>';
   const temp = await mkdtemp(join(tmpdir(), 'dsh-pet-overlay-'));

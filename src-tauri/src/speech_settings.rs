@@ -22,9 +22,29 @@ pub struct SpeechConfig {
     pub model_dir: String,
     pub native_lib: String,
 }
+pub(crate) const DEFAULT_PYTHON_GUIDANCE: &str =
+    "语音仅使用默认 WSL 用户的 ~/.dsh-wsl-desktop/speech/runtime/venv/bin/python；请先初始化默认语音环境。";
+
+/// Lexical preflight only: the WSL helper verifies the complete path against its real HOME.
+pub(crate) fn validate_python_path(path: &str) -> Result<(), String> {
+    if !path
+        .strip_suffix("/.dsh-wsl-desktop/speech/runtime/venv/bin/python")
+        .is_some_and(|home| home.starts_with('/'))
+    {
+        return Err(DEFAULT_PYTHON_GUIDANCE.into());
+    }
+    Ok(())
+}
 impl SpeechConfig {
     pub fn validate(&self) -> Result<(), String> {
-        for value in [&self.python_path, &self.model_dir, &self.native_lib] {
+        validate_python_path(&self.python_path)?;
+        self.validate_paths()
+    }
+    pub(crate) fn validate_paths(&self) -> Result<(), String> {
+        for value in [&self.model_dir, &self.native_lib]
+            .into_iter()
+            .chain((!self.python_path.is_empty()).then_some(&self.python_path))
+        {
             if value.len() > 4096
                 || !value.starts_with('/')
                 || value.starts_with("//")
@@ -272,10 +292,15 @@ impl Store {
         {
             return Err("语音设置损坏或文件过大；原文件未修改。".into());
         }
-        let data: Persisted = serde_json::from_slice(&bytes)
+        let mut data: Persisted = serde_json::from_slice(&bytes)
             .map_err(|_| "语音设置损坏或含未知字段；原文件未修改。")?;
-        if let Some(config) = &data.config {
-            config.validate()?;
+        if let Some(config) = &mut data.config {
+            config.validate_paths()?;
+            if validate_python_path(&config.python_path).is_err() {
+                // Keep model/native choices, but never project a legacy interpreter as runnable.
+                // Loading alone must not rewrite the original settings file.
+                config.python_path.clear();
+            }
         }
         if data.preferences.volume > 100 {
             return Err("语音音量必须为 0 至 100。".into());
@@ -411,7 +436,10 @@ impl Manager {
         let data = store.load()?;
         let snapshot = SpeechSnapshot {
             revision: 0,
-            configured: data.config.is_some(),
+            configured: data
+                .config
+                .as_ref()
+                .is_some_and(|c| !c.python_path.is_empty()),
             config: data.config.clone().unwrap_or_default(),
             distribution: safe_label(runtime.distribution()),
             busy: false,
@@ -423,7 +451,15 @@ impl Manager {
             ownership: Ownership::Unknown,
             model_state: ModelState::Unknown,
             gpu_name: None,
-            message: "尚未检查语音服务状态。".into(),
+            message: if data
+                .config
+                .as_ref()
+                .is_some_and(|c| c.python_path.is_empty())
+            {
+                format!("已忽略旧配置中的外置 Python。{DEFAULT_PYTHON_GUIDANCE}")
+            } else {
+                "尚未检查语音服务状态。".into()
+            },
             error: None,
             logs: Vec::new(),
         };
@@ -724,6 +760,11 @@ impl Manager {
                 cancel_operation(&mut state);
             }
             let config = candidate.or_else(|| state.data.config.clone());
+            if matches!(kind, "save" | "check" | "start") {
+                if let Some(config) = &config {
+                    config.validate()?;
+                }
+            }
             // An existing external ready service remains usable even without local paths.
             if matches!(kind, "save" | "check") && config.is_none() {
                 return Err("请先配置语音路径。".into());

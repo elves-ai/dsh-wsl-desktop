@@ -82,16 +82,29 @@ const settingsSections = ['environment', 'notifications', 'power', 'pet', 'updat
 type SettingsSection = typeof settingsSections[number];
 const initialSection = parameters.get('section') === 'speech' ? 'pet' : parameters.get('section');
 let settingsSection: SettingsSection = settingsSections.find(section => section === initialSection) || 'environment';
+const settingsIcons: Record<SettingsSection, string> = {
+  environment: '<path d="M3 7V5a1 1 0 0 1 1-1h6l2 3h8a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7Z"/>',
+  notifications: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9ZM10 21h4"/>',
+  power: '<path d="M12 3v9M6.5 5.5a8 8 0 1 0 11 0"/>',
+  pet: '<path d="M3 12c4-7 11-7 16 0-5 7-12 7-16 0Zm0 0-2-4v8l2-4ZM14 10v.01"/>',
+  updates: '<path d="M12 3v12m-4-4 4 4 4-4M4 16v4h16v-4"/>',
+  logs: '<path d="M5 3h10l4 4v14H5V3Zm9 0v5h5M8 12h8M8 16h6"/>',
+};
 const mark = `<img src="${appIconUrl}" width="36" height="36" alt="" />`;
 // Templates contain only developer-owned markup. All native values use textContent/value.
 app.innerHTML = settingsView ? `
 <main class="settings-shell" id="settings-shell">
-  <aside class="settings-sidebar"><button class="settings-back" id="settings-back" type="button" aria-label="返回"><svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="m11.5 4.5-5.5 5.5 5.5 5.5M6 10h10" /></svg><span>返回</span></button><div class="settings-brand"><span class="small-mark">${mark}</span><span>DSH<small>应用设置</small></span></div><nav aria-label="设置分类">${settingsSections.map((section,index) => `<button class="settings-nav" id="nav-${section}" type="button"><span class="nav-index" aria-hidden="true">0${index+1}</span>${['环境与目录','系统通知','电源管理','桌面宠物','软件更新','诊断日志'][index]}</button>`).join('')}</nav><p class="settings-sidebar-note">设置保存在本机<br>不会上传到维护者</p></aside>
-  <div class="settings-content">
-    <header class="settings-heading"><p class="eyebrow">应用设置</p><h1 id="settings-title" tabindex="-1">环境与目录</h1><p id="settings-description">指定已有的 DSH 项目，查看本地运行配置。</p></header>
+  <aside class="settings-sidebar">
+    <button class="settings-back" id="settings-back" type="button" aria-label="返回"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m10 5-7 7 7 7M3 12h17" /></svg><span>返回</span></button>
+    <div class="settings-brand"><span class="small-mark">${mark}</span><span>DSH <small>桌面设置</small></span></div>
+    <nav aria-label="设置分类">${settingsSections.map((section,index) => `<button class="settings-nav" id="nav-${section}" type="button"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">${settingsIcons[section]}</svg><span>${['环境与目录','系统通知','电源管理','桌面宠物','软件更新','诊断日志'][index]}</span></button>`).join('')}</nav>
+    <p class="settings-sidebar-note">设置仅保存在本机</p>
+  </aside>
+  <div class="settings-content" id="settings-content">
+    <header class="settings-heading"><h1 id="settings-title" tabindex="-1">环境与目录</h1><p id="settings-description">指定已有的 DSH 项目，查看本地运行配置。</p></header>
     <div class="error-notice" id="error-notice" role="alert" hidden></div>
     <section id="settings-environment" aria-label="环境与目录">
-      <div class="setting-group"><h2>DSH 项目目录</h2><p id="repository-help">使用 Windows 系统窗口选择已配置 WSL 发行版内的项目目录。</p><label class="visually-hidden" for="repository-input">DSH 项目目录</label><input id="repository-input" type="text" placeholder="/home/用户名/deepseek-harness" autocomplete="off" spellcheck="false" maxlength="4096" aria-describedby="repository-help repository-notice" readonly aria-readonly="true" disabled><button class="button secondary" id="pick-repository" type="button" disabled>选择项目目录…</button><p class="setting-help" id="repository-notice" role="status" aria-live="polite">正在读取配置。</p><button class="button primary" id="save-repository" type="button" disabled>保存并重新检测</button></div>
+      <div class="setting-group"><h2>DSH 项目目录</h2><p id="repository-help">使用 Windows 系统窗口选择已配置 WSL 发行版内的项目目录。</p><label class="visually-hidden" for="repository-input">DSH 项目目录</label><div class="setting-path"><input id="repository-input" type="text" placeholder="/home/用户名/deepseek-harness" autocomplete="off" spellcheck="false" maxlength="4096" aria-describedby="repository-help repository-notice" readonly aria-readonly="true" disabled><button class="button secondary" id="pick-repository" type="button" disabled>选择目录…</button></div><p class="setting-help" id="repository-notice" role="status" aria-live="polite">正在读取配置。</p><button class="button primary" id="save-repository" type="button" disabled>保存并重新检测</button></div>
       <div class="setting-group"><div class="group-heading"><h2>运行环境</h2><span id="status-label" class="muted">读取中</span></div><dl class="connection-info"><div><dt>服务地址</dt><dd><code id="origin">尚未连接</code></dd></div><div><dt>进程归属</dt><dd id="ownership">等待检查</dd></div><div><dt>启动配置</dt><dd id="config-location">尚未读取</dd></div></dl><p class="setting-help" id="ownership-hint">仅管理由启动器托管的服务。</p><button class="button secondary" id="check" type="button" disabled>重新检测并进入 DSH</button></div>
       <p class="setting-help">不自动安装软件、克隆项目或安装依赖。修改目录前，请通过托盘右键菜单停止服务。</p>
     </section>
@@ -102,7 +115,7 @@ app.innerHTML = settingsView ? `
         <div class="toggle-row"><div><h2>显示桌面宠物</h2><p id="pet-visible-help">立即显示或隐藏桌面宠物，不会停止 DSH 任务。</p></div><label class="switch"><input id="pet-visible" type="checkbox" aria-label="显示桌面宠物" aria-describedby="pet-visible-help pet-message" disabled><span></span></label></div>
         <div class="toggle-row"><div><h2>启动时显示</h2><p id="pet-startup-help">保存在本机，下次启动生效；不改变当前显示状态。</p></div><label class="switch"><input id="pet-startup-visible" type="checkbox" aria-label="启动时显示" aria-describedby="pet-startup-help pet-message" disabled><span></span></label></div>
         <div class="toggle-row"><div><h2>允许漫游</h2><p id="pet-roaming-help">保存在本机，即时生效。关闭后停止随机漫游，仍可拖拽、抛掷和点播动作。</p></div><label class="switch"><input id="pet-roaming-enabled" type="checkbox" aria-label="允许漫游" aria-describedby="pet-roaming-help pet-message" disabled><span></span></label></div>
-        <div class="toggle-row"><div><h2>气泡通知</h2><p id="pet-bubble-help">任务完成、失败时显示摘要；需要回答、确认计划或授权时，可直接在气泡中选择、输入、允许一次或拒绝。待处理请求可手动收起，不会自动授权或取消。</p><p id="pet-bubble-policy" class="setting-help">独立于系统通知开关。桌宠显示时仅用气泡提醒，不发送 Windows 通知；关闭气泡则静默，不回退系统通知。桌宠隐藏时按系统通知开关提醒，不补历史气泡。普通任务提醒前台静默，沿用系统通知中的“窗口聚焦时也通知”选项；待答和授权交互会保留，直到处理或手动收起。</p></div><label class="switch"><input id="pet-bubble-notifications" type="checkbox" aria-label="气泡通知" aria-describedby="pet-bubble-help pet-bubble-policy pet-message" disabled><span></span></label></div>
+        <div class="toggle-row"><div><h2>气泡通知</h2><p id="pet-bubble-help">在宠物旁显示任务提醒，可直接回答问题、确认计划或处理授权。收起气泡不会授权或取消请求。</p><details class="setting-details"><summary>通知渠道与提醒规则</summary><p id="pet-bubble-policy" class="setting-help">需要回答、确认计划或授权时，可直接在气泡中选择、输入、允许一次或拒绝。不会自动授权或取消。气泡开关独立于系统通知开关。桌宠显示时不弹 Windows 通知卡片；系统通知开启时仍播放提示音，关闭气泡不影响提示音。桌宠隐藏时按系统通知开关显示通知卡片并播放提示音，不补历史气泡。普通任务提醒前台静默，沿用系统通知中的“窗口聚焦时也通知”选项；待答和授权交互会保留，直到处理或手动收起。</p></details></div><label class="switch"><input id="pet-bubble-notifications" type="checkbox" aria-label="气泡通知" aria-describedby="pet-bubble-help pet-bubble-policy pet-message" disabled><span></span></label></div>
         <p id="pet-message" class="setting-help" role="status" aria-live="polite">正在读取桌面宠物设置。</p><button class="button secondary" id="pet-refresh" type="button" disabled>重新读取</button>
       </div>
       <div id="settings-speech" role="region" aria-label="宠物语音设置"></div>
@@ -743,7 +756,10 @@ function selectSettings(section: string, focus = false): void {
   if (!settingsView) return;
   const selected = settingsSections.find(item => item === (section === 'speech' ? 'pet' : section));
   if (!selected) return;
-  if (selected !== settingsSection) pathPickerEpoch++;
+  if (selected !== settingsSection) {
+    pathPickerEpoch++;
+    element('settings-content').scrollTop = 0;
+  }
   settingsSection = selected;
   const index = settingsSections.indexOf(selected);
   element('settings-title').textContent = ['环境与目录', '系统通知', '电源管理', '桌面宠物', '软件更新', '诊断日志'][index] || '';
@@ -753,6 +769,7 @@ function selectSettings(section: string, focus = false): void {
     element('nav-' + item).dataset.active = String(item === selected);
     element('nav-' + item).setAttribute('aria-current', item === selected ? 'page' : 'false');
   }
+  element('nav-' + selected).scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
   speechSettings?.setVisible(selected === 'pet' && !document.hidden && settingsPageRevealed);
   if (focus) element('settings-title').focus({ preventScroll: true });
 }

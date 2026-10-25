@@ -1,7 +1,7 @@
 //! Windows notification adapter. No DSH-page IPC, injected scripts or Host mutations.
 use super::{assert_local, Controller};
 use crate::{
-    notification_channels::ChannelGate,
+    notification_channels::{ChannelGate, SystemDelivery},
     notification_transport::RpcClient,
     notifications::{
         notification_session_url, task_notice_body, CursorTracker, NoticeKind,
@@ -130,7 +130,7 @@ impl Notifications {
             (data.snapshot.enabled, data.epoch)
         };
         let (bubbles, bubble_epoch) = super::pet_settings::bubble_gate(app);
-        // Pet display owns the notification surface, even if its bubble switch is off.
+        // Pet display replaces the system toast with sound, even if bubbles are disabled.
         ChannelGate::route(
             toasts,
             toast_epoch,
@@ -345,30 +345,39 @@ fn deliver(
     if channels.allows_bubble(state.gate(app)) && (!is_foreground || notify_when_focused) {
         super::pet_notifications::emit(app, target.clone(), kind, title, body, key);
     }
-    let toast_channel_current = channels.allows_toast(state.gate(app));
+    let Some(delivery) =
+        channels.system_delivery(state.gate(app), is_foreground, notify_when_focused)
+    else {
+        return;
+    };
     let mut data = state.data.lock().unwrap_or_else(|e| e.into_inner());
     let settings = NotificationSettings {
         enabled: data.snapshot.enabled,
         notify_when_focused: data.snapshot.notify_when_focused,
     };
-    if !toast_channel_current
-        || !settings.should_notify(is_foreground)
+    if !settings.should_notify(is_foreground)
         || data.epoch != epoch
         || controller.exiting.load(Ordering::SeqCst)
         || controller.snapshot().state != "ready"
     {
         return;
     }
-    let click_app = app.clone();
-    let app_id = toast_app_id(app);
-    if let Err(message) = state.toasts.show(&app_id, title, body, move || {
-        if let Err(message) = open_notified_session(&click_app, &target) {
-            if let Some(controller) = click_app.try_state::<Arc<Controller>>() {
-                // Fixed diagnostics only: no session name, ID, URL or credentials in logs.
-                controller.record(&click_app, &message);
-            }
+    let result = match delivery {
+        SystemDelivery::SoundOnly => super::toasts::play_notification_sound(),
+        SystemDelivery::Toast => {
+            let click_app = app.clone();
+            let app_id = toast_app_id(app);
+            state.toasts.show(&app_id, title, body, move || {
+                if let Err(message) = open_notified_session(&click_app, &target) {
+                    if let Some(controller) = click_app.try_state::<Arc<Controller>>() {
+                        // Fixed diagnostics only: no session name, ID, URL or credentials in logs.
+                        controller.record(&click_app, &message);
+                    }
+                }
+            })
         }
-    }) {
+    };
+    if let Err(message) = result {
         data.delivery_error = Some(message);
     }
 }
@@ -459,7 +468,7 @@ pub(super) fn start(app: tauri::AppHandle, controller: Arc<Controller>, state: A
                 break;
             }
             let channels = state.gate(&app);
-            let epoch = channels.toast_epoch;
+            let epoch = channels.system_epoch;
             if !channels.continuous(generation) {
                 tracker.reset(now_ms());
                 // Rebase reads, but retain consumed questions across toast/bubble switches.

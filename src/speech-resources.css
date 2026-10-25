@@ -1,7 +1,5 @@
-.speech-resource-panel { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
-.speech-resource-panel h3 { margin: 0 0 8px; font-size: 13px; color: #c6cdd9; }
-.speech-resource-panel select { width: 100%; max-width: 100%; padding: 8px; color: inherit; background: #20252d; border: 1px solid #39414e; border-radius: 6px; font: inherit; font-size: 12px; }
-.speech-resource-panel select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.speech-resource-panel { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--ui-line); }
+.speech-resource-panel h3 { margin: 0 0 8px; font-size: 13px; font-weight: 600; line-height: 20px; color: var(--ui-text); }
 .speech-resource-panel .setting-help { overflow-wrap: anywhere; }
-.speech-resource-box { margin: 14px 0; padding: 14px; border: 1px solid var(--line); border-radius: 6px; }
-.speech-resource-panel progress { width: 100%; margin-top: 10px; accent-color: var(--accent); }
+.speech-resource-box { margin: 16px 0; padding: 16px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius); background: var(--ui-subtle); }
+.speech-resource-panel progress { width: 100%; margin-top: 12px; accent-color: var(--ui-accent); }

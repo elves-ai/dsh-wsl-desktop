@@ -360,8 +360,8 @@ test('bubble toggle explains independent preference, exclusive delivery and shar
   assert.match(app.template, /不会自动授权或取消/);
   assert.match(app.template, /待答和授权交互会保留，直到处理或手动收起/);
   assert.match(app.template, /独立于系统通知开关/);
-  assert.match(app.template, /桌宠显示时仅用气泡提醒，不发送 Windows 通知；关闭气泡则静默，不回退系统通知/);
-  assert.match(app.template, /桌宠隐藏时按系统通知开关提醒，不补历史气泡/);
+  assert.match(app.template, /桌宠显示时不弹 Windows 通知卡片；系统通知开启时仍播放提示音，关闭气泡不影响提示音/);
+  assert.match(app.template, /桌宠隐藏时按系统通知开关显示通知卡片并播放提示音，不补历史气泡/);
   assert.match(app.template, /前台静默.*沿用系统通知中的“窗口聚焦时也通知”选项/);
   assert.match(app.template, /aria-label="气泡通知" aria-describedby="pet-bubble-help pet-bubble-policy pet-message" disabled/);
 });
@@ -1538,6 +1538,36 @@ test('failed startup snapshot read exposes a retryable error rather than endless
   assert.equal(app.node('check').disabled, false); assert.equal(app.node('open-settings').hidden, false);
 });
 
+test('settings design uses shared tokens, labelled icons and preserves collapsible safety guidance', async () => {
+  const app = await mount(false);
+  const css = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8');
+  const tokens = readFileSync(new URL('../src/ui-tokens.css', import.meta.url), 'utf8');
+  const speech = readFileSync(new URL('../src/speech-settings.ts', import.meta.url), 'utf8');
+  assert.match(css, /@import "\.\/ui-tokens\.css"/);
+  assert.match(tokens, /\.settings-shell[\s\S]*--ui-bg: #202124/);
+  assert.doesNotMatch(app.template, /nav-index|class="eyebrow"/);
+  for (const section of ['environment','notifications','power','pet','updates','logs']) {
+    assert.match(app.template, new RegExp('id="nav-' + section + '"[^>]*><svg[^>]*aria-hidden="true"'));
+  }
+  assert.match(app.template, /<details class="setting-details"><summary>通知渠道与提醒规则<\/summary>/);
+  assert.match(app.template, /<div class="setting-path"><input id="repository-input"[^>]*readonly/);
+  assert.match(css, /\.settings-sidebar nav \{[^}]*overflow-x: auto/);
+  assert.match(css, /prefers-reduced-motion: reduce/);
+  assert.ok(speech.indexOf('id="speech-auto"') < speech.indexOf('id="speech-model_dir"'));
+});
+
+test('changing settings categories resets content scroll without resetting the current category', async () => {
+  const app = await mount(false);
+  app.node('settings-content').scrollTop = 450;
+  await app.click('nav-pet');
+  assert.equal(app.node('settings-content').scrollTop, 0);
+  app.node('settings-content').scrollTop = 220;
+  await app.click('nav-pet');
+  assert.equal(app.node('settings-content').scrollTop, 220);
+  await app.click('nav-environment');
+  assert.equal(app.node('settings-content').scrollTop, 0);
+});
+
 test('settings Back has an icon and visible accessible text outside the brand hidden on narrow layouts', async () => {
   const app = await mount(false);
   assert.equal(app.has('settings-back'), true);
@@ -1545,9 +1575,9 @@ test('settings Back has an icon and visible accessible text outside the brand hi
   assert.equal(app.node('settings-back').disabled, false);
   const raw = readFileSync(new URL('../src/main.ts', import.meta.url), 'utf8');
   const css = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8');
-  assert.match(raw, /<aside class="settings-sidebar"><button class="settings-back" id="settings-back" type="button" aria-label="返回"><svg[^>]*aria-hidden="true"[^>]*>[\s\S]*?<\/svg><span>返回<\/span><\/button><div class="settings-brand">/);
+  assert.match(raw, /<aside class="settings-sidebar">\s*<button class="settings-back" id="settings-back" type="button" aria-label="返回"><svg[^>]*aria-hidden="true"[^>]*>[\s\S]*?<\/svg><span>返回<\/span><\/button>\s*<div class="settings-brand">/);
   assert.match(css, /\.settings-back \{[^}]*display: flex;[^}]*min-height: 36px/);
-  assert.match(css, /@media \(max-width: 450px\) \{ \.settings-back \{ margin-bottom: 12px; \}/);
+  assert.match(css, /@media \(max-width: 600px\)[\s\S]*?\.settings-back \{ margin: 0 0 8px; \}/);
   assert.doesNotMatch(css, /\.settings-back[^{}]*\{[^}]*display: none/);
 });
 

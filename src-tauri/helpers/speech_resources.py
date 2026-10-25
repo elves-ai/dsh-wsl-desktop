@@ -1,4 +1,4 @@
-"""Fixed WSL discovery/browser, offline initialization and pinned Q8 download.
+"""Fixed WSL browser, offline initialization and pinned Q8 download.
 
 No shell, dependency downloads, model import or native-library loading. Paths
 are JSON data. Downloads/initialization require a held owner channel. Offline
@@ -12,7 +12,6 @@ from pathlib import Path, PurePosixPath
 import re
 import resource
 import signal
-import shutil
 import stat
 import subprocess
 import sys
@@ -34,7 +33,8 @@ MAX_ENTRIES = 200
 MAX_SCAN = 4096
 NOFOLLOW = os.O_NOFOLLOW | os.O_CLOEXEC
 DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | NOFOLLOW
-KINDS = {"model_dir", "python_path", "native_lib"}
+CONFIG_FIELDS = {"model_dir", "python_path", "native_lib"}
+KINDS = {"model_dir", "native_lib"}
 SPEECH_ROOT = ".dsh-wsl-desktop/speech"
 
 
@@ -113,8 +113,6 @@ def browse(request):
                     if not is_dir:
                         if request["kind"] == "model_dir":
                             continue
-                        if request["kind"] == "python_path" and not (name.startswith("python") and info.st_mode & 0o111):
-                            continue
                         if request["kind"] == "native_lib" and not (name.endswith(".so") or ".so." in name):
                             continue
                     entries.append({"name": name, "path": child, "directory": is_dir})
@@ -136,91 +134,20 @@ def browse(request):
 
 
 # -I suppresses cwd, PYTHONPATH and user site. -S skips site/.pth startup code.
-# Probe package metadata/library filenames, never import GPU packages or load SOs.
+# Initialization needs only a modern Python with the standard-library venv module.
 PROBE = r'''
-import sys,json,glob,os,importlib.metadata
-paths = list(sys.path)
-root = os.path.dirname(os.path.dirname(sys.executable))
-paths += glob.glob(root + '/lib/python*/site-packages')
-paths += glob.glob(sys.base_prefix + '/lib/python*/site-packages')
-names = {d.metadata.get('Name','').lower().replace('_','-') for d in importlib.metadata.distributions(path=paths)}
-# CUDA wheels provide the runtime and cuBLAS separately; Torch is not required.
-cuda_runtime = any({'nvidia-cuda-runtime-cu' + major, 'nvidia-cublas-cu' + major} <= names
-                   for major in ('12', '13'))
-# Also recognize explicitly installed system/toolkit libraries by filename only.
-# This is not proof of driver compatibility, symbol resolution or GPU computation.
-roots = ['/usr/local/cuda'] + sorted(glob.glob('/usr/local/cuda-*'))[:16]
-for key in ('CUDA_HOME', 'CUDA_PATH', 'CUDAToolkit_ROOT'):
-    value = os.environ.get(key, '')
-    if value.startswith('/'):
-        roots.append(value)
-dirs = ['/usr/lib/x86_64-linux-gnu', '/usr/lib64', '/usr/lib', '/lib/x86_64-linux-gnu']
-for root in roots:
-    dirs += [root + '/lib64', root + '/lib', root + '/targets/x86_64-linux/lib']
-dirs += [p for p in os.environ.get('LD_LIBRARY_PATH', '').split(os.pathsep)[:64] if p.startswith('/')]
-dirs = [p for p in dict.fromkeys(dirs) if 'stubs' not in p.split('/')]
-for major in ('12', '13'):
-    if all(any(os.path.isfile(p + '/lib' + name + '.so.' + major) for p in dirs)
-           for name in ('cudart', 'cublas', 'cublasLt')):
-        cuda_runtime = True
-print(json.dumps({'version': '.'.join(map(str,sys.version_info[:3])),
- # AMD ROCm 10.x provides the rocm_sdk module through rocm-sdk-core.
- 'rocm_sdk': bool(names & {'rocm-sdk', 'rocm-sdk-core'}), 'cuda_runtime': cuda_runtime}))
+import sys,json,venv
+print(json.dumps({'version': '.'.join(map(str,sys.version_info[:3]))}))
 '''
 
 
-def candidates(home, environ):
+def candidates(home):
+    """Managed runtime plus system interpreters used only to create that runtime."""
     result = []
-    def add(path):
-        if len(result) < 48 and path not in result:
-            try:
-                absolute(path)
-                if os.path.isfile(path) and os.access(path, os.X_OK):
-                    result.append(path)
-            except (OSError, Refused):
-                pass
-    add(str(home / SPEECH_ROOT / "runtime/venv/bin/python"))
-    # Keep discovering existing environments; changing defaults never moves a venv.
-    for folder in (".local/share/dsh-pet/qwen-runtime/venv", ".local/share/dsh-speech/venv", ".local/share/dsh-speech/qwen-runtime/venv"):
-        add(str(home / folder / "bin/python"))
-    for var in ("VIRTUAL_ENV", "CONDA_PREFIX"):
-        if environ.get(var):
-            add(str(Path(environ[var]) / "bin/python"))
-    for folder in (".venv", "venv", ".virtualenvs", "venvs", ".conda/envs", "miniconda3/envs", "anaconda3/envs", "miniforge3/envs", "micromamba/envs", "miniconda3", "anaconda3", "miniforge3"):
-        root = home / folder
-        add(str(root / "bin/python"))
-        try:
-            with os.scandir(root) as items:
-                for i, item in enumerate(items):
-                    if i >= 128:
-                        break
-                    if item.is_dir(follow_symlinks=False):
-                        add(str(Path(item.path) / "bin/python"))
-        except OSError:
-            pass
-    try:
-        with open(home / ".conda/environments.txt", "r", encoding="utf-8") as registry:
-            for line in registry.read(32768).splitlines()[:128]:
-                if line.startswith("/"):
-                    add(str(Path(line) / "bin/python"))
-    except (OSError, UnicodeError):
-        pass
-    # Common project-local venvs, bounded to one level; no recursive disk scan.
-    try:
-        with os.scandir(home) as items:
-            for i, item in enumerate(items):
-                if i >= 128:
-                    break
-                if item.is_dir(follow_symlinks=False):
-                    for folder in (".venv", "venv"):
-                        add(str(Path(item.path) / folder / "bin/python"))
-    except OSError:
-        pass
-    for folder in environ.get("PATH", "").split(os.pathsep)[:64]:
-        if folder.startswith("/"):
-            for name in ("python3", "python"):
-                add(str(Path(folder) / name))
-    add("/usr/bin/python3")
+    for path in (str(home / SPEECH_ROOT / "runtime/venv/bin/python"),
+                 "/usr/bin/python3", "/usr/local/bin/python3"):
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            result.append(path)
     return result
 
 
@@ -230,116 +157,18 @@ def _probe_limits():
     resource.setrlimit(resource.RLIMIT_CPU, (2, 2))
 
 
-def gpu_command(command, timeout=2):
-    """Read adapter metadata only, with bounded time/output; never run a shell."""
-    try:
-        with tempfile.TemporaryFile() as output:
-            process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=output,
-                stderr=subprocess.DEVNULL, start_new_session=True, preexec_fn=_probe_limits)
-            try:
-                process.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                process.wait()
-                return ""
-            output.seek(0)
-            data = output.read(8193)
-        return data.decode("utf-8-sig") if process.returncode == 0 and len(data) <= 8192 else ""
-    except (OSError, UnicodeError):
-        return ""
+def python_status(version):
+    return "python_too_old" if tuple(map(int, version.split(".")[:2])) < (3, 10) else "ready"
 
 
-def gpu_vendor(value):
-    value = value.lower()
-    if "ven_10de" in value or "nvidia" in value:
-        return "nvidia"
-    if "ven_1002" in value or re.search(r"\bamd\b|radeon|advanced micro devices", value):
-        return "amd"
-    if "ven_8086" in value or "intel" in value:
-        return "intel"
-    return "unknown"
-
-
-def detect_gpu():
-    """Hardware discovery, NOT a CUDA/ROCm usability or allocation test.
-
-    WSL's /dev/dxg is vendor-neutral and PCI often only shows virtual devices;
-    query Windows adapters as well, so an AMD iGPU cannot hide an NVIDIA dGPU.
-    """
-    adapters = []
-    def add(vendor, name):
-        name = " ".join(str(name).split())[:200]
-        if name and (vendor, name) not in adapters and len(adapters) < 16:
-            adapters.append((vendor, name))
-    try:
-        for device in sorted(Path("/sys/bus/pci/devices").iterdir())[:512]:
-            try:
-                if not (device / "class").read_text()[:4] == "0x03":
-                    continue
-                vendor = {"0x1002": "amd", "0x10de": "nvidia", "0x8086": "intel"}.get(
-                    (device / "vendor").read_text().strip(), "unknown")
-                add(vendor, {"amd": "AMD", "nvidia": "NVIDIA", "intel": "Intel"}.get(vendor, "未知") + " GPU (PCI)")
-            except OSError:
-                continue
-    except OSError:
-        pass
-    try:
-        wsl = "microsoft" in Path("/proc/sys/kernel/osrelease").read_text().lower()
-    except OSError:
-        wsl = False
-    if wsl:
-        powershell = shutil.which("powershell.exe") or "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
-        if os.path.isfile(powershell) and os.access(powershell, os.X_OK):
-            text = gpu_command([powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
-                "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); "
-                "Get-CimInstance Win32_VideoController | Select-Object Name,PNPDeviceID | ConvertTo-Json -Compress"], timeout=5)
-            try:
-                values = json.loads(text)
-                for item in (values if isinstance(values, list) else [values])[:16]:
-                    if isinstance(item, dict) and isinstance(item.get("Name"), str):
-                        add(gpu_vendor(item["Name"] + " " + str(item.get("PNPDeviceID", ""))), item["Name"])
-            except (ValueError, TypeError):
-                pass
-    if not any(vendor == "nvidia" for vendor, _ in adapters):
-        for binary in ("/usr/lib/wsl/lib/nvidia-smi", "/usr/bin/nvidia-smi"):
-            if os.path.isfile(binary) and os.access(binary, os.X_OK):
-                for name in gpu_command([binary, "--query-gpu=name", "--format=csv,noheader"]).splitlines()[:16]:
-                    # gpu_command only returns output after a successful query.
-                    add("nvidia", name)
-                break
-    vendors = {vendor for vendor, _ in adapters}
-    accelerated = vendors & {"amd", "nvidia"}
-    vendor = "mixed" if len(accelerated) == 2 else next(iter(accelerated), "intel" if "intel" in vendors else "unknown")
-    return {"vendor": vendor, "names": [name for v, name in adapters if v != "unknown" or vendor == "unknown"]}
-
-
-def python_status(version, rocm_sdk, vendor, cuda_runtime=False):
-    if tuple(map(int, version.split(".")[:2])) < (3, 10):
-        return "python_too_old"
-    if vendor == "nvidia":
-        return "ready" if cuda_runtime else "missing_cuda_runtime"
-    if vendor == "mixed":
-        return "ready" if rocm_sdk or cuda_runtime else "missing_gpu_runtime"
-    if vendor == "unknown":
-        return "gpu_unknown"
-    if vendor == "intel":
-        return "unsupported_gpu"
-    return "ready" if rocm_sdk else "missing_rocm_sdk"
-
-
-def probe(path, vendor="unknown"):
-    # Candidate binaries are user-selected executables. Do not execute .pth,
-    # import packages, initialize GPU, install anything or retain raw output.
+def probe(path):
+    # Never execute .pth, import third-party packages, inspect GPU metadata or
+    # libraries, or retain raw executable output.
     try:
         with tempfile.TemporaryFile() as output:
             process = subprocess.Popen([path, "-I", "-S", "-B", "-c", PROBE], stdin=subprocess.DEVNULL,
                 stdout=output, stderr=subprocess.DEVNULL, start_new_session=True, preexec_fn=_probe_limits,
-                env={"PATH": "/usr/bin:/bin", "HOME": str(Path.home()),
-                     **{key: os.environ[key] for key in ("CUDA_HOME", "CUDA_PATH", "CUDAToolkit_ROOT", "LD_LIBRARY_PATH")
-                        if key in os.environ}})
+                env={"PATH": "/usr/bin:/bin", "HOME": str(Path.home())})
             try:
                 process.wait(timeout=2)
             except subprocess.TimeoutExpired:
@@ -352,21 +181,19 @@ def probe(path, vendor="unknown"):
             output.seek(0)
             value = json.loads(output.read(4097))
         require(process.returncode == 0 and re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", value["version"]))
-        require(type(value["rocm_sdk"]) is bool and type(value["cuda_runtime"]) is bool)
-        status = python_status(value["version"], value["rocm_sdk"], vendor, value["cuda_runtime"])
+        status = python_status(value["version"])
         return {"path": path, "version": value["version"], "ready": status == "ready", "status": status}
     except (OSError, ValueError, KeyError, TypeError, Refused):
         return {"path": path, "version": "unknown", "ready": False, "status": "probe_failed"}
 
 
 def python_usable(result):
-    """Initialization needs a modern executable, not a GPU dependency verdict."""
-    return result["status"] in {"ready", "missing_rocm_sdk", "missing_cuda_runtime",
-                                "missing_gpu_runtime", "gpu_unknown", "unsupported_gpu"}
+    """Only a modern executable with standard-library venv is usable."""
+    return result["status"] == "ready"
 
 
 def validate_config(request):
-    require(isinstance(request, dict) and set(request) == KINDS)
+    require(isinstance(request, dict) and set(request) == CONFIG_FIELDS)
     for value in request.values():
         require(isinstance(value, str))
         if value:
@@ -374,30 +201,10 @@ def validate_config(request):
     return dict(request)
 
 
-def discover(request):
-    request = validate_config(request)
-    home = Path.home()
-    # Reading initialized defaults must never create directories or repair files.
-    try:
-        saved = initialized_config(home) or {}
-    except (OSError, Refused, ValueError, UnicodeError):
-        saved = {}
-    request = {key: value or saved.get(key, "") for key, value in request.items()}
-    model = request["model_dir"] or str(home / SPEECH_ROOT / "models/qwen3-tts-q8")
-    native = request["native_lib"] or os.environ.get("DSH_QWEN_NATIVE_LIB", "")
-    absolute(model)
-    if native:
-        absolute(native)
-    paths = candidates(home, os.environ)
-    if request["python_path"]:
-        selected = absolute(request["python_path"])
-        paths = [selected] + [p for p in paths if p != selected]
-    gpu = detect_gpu()
-    result = {"python_environments": [probe(p, gpu["vendor"]) for p in paths[:48]],
-              "model_dir": model, "native_lib": native, "gpu": gpu}
-    while len(json.dumps(result).encode()) > 60000:
-        result["python_environments"].pop()
-    return result
+def default_python(home):
+    """Check only the application runtime, never an ambient development venv."""
+    path = str(home / SPEECH_ROOT / "runtime/venv/bin/python")
+    return [path] if os.path.isfile(path) and os.access(path, os.X_OK) else []
 
 
 # Initialization owns only its fixed runtime, never a selected external environment.
@@ -474,21 +281,11 @@ def config_record(value):
         require(type(value["schema_version"]) is int and value["schema_version"] == 1)
         config = validate_config(value["config"])
         require(config["python_path"] and config["model_dir"])
+        # Legacy Python references are inert; only model/native paths are configurable.
+        config["python_path"] = str(Path.home() / SPEECH_ROOT / "runtime/venv/bin/python")
         return config
     except (Refused, TypeError, KeyError):
         raise Refused("initialize_config_conflict") from None
-
-
-def initialized_config(home):
-    try:
-        fd = initialize_root(home)
-    except FileNotFoundError:
-        return None
-    try:
-        value = read_initialize_json(fd, "config.json")
-        return config_record(value) if value is not None else None
-    finally:
-        os.close(fd)
 
 
 def publish_initialize_json(fd, name, value, cancelled):
@@ -708,13 +505,19 @@ def initialize_venv(home, speech, bases, cancelled):
         complete = read_initialize_json(runtime, INIT_COMPLETE)
         if complete is not None:
             require(complete == intent, "initialize_runtime_conflict")
-            require(python_usable(probe(target, "unknown")), "initialize_venv_failed")
-            return target, False
+            if os.path.isfile(target) and os.access(target, os.X_OK):
+                require(python_usable(probe(target)), "initialize_venv_failed")
+                return target, False
+            # Remove only the validated completion record in this pinned runtime.
+            # A missing interpreter must be rebuilt, and a failed rebuild stays partial.
+            require(not cancelled(), "cancelled")
+            os.unlink(INIT_COMPLETE, dir_fd=runtime)
+            os.fsync(runtime)
         require(not cancelled(), "cancelled")
         run_initialize([base, "-I", "-S", "-B", "-m", "venv", "--copies", "--without-pip", str(path)],
                        cancelled, "initialize_venv_failed")
         check_managed_venv(path, normalize_permissions=True)
-        require(python_usable(probe(target, "unknown")), "initialize_venv_failed")
+        require(python_usable(probe(target)), "initialize_venv_failed")
         # ensurepip uses only wheels bundled with this Python. No pip install,
         # package index, downloader, SDK/driver installation or network request.
         if run_initialize([target, "-I", "-S", "-B", "-c",
@@ -753,26 +556,24 @@ def initialize(request, cancelled=lambda: False):
             raise Refused("initialize_config_conflict") from None
         config_path = str(home / SPEECH_ROOT / "config.json")
         if saved is not None:
-            require(all(not value or value == saved[key] for key, value in request.items()),
+            require(all(not request[key] or request[key] == saved[key] for key in ("model_dir", "native_lib")),
                     "initialize_config_conflict")
             require(not cancelled(), "cancelled")
-            return {"config": saved, "config_path": config_path, "reused_python": True, "created_venv": False}
-        paths = candidates(home, os.environ)
-        if request["python_path"]:
-            paths = [request["python_path"]] + [p for p in paths if p != request["python_path"]]
+            if default_python(home) and unmanaged_runtime_venv(speech, saved["python_path"]):
+                return {"config": saved, "config_path": config_path, "reused_python": True, "created_venv": False}
+            request = saved
+        paths = candidates(home)
         bases = []
         selected = None
         managed = str(home / SPEECH_ROOT / "runtime/venv/bin/python")
         for path in paths[:48]:
             require(not cancelled(), "cancelled")
-            result = probe(path, "mixed")  # metadata for either backend; never query GPU
+            result = probe(path)  # version and standard-library venv only
             if not python_usable(result):
                 continue
             # A managed partial runtime cannot bypass its completion record.
             # A manually created documented venv is reusable read-only, not adopted.
-            reusable = path != managed or unmanaged_runtime_venv(speech, path)
-            if reusable and (result["status"] == "ready" or
-                    path == request["python_path"] and existing_venv(path)):
+            if path == managed and unmanaged_runtime_venv(speech, path):
                 selected = path
                 break
             if path != managed:
@@ -791,7 +592,8 @@ def initialize(request, cancelled=lambda: False):
         # Explicit model/library values are references only: no file is loaded,
         # created, moved or repaired outside the application's managed root.
         config = {"python_path": selected, "model_dir": model, "native_lib": request["native_lib"]}
-        publish_initialize_json(speech, "config.json", {"schema_version": 1, "config": config}, cancelled)
+        if saved is None:
+            publish_initialize_json(speech, "config.json", {"schema_version": 1, "config": config}, cancelled)
         return {"config": config, "config_path": config_path,
                 "reused_python": not created, "created_venv": created}
     finally:
@@ -925,7 +727,7 @@ def main():
         print(json.dumps(value, ensure_ascii=True), flush=True)
     try:
         action = sys.argv[1:]
-        require(len(action) == 1 and action[0] in {"--resources-discover", "--resources-browse", "--resources-download", "--resources-initialize"})
+        require(len(action) == 1 and action[0] in {"--resources-browse", "--resources-download", "--resources-initialize"})
         line = sys.stdin.buffer.readline(16385)
         require(len(line) <= 16384)
         request = json.loads(line)
@@ -944,7 +746,7 @@ def main():
             result = (download(request, emit, cancelled.is_set) if action == ["--resources-download"] else
                       {"ok": True, "result": initialize(request, cancelled.is_set)})
         else:
-            result = {"ok": True, "result": (discover if action == ["--resources-discover"] else browse)(request)}
+            result = {"ok": True, "result": browse(request)}
     except Refused as error:
         result = {"ok": False, "error": str(error)}
     except BaseException:

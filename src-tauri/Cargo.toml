@@ -1,6 +1,6 @@
 [package]
 name = "dsh-wsl-desktop"
-version = "0.1.20"
+version = "0.1.21"
 description = "Windows launcher for DeepSeek Harness in WSL"
 edition = "2021"
 rust-version = "1.85"
@@ -37,7 +37,7 @@ base64 = "0.22"
 # Windows system TLS/certificate store; updater packages are direct NSIS EXEs, not legacy ZIPs.
 tauri-plugin-updater = { version = "2.14", default-features = false, features = ["native-tls", "system-proxy"] }
 open = "5"
-windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_System_Power"] }
+windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_System_Power", "Win32_Media_Audio"] }
 
 [dev-dependencies]
 base64 = "0.22"

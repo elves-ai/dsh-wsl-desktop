@@ -25,6 +25,7 @@ class Node extends EventTarget {
     for (const match of markup.matchAll(/<([a-z0-9]+)[^>]* id="([^"]+)"[^>]*>/g)) {
       const child = new Node(match[1], this.ownerDocument);
       child.hidden = /[ ]hidden(?:[ >])/.test(match[0]); child.disabled = /[ ]disabled(?:[ >])/.test(match[0]);
+      child.readOnly = /[ ]readonly(?:[ >])/.test(match[0]);
       this.ownerDocument.nodes.set(match[2], child); this.children.push(child);
     }
   }
@@ -37,11 +38,11 @@ class Node extends EventTarget {
   click() { if (!this.disabled) this.emit('click'); }
 }
 
-async function fixture({ initialize = () => initialized, cancel = () => undefined, pick = () => '/home/user' } = {}) {
+async function fixture({ initialize = () => initialized, cancel = () => undefined, pick = () => '/home/user', config = { model_dir: '', python_path: '', native_lib: '' } } = {}) {
   const document = { nodes: new Map(), createElement(tag) { return new Node(tag, this); } };
   const root = new Node('div', document), listeners = new Map(), calls = [], timers = new Map();
   let timer = 0, resolveRefresh, resources;
-  let snapshot = { revision: 0, configured: false, config: { model_dir: '', python_path: '', native_lib: '' },
+  let snapshot = { revision: 0, configured: false, config,
     distribution: 'Ubuntu', busy: false, operation: null, environment_state: 'unknown', models_state: 'unknown',
     model_progress: null, service_state: 'stopped', ownership: 'none', model_state: 'unloaded', gpu_name: null,
     message: '', error: null, logs: [] };
@@ -55,9 +56,9 @@ async function fixture({ initialize = () => initialized, cancel = () => undefine
       if (name === 'cancel_speech_initialization') return cancel();
       if (name === 'set_speech_preferences') return { revision: 1, initialized: true, auto_read: args.patch.auto_read, volume: 100 };
       if (name === 'get_speech_settings') return snapshot;
+      if (name === 'save_speech_config') { publish({ config: args.config, configured: true }); return snapshot; }
       if (name === 'get_speech_preferences') return { revision: 0, initialized: true, auto_read: false, volume: 100 };
       if (name === 'get_speech_download') return { id: 0, status: 'idle', model_dir: '', file: null, downloaded_bytes: 0, total_bytes: null, error: null };
-      if (name === 'discover_speech_resources') return { python_environments: [{ path: '/env/bin/python', version: '3.12.0', ready: true, status: 'ready' }], model_dir: '/models/q8', native_lib: '/lib/qwen.so', gpu: { vendor: 'amd', names: ['AMD Radeon'] } };
       if (name === 'pick_settings_path') return pick(args);
       if (name === 'speech_action' && args.action === 'refresh') {
         publish({ busy: true, operation: 'refresh' });
@@ -78,18 +79,58 @@ async function fixture({ initialize = () => initialized, cancel = () => undefine
   };
 }
 
+test('nested UI offers no manual Python input and migrates legacy configuration only through explicit initialization', async () => {
+  const legacy = { python_path: '/external/bin/python', model_dir: '/custom/models', native_lib: '/custom/lib.so' };
+  const f = await fixture({ config: legacy, initialize: () => ({ ...initialized, config: { ...legacy, python_path: initialized.config.python_path } }) });
+  try {
+    assert.equal(f.node('speech-python_path').readOnly, true);
+    assert.equal(f.node('speech-python_path').value, '');
+    assert.equal(f.node('speech-resource-python-browse'), undefined);
+    for (const id of ['python', 'gpu', 'found', 'discover', 'defaults']) assert.equal(f.node('speech-resource-' + id), undefined, id);
+    assert.equal(f.node('speech-python_path').value, '');
+    f.node('speech-resource-initialize').click(); await tick();
+    assert.equal(f.node('speech-python_path').value, initialized.config.python_path);
+    assert.equal(f.node('speech-model_dir').value, legacy.model_dir); assert.equal(f.node('speech-native_lib').value, legacy.native_lib);
+    // A later model edit must survive old configured paths delivered by background refresh.
+    f.node('speech-model_dir').value = '/later/models'; f.node('speech-model_dir').emit('input');
+    await f.poll(); await f.finishRefresh();
+    assert.equal(f.node('speech-model_dir').value, '/later/models'); assert.equal(f.node('speech-python_path').value, initialized.config.python_path);
+    f.node('speech-save').click(); await tick();
+    assert.deepEqual(f.calls.find(call => call.name === 'save_speech_config')?.args.config,
+      { ...legacy, python_path: initialized.config.python_path, model_dir: '/later/models' });
+    assert.equal(f.calls.some(call => call.name === 'pick_settings_path'), false);
+  } finally { f.settings.dispose(); }
+});
+
+test('missing managed default never carries a legacy external Python into save and initialization prepares only the default', async () => {
+  const legacy = { python_path: '/external/bin/python', model_dir: '/custom/models', native_lib: '/custom/lib.so' };
+  const f = await fixture({ config: legacy });
+  try {
+    assert.equal(f.node('speech-python_path').value, '');
+    assert.equal(f.node('speech-resource-initialize').disabled, false);
+    // Even synthetic input on the read-only compatibility field cannot save external Python.
+    f.node('speech-python_path').value = legacy.python_path; f.node('speech-python_path').emit('input');
+    f.node('speech-save').click(); await tick();
+    assert.equal(f.calls.some(call => call.name === 'save_speech_config'), false);
+    assert.match(f.node('speech-message').textContent, /固定使用托管默认路径/);
+    f.node('speech-resource-initialize').click(); await tick();
+    assert.equal(f.node('speech-python_path').value, initialized.config.python_path);
+    assert.equal(f.calls.some(call => call.name === 'save_speech_config' || call.name === 'pick_settings_path'), false);
+  } finally { f.settings.dispose(); }
+});
+
 test('actual nested resource controls stay enabled through repeated background refresh snapshots', async () => {
   const f = await fixture();
   try {
-    f.node('speech-resource-defaults').click();
-    assert.equal(f.node('speech-python_path').value, '/env/bin/python');
+    f.node('speech-resource-initialize').click(); await tick();
+    assert.equal(f.node('speech-python_path').value, initialized.config.python_path);
     const guidance = f.node('speech-resource-message').textContent;
     for (let i = 0; i < 4; i++) {
       await f.poll();
-      for (const id of ['python', 'discover', 'python-browse', 'defaults', 'model-browse', 'native-browse', 'download']) assert.equal(f.node('speech-resource-' + id).disabled, false, id);
+      for (const id of ['initialize', 'model-browse', 'native-browse', 'download']) assert.equal(f.node('speech-resource-' + id).disabled, false, id);
       assert.equal(f.node('speech-resource-message').textContent, guidance);
       assert.equal(f.node('speech-save').disabled, false);
-      f.node('speech-resource-python').value = '/env/bin/python'; f.node('speech-resource-python').emit('change');
+      assert.equal(f.node('speech-python_path').value, initialized.config.python_path);
       await f.finishRefresh();
     }
     assert.equal(f.calls.filter(call => call.args?.action === 'refresh').length, 4);
@@ -117,12 +158,12 @@ test('actual system picker locks parent actions and selected draft survives poll
 test('explicit initialization locks parent actions without recursive setBlocked and preserves later edits', async () => {
   const pending = deferred(); const f = await fixture({ initialize: () => pending.promise });
   try {
-    f.node('speech-resource-defaults').click(); f.publish({ configured: true });
+    f.publish({ configured: true });
     const draft = { python_path: f.node('speech-python_path').value, model_dir: f.node('speech-model_dir').value, native_lib: f.node('speech-native_lib').value };
     const count = f.calls.length; f.node('speech-resource-initialize').click();
     assert.equal(f.resources.isBusy(), true);
     for (const id of ['save', 'check', 'start', 'test', 'refresh']) { assert.equal(f.node('speech-' + id).disabled, true, id); f.node('speech-' + id).emit('click'); }
-    for (const id of ['initialize', 'discover', 'python-browse', 'model-browse', 'native-browse', 'download', 'download-cancel']) assert.equal(f.node('speech-resource-' + id).disabled, true, id);
+    for (const id of ['initialize', 'model-browse', 'native-browse', 'download', 'download-cancel']) assert.equal(f.node('speech-resource-' + id).disabled, true, id);
     assert.equal(f.node('speech-resource-initialize-cancel').disabled, false);
     assert.equal(f.node('speech-model_dir').disabled, false);
     f.node('speech-model_dir').value = '/later/models'; f.node('speech-model_dir').emit('input');
@@ -139,15 +180,19 @@ test('explicit initialization locks parent actions without recursive setBlocked 
   } finally { f.settings.dispose(); }
 });
 
-test('opening, refreshing and toggling auto-read never implicitly initialize or cancel', async () => {
+test('opening, reopening, polling and auto-read never discover resources, probe Python or implicitly initialize', async () => {
   const f = await fixture();
   try {
     await f.poll(); await f.finishRefresh();
     f.node('speech-auto').checked = true; f.node('speech-auto').emit('change'); await tick();
     assert.equal(f.node('speech-auto').checked, true);
-    assert.equal(f.calls.some(call => ['initialize_speech_environment', 'cancel_speech_initialization', 'save_speech_config', 'download_speech_model'].includes(call.name) || ['check', 'start'].includes(call.args?.action)), false);
     f.settings.setVisible(false); f.settings.setVisible(true); await tick();
-    assert.equal(f.calls.some(call => call.name === 'initialize_speech_environment'), false);
+    await f.poll(); await f.finishRefresh();
+    f.node('speech-refresh').click(); await tick(); await f.finishRefresh();
+    assert.ok(f.calls.every(call => ['get_speech_settings', 'get_speech_preferences', 'get_speech_download', 'set_speech_preferences'].includes(call.name) || call.name === 'speech_action' && call.args.action === 'refresh'), JSON.stringify(f.calls));
+    assert.equal(f.calls.some(call => call.name === 'discover_speech_resources' || /python|runtime_check/.test(call.name) || ['check', 'start'].includes(call.args?.action)), false);
+    assert.equal(f.node('speech-python_path').value, '');
+    assert.equal(f.node('speech-resource-initialize').disabled, false);
   } finally { f.settings.dispose(); }
 });
 
@@ -160,7 +205,7 @@ test('parent hide cancels initialization and old success does not refill or unlo
     f.settings.setVisible(true); await tick(); f.node('speech-resource-initialize').click();
     first.resolve(initialized); await tick();
     assert.equal(f.node('speech-python_path').value, ''); assert.equal(f.resources.isBusy(), true);
-    assert.equal(f.node('speech-resource-discover').disabled, true);
+    assert.equal(f.node('speech-resource-initialize').disabled, true);
     second.resolve(initialized); await tick(); assert.equal(f.resources.isBusy(), false);
     assert.equal(f.node('speech-python_path').value, initialized.config.python_path);
   } finally { f.settings.dispose(); }

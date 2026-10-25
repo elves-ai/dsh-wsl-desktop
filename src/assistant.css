@@ -1,3 +1,5 @@
+@import "./ui-tokens.css";
+
 :root { font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; color: #233750; font-size: 13px; font-synthesis: none; background: transparent; }
 * { box-sizing: border-box; }
 html, body, #assistant-root { width: 100%; height: 100%; margin: 0; }
@@ -84,16 +86,31 @@ textarea::placeholder { color: #9dabbc; }
 .pet-credit { color: #587b9e; text-decoration: none; }
 .pet-credit:hover { text-decoration: underline; }
 .asset-license { color: #8793a0; font-size: 8px; }
-.pet-menu { position: absolute; z-index: 10; top: 6px; left: calc(6px + var(--pet-visible-left, 0px)); width: 172px; max-width: calc(100% - var(--pet-visible-left, 0px) - var(--pet-visible-right, 0px) - 12px); max-height: calc(100% - 12px); overflow: visible; padding: 4px; border: 1px solid #d5e1ef; border-radius: 9px; background: #f8fcfffa; box-shadow: 0 4px 16px #24496a2b; font-size: 12px; }
-.pet-menu-header { display: flex; align-items: center; justify-content: space-between; padding-left: 7px; height: 24px; color: #7991aa; font-size: 10px; }
-.pet-menu-close { width: 24px; height: 24px; padding: 0; font-size: 18px; line-height: 24px; background: transparent; }
-.pet-menu > button { display: block; width: 100%; min-height: 27px; padding: 5px 8px; border-radius: 5px; background: transparent; text-align: left; font-size: 12px; }
-.pet-menu > button:hover, .pet-menu-close:hover { background: #e5eef9; }
-.pet-menu-animation { display: flex; align-items: center; gap: 5px; padding: 3px 7px; font-size: 10px; color: #6a819b; }
+/* Menu geometry stays inside the existing transparent pet window. */
+.pet-menu { position: absolute; z-index: 10; top: 6px; left: calc(6px + var(--pet-visible-left, 0px)); width: 196px; max-width: calc(100% - var(--pet-visible-left, 0px) - var(--pet-visible-right, 0px) - 12px); max-height: calc(100% - 12px); overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--ui-border) var(--ui-bg); padding: var(--ui-space-1); border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); background: var(--ui-bg); color: var(--ui-text); box-shadow: 0 4px 12px #0000001f; font: 12px/18px var(--ui-font); color-scheme: light; }
+.pet-menu-header { display: flex; align-items: center; justify-content: space-between; padding-left: var(--ui-space-2); height: 24px; color: var(--ui-secondary); font-size: 11px; line-height: 16px; }
+.pet-menu button { border-radius: var(--ui-radius); background: transparent; color: inherit; transition: background var(--ui-duration), color var(--ui-duration); }
+.pet-menu-close { display: grid; place-items: center; width: 24px; height: 24px; flex-shrink: 0; padding: 0; }
+.pet-menu > button, .pet-menu-animation { display: flex; align-items: center; gap: var(--ui-space-2); width: 100%; height: 26px; min-width: 0; padding: 0 var(--ui-space-2); text-align: left; font-size: 12px; line-height: 18px; }
+.pet-menu button:hover:not(:disabled), .pet-menu select:hover:not(:disabled) { background: var(--ui-hover); }
+.pet-menu button:active:not(:disabled) { background: var(--ui-selected); }
+.pet-menu button:disabled { color: var(--ui-muted); opacity: 1; cursor: default; }
+.pet-menu button:focus-visible, .pet-menu select:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: -2px; }
+.pet-menu-icon { display: block; width: 16px; height: 16px; flex: 0 0 16px; pointer-events: none; }
+.pet-menu-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pet-menu-separator { height: 1px; margin: var(--ui-space-1) var(--ui-space-2); border: 0; background: var(--ui-line); }
 .pet-menu-animation > span { flex-shrink: 0; }
-.pet-menu select { flex: 1; min-width: 0; border: 1px solid #d5e3f2; border-radius: 5px; padding: 4px; background: white; font-size: 11px; }
-#pet-topmost[aria-checked="true"] { background: #edf4fd; color: #276baf; }
-#pet-topmost[aria-checked="true"]::after { content: '✓'; float: right; }
+.pet-menu select { flex: 1; min-width: 0; height: 24px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius); padding: 0 var(--ui-space-1); background: var(--ui-field); color: var(--ui-text); font: inherit; transition: background var(--ui-duration), border-color var(--ui-duration); }
+.pet-menu-indicator { position: relative; display: grid; place-items: center; width: 16px; height: 16px; flex: 0 0 16px; color: var(--ui-secondary); }
+.pet-menu-indicator > svg { visibility: hidden; }
+.pet-menu [aria-checked="true"] .pet-menu-indicator > svg { visibility: visible; }
+.pet-menu [data-state="unknown"] .pet-menu-indicator::after { content: '?'; }
+.pet-menu [data-state="unavailable"] .pet-menu-indicator::after { content: '—'; }
+.pet-menu [data-state="error"] .pet-menu-indicator { width: 48px; flex-basis: 48px; font-size: 11px; }
+.pet-menu [data-state="error"] .pet-menu-indicator::after { content: '保存失败'; color: var(--ui-error); }
+.pet-menu [aria-busy="true"] .pet-menu-indicator::after { content: '…'; }
+.pet-menu .pet-menu-indicator::after { position: absolute; inset: 0; text-align: center; line-height: 16px; }
+.pet-menu [data-state="error"] .pet-menu-indicator > svg, .pet-menu [data-state="unavailable"] .pet-menu-indicator > svg, .pet-menu [aria-busy="true"] .pet-menu-indicator > svg { visibility: hidden; }
 .pet-notice { position: absolute; z-index: 12; top: 2px; left: calc(10px + var(--pet-visible-left, 0px)); right: calc(10px + var(--pet-visible-right, 0px)); font-size: 10px; color: #9d5445; background: #fff2edf5; border-radius: 7px; padding: 5px; margin: 0; max-height: 50px; overflow: auto; overflow-wrap: anywhere; }
 [data-view=pet] .preview { font-size: 9px; border-radius: 7px; padding: 3px; }
 @keyframes pulse { 50% { opacity: .4; } }
@@ -131,7 +148,6 @@ textarea::placeholder { color: #9dabbc; }
 #pet-enable { width: 100%; background: #eaf4ff; color: #3f78b5; font-size: 12px; }
 .pet-dialogue[data-input-open=true] .pet-speech { padding-top: 3px; padding-bottom: 4px; }
 .pet-dialogue[data-input-open=true] .pet-speech-text { -webkit-line-clamp: 2; }
-#pet-auto-read[aria-checked=true] { background: #edf4fd; color: #276baf; }
 .pet-read-status { margin: 3px 0 0; flex-shrink: 0; max-height: 32px; overflow: auto; font-size: 10px; line-height: 1.5; color: #8b6c49; overflow-wrap: anywhere; user-select: text; }
 [data-speaking=true] .pet-media { animation: pet-speaking .55s ease-in-out infinite alternate; }
 [data-narrating=true] #pet-read { color: #276baf; font-weight: 600; }

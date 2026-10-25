@@ -30,7 +30,8 @@ function fixture(options={}) {
     contains(target){return target===this||target===child;},
     getBoundingClientRect(){measured++;const left=this.style.left===undefined?20:parseFloat(this.style.left)+10;
       const top=this.style.top===undefined?30:parseFloat(this.style.top)+20;
-      return box(left,top,Math.min(172,parseFloat(this.style.maxWidth)||172),Math.min(100,parseFloat(this.style.maxHeight)||100));},
+      const width=options.menuWidth??172,height=options.menuHeight??100;
+      return box(left,top,Math.min(width,parseFloat(this.style.maxWidth)||width),Math.min(height,parseFloat(this.style.maxHeight)||height));},
   };
   const controller=new PetMenuController(menu,{clock,onChange:open=>changes.push(open),...options});
   return {controller,menu,child,document,view,clock,changes,parent,get measured(){return measured;},get parentReads(){return parentReads;}};
@@ -99,6 +100,20 @@ test('invalid pointer pair falls back to bounds center and parentElement origin 
   const f=fixture();f.menu.offsetParent=null;f.controller.toggle(NaN,20);f.controller.position(bounds);
   assert.equal(f.menu.style.left,'170px');assert.equal(f.menu.style.top,'126px');assert.equal(f.parentReads,1);f.controller.dispose();
 });
+test('polished 196px menu fits all corners of 360x320 and caps tiny visible bounds',()=>{
+  // Explicit rendered-size inputs: this mock does not evaluate CSS.
+  for(const [x,y] of [[6,6],[354,6],[6,314],[354,314]]) {
+    const f=fixture({menuWidth:196,menuHeight:286});
+    f.controller.toggle(x,y);f.controller.position({x:6,y:6,width:348,height:308},{x:0,y:0});
+    const left=parseFloat(f.menu.style.left),top=parseFloat(f.menu.style.top);
+    assert.ok(left>=6&&left+196<=354);assert.ok(top>=6&&top+286<=314);
+    f.controller.position({x:112,y:6,width:140,height:100},{x:0,y:0});
+    assert.equal(f.menu.style.maxWidth,'140px');assert.equal(f.menu.style.maxHeight,'100px');
+    assert.equal(f.menu.style.left,'112px');assert.equal(f.menu.style.top,'6px');
+    f.controller.dispose();
+  }
+});
+
 test('hidden or closed positioning does no layout reads or writes',()=>{
   const f=fixture();f.controller.position(bounds);assert.equal(f.measured,0);assert.equal(f.parentReads,0);assert.deepEqual(f.menu.style,{});
   f.controller.toggle();f.menu.hidden=true;f.controller.position(bounds);assert.equal(f.measured,0);assert.deepEqual(f.menu.style,{});f.controller.dispose();

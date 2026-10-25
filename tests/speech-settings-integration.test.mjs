@@ -10,12 +10,13 @@ test('speech settings management and pet preferences have separate exact local c
  assert.equal(settings.local,true);assert.equal(settings.remote,undefined);assert.deepEqual(settings.webviews,['launcher-settings','dsh-settings']);
  assert.deepEqual(pet.webviews,['assistant-pet']);assert.equal(pet.local,true);assert.equal(pet.remote,undefined);
  assert.deepEqual(pet.permissions,['allow-get-speech-preferences','allow-set-speech-preferences']);
- for(const name of ['get_speech_settings','save_speech_config','speech_action','get_speech_preferences','set_speech_preferences','test_speech','cancel_speech_test','discover_speech_resources','download_speech_model','cancel_speech_download','get_speech_download']){
+ for(const name of ['get_speech_settings','save_speech_config','speech_action','get_speech_preferences','set_speech_preferences','test_speech','cancel_speech_test','download_speech_model','cancel_speech_download','get_speech_download']){
   assert.ok(settings.permissions.includes('allow-'+name.replaceAll('_','-')));
   assert.ok(read('src-tauri/build.rs').includes('"'+name+'"'));
   assert.ok(read('src-tauri/src/desktop.rs').includes('speech_settings::'+name));
  }
- for(const p of settings.permissions)assert.doesNotMatch(p,/shell|http|fs|perform-action|set-project/);
+ for(const p of settings.permissions)assert.doesNotMatch(p,/shell|http|fs|perform-action|set-project|discover-speech-resources/);
+ assert.doesNotMatch(read('src-tauri/build.rs')+read('src-tauri/src/desktop.rs'),/discover_speech_resources/);
 });
 test('speech settings stay in the current trusted settings navigation and not the titlebar',()=>{
  const main=read('src/main.ts');
@@ -31,9 +32,10 @@ test('speech settings stay in the current trusted settings navigation and not th
 });
 test('native speech management guards settings callers and auditions only fixed text',()=>{
  const s=read('src-tauri/src/desktop_speech_settings.rs');
+ assert.doesNotMatch(s,/discover_speech_resources/);
  assert.ok(s.includes('settings_page::label(view.window().label())'));
  assert.ok(s.includes('settings_page::is_active(view.window().label())'));
- for(const name of ['get_speech_settings','save_speech_config','speech_action','test_speech','cancel_speech_test','discover_speech_resources','download_speech_model','cancel_speech_download','get_speech_download']){
+ for(const name of ['get_speech_settings','save_speech_config','speech_action','test_speech','cancel_speech_test','download_speech_model','cancel_speech_download','get_speech_download']){
   const from=s.indexOf('fn '+name+'(');assert.ok(from>=0,name);
   const body=s.slice(from,s.indexOf('#[tauri::command]',from+4)<0?undefined:s.indexOf('#[tauri::command]',from+4));
   assert.ok(body.includes('assert_page(&view,'),name+' exact trusted settings guard');

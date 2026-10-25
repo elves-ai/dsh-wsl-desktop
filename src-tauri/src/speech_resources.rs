@@ -6,50 +6,6 @@ use crate::speech_settings::{Cancellation, Manager as SpeechManager, SpeechConfi
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Condvar, Mutex};
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum GpuVendor {
-    Amd,
-    Nvidia,
-    Mixed,
-    Intel,
-    Unknown,
-}
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct GpuDiscovery {
-    pub vendor: GpuVendor,
-    pub names: Vec<String>,
-}
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum PythonStatus {
-    Ready,
-    PythonTooOld,
-    MissingRocmSdk,
-    MissingCudaRuntime,
-    MissingGpuRuntime,
-    UnsupportedBackend,
-    GpuUnknown,
-    UnsupportedGpu,
-    ProbeFailed,
-}
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct PythonEnvironment {
-    pub path: String,
-    pub version: String,
-    pub ready: bool,
-    pub status: PythonStatus,
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Discovery {
-    pub gpu: GpuDiscovery,
-    pub python_environments: Vec<PythonEnvironment>,
-    pub model_dir: String,
-    pub native_lib: String,
-}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Initialization {
@@ -61,6 +17,7 @@ pub struct Initialization {
 impl Initialization {
     fn validate(&self) -> Result<(), String> {
         validate_path(&self.config.python_path, false)?;
+        crate::speech_settings::validate_python_path(&self.config.python_path)?;
         validate_path(&self.config.model_dir, false)?;
         if !self.config.native_lib.is_empty() {
             validate_path(&self.config.native_lib, false)?;
@@ -81,7 +38,6 @@ impl Initialization {
 #[serde(rename_all = "snake_case")]
 pub enum PathKind {
     ModelDir,
-    PythonPath,
     NativeLib,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -135,10 +91,9 @@ pub fn validate_path(value: &str, root: bool) -> Result<(), String> {
         model_dir: value.into(),
         native_lib: value.into(),
     }
-    .validate()
+    .validate_paths()
 }
 pub trait Runtime: Send + Sync + 'static {
-    fn discover(&self, config: &SpeechConfig) -> Result<Discovery, String>;
     fn browse(&self, path: Option<String>, kind: PathKind) -> Result<Directory, String>;
     fn initialize(
         &self,
@@ -201,9 +156,6 @@ impl Manager {
                 }),
             }),
         }
-    }
-    pub fn discover(&self, config: &SpeechConfig) -> Result<Discovery, String> {
-        self.shared.runtime.discover(config)
     }
     pub fn browse(&self, path: Option<String>, kind: PathKind) -> Result<Directory, String> {
         if let Some(path) = &path {

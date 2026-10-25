@@ -3,6 +3,33 @@ fn fixture() -> Config {
     Config::parse(br#"{"Distribution":"Ubuntu","LinuxUser":"user","LinuxLauncher":"/home/user/dsh","LinuxConfig":"/home/user/config.json"}"#).unwrap()
 }
 #[test]
+fn default_python_failure_guides_initialization_without_leaking_paths() {
+    let result = WslSpeechRuntime::parse_inspection(&json!({
+        "kind":"result", "environment_ok":false, "models_ok":false,
+        "gpu_name":null, "error_code":"default_python_required"
+    }))
+    .unwrap();
+    assert!(result.error.unwrap().contains("初始化默认语音环境"));
+}
+#[test]
+fn inspect_and_start_refuse_external_python_before_any_wsl_transport() {
+    let runtime = WslSpeechRuntime::new(Arc::new(|| panic!("must not access WSL"))).unwrap();
+    let config = SpeechConfig {
+        python_path: "/usr/bin/python3".into(),
+        model_dir: "/manual/models".into(),
+        native_lib: "/manual/libqwen.so".into(),
+    };
+    assert!(runtime
+        .inspect(&config, &Cancellation::default(), &|_| {})
+        .unwrap_err()
+        .contains("初始化"));
+    assert!(runtime
+        .start(&config, &Cancellation::default())
+        .err()
+        .unwrap()
+        .contains("初始化"));
+}
+#[test]
 fn status_is_not_model_readiness_and_non_gpu_is_not_ready() {
     let identity = json!({"service":"dsh-pet-qwen","protocol":1,"voice_id":"pet-airhead-v1"});
     let old = WslSpeechRuntime::parse_status(&identity);

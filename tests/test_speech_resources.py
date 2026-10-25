@@ -81,8 +81,8 @@ class ResourcesTests(unittest.TestCase):
         os.mkfifo(self.root / "fifo")
         model = resources.browse({"path": str(self.root), "kind": "model_dir"})
         self.assertEqual([x["name"] for x in model["entries"]], ["directory"])
-        python = resources.browse({"path": str(self.root), "kind": "python_path"})
-        self.assertEqual([x["name"] for x in python["entries"]], ["directory", "python3"])
+        with self.assertRaisesRegex(resources.Refused, "^invalid_request$"):
+            resources.browse({"path": str(self.root), "kind": "python_path"})
         native = resources.browse({"path": str(self.root), "kind": "native_lib"})
         self.assertEqual([x["name"] for x in native["entries"]], ["directory", "libqwen.so"])
         self.assertEqual(native["parent"], str(self.root.parent))
@@ -225,190 +225,146 @@ class ResourcesTests(unittest.TestCase):
             with self.subTest(url=url), self.assertRaises(resources.Refused):
                 resources.trusted_url(url)
 
-    def test_candidate_venv_conda_path_and_no_recursive_scan(self):
+    def test_candidates_only_check_default_and_fixed_system_bases(self):
         paths = [self.root / ".venv/bin/python", self.root / "miniconda3/envs/tts/bin/python",
                  self.root / "project/.venv/bin/python", self.root / "custom/bin/python3"]
         for path in paths:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.symlink_to(sys.executable)
-        result = resources.candidates(self.root, {"PATH": str(paths[-1].parent)})
-        for path in paths:
-            self.assertIn(str(path), result)
-        self.assertLessEqual(len(result), 48)
+        expected = [str(self.root / resources.SPEECH_ROOT / "runtime/venv/bin/python"),
+                    "/usr/bin/python3", "/usr/local/bin/python3"]
+        environ = {"PATH": str(paths[-1].parent), "VIRTUAL_ENV": str(paths[0].parent.parent),
+                   "CONDA_PREFIX": str(paths[1].parent.parent)}
+        with patch.dict(os.environ, environ), \
+             patch.object(resources.os.path, "isfile", return_value=True) as isfile, \
+             patch.object(resources.os, "access", return_value=True), \
+             patch.object(resources.Path, "iterdir", side_effect=AssertionError("no scan")), \
+             patch("shutil.which", side_effect=AssertionError("no PATH lookup")):
+            result = resources.candidates(self.root)
+        self.assertEqual(result, expected)
+        self.assertEqual([call.args[0] for call in isfile.call_args_list], expected)
+        self.assertTrue(all(path.is_symlink() for path in paths))
 
-    def test_readiness_reads_metadata_without_import_or_site_hooks(self):
-        binary = self.root / "venv/bin/python"
-        binary.parent.mkdir(parents=True)
-        binary.symlink_to(sys.executable)
-        packages = self.root / "venv/lib" / ("python%d.%d" % sys.version_info[:2]) / "site-packages"
-        metadata = packages / "rocm_sdk-1.0.dist-info"
-        metadata.mkdir(parents=True)
-        (metadata / "METADATA").write_text("Name: rocm-sdk\nVersion: 1.0\n")
-        (packages / "rocm_sdk.py").write_text("raise Exception('must not import')")
-        (packages / "poison.pth").write_text("import pathlib; pathlib.Path(%r).touch()" % str(self.root / "poison"))
-        result = resources.probe(str(binary), "amd")
-        self.assertTrue(result["ready"])
+    def test_probe_requires_only_modern_python_and_stdlib_venv(self):
+        for version, expected in (("3.9.9", "python_too_old"), ("3.10.0", "ready"), ("3.14.4", "ready")):
+            with self.subTest(version=version):
+                self.assertEqual(resources.python_status(version), expected)
+                self.assertEqual(resources.python_usable({"status": expected}), expected == "ready")
+        self.assertFalse(resources.python_usable({"status": "probe_failed"}))
+        result = resources.probe(sys.executable)
         self.assertEqual(result["status"], "ready")
-        for vendor, status in [("nvidia", "missing_cuda_runtime"), ("unknown", "gpu_unknown"), ("intel", "unsupported_gpu")]:
-            checked = resources.probe(str(binary), vendor)
-            self.assertEqual(checked["status"], status)
-            self.assertFalse(checked["ready"])
+        self.assertTrue(result["ready"])
         self.assertRegex(result["version"], r"^\d+\.\d+\.\d+$")
-        self.assertFalse((self.root / "poison").exists())
 
-    def test_readiness_recognizes_rocm_10_core_metadata_without_import(self):
-        binary = self.root / "venv/bin/python"
-        binary.parent.mkdir(parents=True)
-        binary.symlink_to(sys.executable)
-        packages = self.root / "venv/lib" / ("python%d.%d" % sys.version_info[:2]) / "site-packages"
-        metadata = packages / "rocm_sdk_core-10.1.0.dist-info"
-        metadata.mkdir(parents=True)
-        (metadata / "METADATA").write_text("Name: rocm-sdk-core\nVersion: 10.1.0\n")
-        (packages / "rocm_sdk.py").write_text("raise Exception('must not import')")
-        (packages / "poison.pth").write_text("import pathlib; pathlib.Path(%r).touch()" % str(self.root / "poison"))
-        result = resources.probe(str(binary), "amd")
-        self.assertTrue(result["ready"])
-        self.assertEqual(result["status"], "ready")
-        self.assertFalse((self.root / "poison").exists())
-
-    def test_probe_requires_sdk_core_not_just_other_rocm_components(self):
-        from contextlib import redirect_stdout
-        import importlib.metadata
-        from types import SimpleNamespace
-
-        for names, expected in (([], False), (["rocm"], False),
-                                (["rocm-sdk-libraries", "rocm-sdk-devel"], False),
-                                (["rocm-sdk-core"], True), (["rocm_sdk_core"], True),
-                                (["rocm-sdk"], True)):
-            with self.subTest(names=names):
-                distributions = [SimpleNamespace(metadata={"Name": name}) for name in names]
-                output = io.StringIO()
-                with patch.object(importlib.metadata, "distributions", return_value=distributions), redirect_stdout(output):
-                    exec(resources.PROBE, {})
-                self.assertEqual(json.loads(output.getvalue())["rocm_sdk"], expected)
-
-    def metadata_probe(self, names=(), files=(), environ=None):
-        from contextlib import redirect_stdout
-        import importlib.metadata
-        from types import SimpleNamespace
-        output = io.StringIO()
-        distributions = [SimpleNamespace(metadata={"Name": name}) for name in names]
-        with patch.object(importlib.metadata, "distributions", return_value=distributions), \
-             patch.object(os.path, "isfile", side_effect=lambda p: p in files), \
-             patch.dict(os.environ, environ or {}, clear=True), redirect_stdout(output):
-            exec(resources.PROBE, {})
-        return json.loads(output.getvalue())
-
-    def test_cuda_metadata_requires_complete_same_major_runtime_not_torch(self):
-        cases = [([], False), (["torch", "cuda-python"], False),
-                 (["nvidia-cuda-runtime-cu12"], False), (["nvidia-cublas-cu12"], False),
-                 (["nvidia-cuda-runtime-cu12", "nvidia-cublas-cu13"], False),
-                 (["nvidia-cuda-runtime-cu12", "nvidia-cublas-cu12"], True),
-                 (["nvidia_cuda_runtime_cu13", "nvidia_cublas_cu13"], True)]
-        for names, expected in cases:
-            with self.subTest(names=names):
-                value = self.metadata_probe(names)
-                self.assertEqual(value["cuda_runtime"], expected)
-                self.assertEqual(resources.python_status("3.12.1", False, "nvidia", expected),
-                                 "ready" if expected else "missing_cuda_runtime")
-
-    def test_cuda_system_library_discovery_only_checks_filenames(self):
-        root = str(self.root / "cuda ; $(touch never)")
-        files = [root + "/lib64/libcudart.so.12", root + "/lib64/libcublas.so.12",
-                 root + "/lib64/libcublasLt.so.12"]
-        for key in ("CUDA_HOME", "CUDA_PATH", "CUDAToolkit_ROOT"):
-            with self.subTest(key=key):
-                self.assertTrue(self.metadata_probe(files=files, environ={key: root})["cuda_runtime"])
-        self.assertTrue(self.metadata_probe(files=files, environ={"LD_LIBRARY_PATH": root + "/lib64"})["cuda_runtime"])
-        for bad in (files[:1], files[:2], [files[0], files[2], root + "/lib64/libcublas.so.13"],
-                    [root + "/stubs/libcudart.so.12", root + "/stubs/libcublas.so.12"]):
-            self.assertFalse(self.metadata_probe(files=bad, environ={"CUDA_HOME": root,
-                             "LD_LIBRARY_PATH": root + "/stubs"})["cuda_runtime"])
-
-    def test_cuda_probe_forwards_explicit_toolkit_path_without_loading_fake_libraries(self):
-        selected = self.environment(venv=True)
-        root = self.root / "CUDA toolkit ; not a shell"
-        libs = root / "lib64"
-        libs.mkdir(parents=True)
-        for name in ("cudart", "cublas", "cublasLt"):
-            (libs / ("lib" + name + ".so.12")).write_bytes(b"not a real shared library")
-        with patch.dict(os.environ, {"CUDA_HOME": str(root)}):
-            result = resources.probe(selected, "nvidia")
-        self.assertEqual(result["status"], "ready")
-        self.assertTrue(result["ready"])
-
-    def test_cuda_probe_skips_gpu_imports_and_site_hooks(self):
-        selected = self.environment(venv=True)
+    def test_probe_and_initialize_skip_gpu_metadata_libraries_imports_and_site_hooks(self):
+        selected = self.managed_environment(sdk=True)
         packages = Path(selected).parent.parent / "lib" / ("python%d.%d" % sys.version_info[:2]) / "site-packages"
+        for name in ("nvidia", "torch"):
+            (packages / (name + ".py")).write_text("raise AssertionError('must not import GPU')")
         for name in ("nvidia-cuda-runtime-cu12", "nvidia-cublas-cu12"):
             metadata = packages / (name + "-1.0.dist-info")
-            metadata.mkdir(parents=True)
+            metadata.mkdir()
             (metadata / "METADATA").write_text("Name: " + name + "\nVersion: 1.0\n")
-        (packages / "nvidia.py").write_text("raise AssertionError('must not import GPU')")
-        (packages / "torch.py").write_text("raise AssertionError('must not import torch')")
-        (packages / "poison.pth").write_text("import pathlib; pathlib.Path(%r).touch()" % str(self.root / "poison"))
-        for vendor, ready in (("nvidia", True), ("mixed", True), ("amd", False),
-                              ("unknown", False), ("intel", False)):
-            result = resources.probe(selected, vendor)
-            self.assertEqual(result["ready"], ready)
-        self.assertFalse((self.root / "poison").exists())
-        with patch.object(resources, "candidates", return_value=[selected]), \
-             patch.object(resources, "detect_gpu", side_effect=AssertionError("no GPU query")), \
-             patch.object(resources, "run_initialize", side_effect=AssertionError("read-only reuse")):
+        guard = """
+import sys
+
+def guard(event, args):
+    if event.startswith('socket.') or event == 'ctypes.dlopen':
+        raise AssertionError('no network or native libraries')
+    if event == 'import' and (args[0].split('.')[0] in {'torch', 'nvidia', 'rocm_sdk'} or args[0] == 'importlib.metadata'):
+        raise AssertionError('no GPU imports or metadata')
+    if event in {'open', 'os.listdir', 'os.scandir', 'glob.glob'} and args:
+        path = str(args[0])
+        if any(part in path for part in ('site-packages', '.dist-info', '/sys/bus/pci', '/usr/local/cuda', 'libcudart', 'libcublas', '/opt/rocm')):
+            raise AssertionError('no package or GPU scan')
+sys.addaudithook(guard)
+"""
+        environment = {key: str(packages) for key in ("PYTHONPATH", "CUDA_HOME", "CUDA_PATH", "CUDAToolkit_ROOT", "LD_LIBRARY_PATH")}
+        with patch.dict(os.environ, environment), \
+             patch.object(resources, "PROBE", guard + resources.PROBE), \
+             patch.object(resources.subprocess, "Popen", wraps=subprocess.Popen) as popen, \
+             patch.object(resources, "run_initialize", side_effect=AssertionError("read-only reuse")), \
+             patch.object(resources, "opener", side_effect=AssertionError("offline only")):
+            checked = resources.probe(selected)
+            self.assertEqual(checked["status"], "ready")
             result = self.initialize()
         self.assertTrue(result["reused_python"])
         self.assertEqual(result["config"]["python_path"], selected)
+        for call in popen.call_args_list:
+            self.assertEqual(call.args[0][1:5], ["-I", "-S", "-B", "-c"])
+            self.assertEqual(call.kwargs["env"], {"PATH": "/usr/bin:/bin", "HOME": str(self.root)})
+        self.assertFalse((self.root / "poison").exists())
 
-    def test_mixed_status_accepts_either_backend_but_not_unknown_or_intel(self):
-        for rocm in (False, True):
-            for cuda in (False, True):
-                with self.subTest(rocm=rocm, cuda=cuda):
-                    self.assertEqual(resources.python_status("3.12.1", rocm, "mixed", cuda),
-                                     "ready" if rocm or cuda else "missing_gpu_runtime")
-                    for vendor, status in (("unknown", "gpu_unknown"), ("intel", "unsupported_gpu")):
-                        self.assertEqual(resources.python_status("3.12.1", rocm, vendor, cuda), status)
-        self.assertEqual(resources.python_status("3.9.9", True, "nvidia", True), "python_too_old")
+    def test_probe_old_broken_malformed_and_missing_venv_fail_closed(self):
+        binary = self.root / "python-fixture"
+        cases = [("print('{\"version\":\"3.9.9\"}')", "python_too_old"),
+                 ("print('private output'); raise SystemExit(1)", "probe_failed"),
+                 ("print('{\"version\":\"broken\"}')", "probe_failed"),
+                 ("print('x' * 12000)", "probe_failed"),
+                 ("import time; time.sleep(10)", "probe_failed")]
+        for body, status in cases:
+            with self.subTest(body=body):
+                binary.write_text("#!" + sys.executable + "\n" + body + "\n")
+                binary.chmod(0o700)
+                result = resources.probe(str(binary))
+                self.assertEqual(result["status"], status)
+                self.assertFalse(result["ready"])
+                self.assertNotIn("private", json.dumps(result))
+        no_venv = """
+import sys
+class NoVenv:
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == 'venv':
+            raise ModuleNotFoundError('fixture: venv unavailable')
+sys.meta_path.insert(0, NoVenv())
+"""
+        with patch.object(resources, "PROBE", no_venv + resources.PROBE):
+            self.assertEqual(resources.probe(sys.executable)["status"], "probe_failed")
 
-    def test_initialize_python_usability_is_not_gpu_dependency_readiness(self):
-        for status in ("missing_cuda_runtime", "missing_gpu_runtime", "gpu_unknown"):
-            self.assertTrue(resources.python_usable({"status": status}))
-        for status in ("python_too_old", "probe_failed"):
-            self.assertFalse(resources.python_usable({"status": status}))
+    def test_removed_discovery_command_cannot_read_config_scan_or_run(self):
+        external = self.environment(sdk=True, venv=True)
+        config = self.legacy_config(external)
+        original = config.read_bytes()
+        body = ("defused=lambda *a,**kw: (_ for _ in ()).throw(AssertionError('no discovery')); "
+                "m.candidates=defused; m.probe=defused; m.read_initialize_json=defused; "
+                "m.browse=defused; m.initialize=defused; m.download=defused")
+        for request in (b'{}', json.dumps({"python_path": external, "model_dir": "", "native_lib": ""}).encode()):
+            with self.subTest(request=request):
+                result = subprocess.run([sys.executable, "-B", "-c", self._held_runner(body), "--resources-discover"],
+                                        input=request, capture_output=True, timeout=5)
+                self.assertEqual(result.returncode, 0)
+                self.assertEqual(json.loads(result.stdout), {"ok": False, "error": "invalid_request"})
+                self.assertEqual(result.stderr, b"")
+        for name in ("discover", "detect_gpu", "gpu_command", "gpu_vendor", "initialized_config"):
+            self.assertFalse(hasattr(resources, name))
+        self.assertEqual(config.read_bytes(), original)
+        self.assertFalse((config.parent / "runtime").exists())
+        self.assertFalse((self.root / "poison").exists())
 
-    def test_discover_preserves_config_and_no_network(self):
-        config = {"python_path": "", "model_dir": str(self.root / "selected"), "native_lib": str(self.root / "libqwen.so")}
-        with patch.object(resources, "candidates", return_value=[]), patch.object(resources, "opener", side_effect=AssertionError), \
-             patch.object(resources, "detect_gpu", return_value={"vendor": "unknown", "names": []}):
-            result = resources.discover(config)
-        self.assertEqual(result["model_dir"], config["model_dir"])
-        self.assertEqual(result["native_lib"], config["native_lib"])
+    def test_initialize_creates_default_instead_of_reusing_external_project_venv(self):
+        external = self.environment(sdk=True, venv=True, name="work/project/.tools/qwen-rocm-wsl/venv")
+        with patch.object(resources, "candidates", return_value=[sys.executable]), \
+             patch.object(resources, "probe", return_value={"status": "ready"}), \
+             patch.object(resources, "run_initialize", side_effect=self.fake_initialize_run):
+            result = self.initialize(python_path=external)
+        self.assertTrue(result["created_venv"])
+        self.assertEqual(result["config"]["python_path"],
+                         str(self.root / resources.SPEECH_ROOT / "runtime/venv/bin/python"))
+        self.assertTrue(Path(external).is_symlink())
+        self.assertFalse((self.root / "poison").exists())
 
-    def test_documented_runtime_and_selected_python_are_candidates(self):
-        documented = self.root / ".dsh-wsl-desktop/speech/runtime/venv/bin/python"
-        documented.parent.mkdir(parents=True)
-        documented.symlink_to(sys.executable)
-        self.assertIn(str(documented), resources.candidates(self.root, {}))
-        selected = str(self.root / "outside-custom-env/bin/python")
-        request = {"python_path": selected, "model_dir": "", "native_lib": ""}
-        with patch.object(resources, "candidates", return_value=[str(documented), selected]), \
-             patch.object(resources, "probe", side_effect=lambda p, vendor: {"path": p, "version": "unknown", "ready": False, "status": "probe_failed"}), \
-             patch.object(resources, "detect_gpu", return_value={"vendor": "unknown", "names": []}):
-            found = resources.discover(request)
-        self.assertEqual([p["path"] for p in found["python_environments"]], [selected, str(documented)])
+    def test_initialize_reuses_default_without_sdk_even_if_external_is_ready(self):
+        fd = resources.initialize_root(self.root, create=True)
+        os.close(fd)
+        managed = self.environment(venv=True, name=resources.SPEECH_ROOT + "/runtime/venv")
+        external = self.environment(sdk=True, venv=True)
+        with patch.object(resources, "candidates", return_value=[managed, external]), \
+             patch.object(resources, "run_initialize", side_effect=AssertionError("reuse default")):
+            result = self.initialize()
+        self.assertTrue(result["reused_python"])
+        self.assertEqual(result["config"]["python_path"], managed)
 
-    def test_new_default_model_directory_is_read_only(self):
-        request = {"python_path": "", "model_dir": "", "native_lib": ""}
-        with patch.object(resources.Path, "home", return_value=self.root), \
-             patch.object(resources, "candidates", return_value=[]), \
-             patch.object(resources, "detect_gpu", return_value={"vendor": "unknown", "names": []}), \
-             patch.dict(resources.os.environ, {}, clear=True):
-            found = resources.discover(request)
-        self.assertEqual(found["model_dir"], str(self.root / ".dsh-wsl-desktop/speech/models/qwen3-tts-q8"))
-        self.assertEqual(request, {"python_path": "", "model_dir": "", "native_lib": ""})
-        self.assertFalse((self.root / ".dsh-wsl-desktop").exists())
-        self.assertFalse((self.root / ".local").exists())
-
-    def test_new_runtime_precedes_legacy_environments_without_moving_them(self):
+    def test_candidates_ignore_legacy_environments_without_moving_them(self):
         paths = [self.root / ".dsh-wsl-desktop/speech/runtime/venv/bin/python",
                  self.root / ".local/share/dsh-pet/qwen-runtime/venv/bin/python",
                  self.root / ".local/share/dsh-speech/venv/bin/python",
@@ -416,107 +372,14 @@ class ResourcesTests(unittest.TestCase):
         for path in paths:
             path.parent.mkdir(parents=True)
             path.symlink_to(sys.executable)
-        self.assertEqual(resources.candidates(self.root, {})[:len(paths)], list(map(str, paths)))
+        result = resources.candidates(self.root)
+        self.assertEqual(result[0], str(paths[0]))
+        self.assertTrue(all(str(path) not in result for path in paths[1:]))
+        self.assertTrue(set(result) <= {str(paths[0]), "/usr/bin/python3", "/usr/local/bin/python3"})
         self.assertTrue(all(path.is_symlink() for path in paths))
 
-    def test_status_distinguishes_vendor_version_and_dependency(self):
-        cases = [
-            ("3.9.9", True, "amd", "python_too_old"),
-            ("3.14.4", False, "amd", "missing_rocm_sdk"),
-            ("3.10.0", True, "amd", "ready"),
-            ("3.14.4", True, "mixed", "ready"),
-            ("3.14.4", False, "mixed", "missing_gpu_runtime"),
-            ("3.14.4", False, "nvidia", "missing_cuda_runtime"),
-            ("3.14.4", True, "nvidia", "missing_cuda_runtime"),
-            ("3.14.4", True, "intel", "unsupported_gpu"),
-            ("3.14.4", False, "unknown", "gpu_unknown"),
-        ]
-        for version, sdk, vendor, expected in cases:
-            with self.subTest(vendor=vendor, sdk=sdk, version=version):
-                self.assertEqual(resources.python_status(version, sdk, vendor), expected)
-
-    def gpu_fixture(self, adapters=None, *, pci=None, smi="", wsl=True, raw=None):
-        read_text = Path.read_text
-        def read(path, *args, **kwargs):
-            if str(path) == "/proc/sys/kernel/osrelease":
-                return "microsoft-standard-WSL2" if wsl else "linux"
-            return read_text(path, *args, **kwargs)
-        def command(args, **kwargs):
-            return (raw if raw is not None else json.dumps(adapters)) if "-Command" in args else smi
-        with patch.object(Path, "iterdir", return_value=pci or []), \
-             patch.object(Path, "read_text", autospec=True, side_effect=read), \
-             patch.object(resources.shutil, "which", return_value="/windows/powershell.exe"), \
-             patch.object(resources.os.path, "isfile", return_value=True), \
-             patch.object(resources.os, "access", return_value=True), \
-             patch.object(resources, "gpu_command", side_effect=command) as run:
-            return resources.detect_gpu(), run.call_args_list
-
-    def test_wsl_windows_adapters_detect_amd_nvidia_and_hybrid(self):
-        amd = {"Name": "AMD Radeon RX 9070 XT", "PNPDeviceID": "PCI/VEN_1002"}
-        nvidia = {"Name": "NVIDIA GeForce RTX 5090", "PNPDeviceID": "PCI/VEN_10DE"}
-        intel = {"Name": "Intel Graphics", "PNPDeviceID": "PCI/VEN_8086"}
-        for adapters, vendor in [(amd, "amd"), (nvidia, "nvidia"), ([intel, nvidia], "nvidia"),
-                                  ([amd, nvidia], "mixed"), (intel, "intel")]:
-            with self.subTest(vendor=vendor):
-                result, calls = self.gpu_fixture(adapters)
-                self.assertEqual(result["vendor"], vendor)
-                self.assertTrue(result["names"])
-                self.assertIn("Get-CimInstance Win32_VideoController", calls[0].args[0][-1])
-                self.assertEqual(calls[0].kwargs["timeout"], 5)
-        self.assertEqual(resources.gpu_vendor("AMD Graphics"), "amd")
-        self.assertEqual(resources.gpu_vendor("Unknown adapter PCI/VEN_10DE"), "nvidia")
-
-    def test_pci_detection_ignores_non_display_devices(self):
-        devices = []
-        for name, device_class, vendor in [("display", "0x030000", "0x1002"),
-                                           ("network", "0x020000", "0x10de")]:
-            device = self.root / name
-            device.mkdir()
-            (device / "class").write_text(device_class)
-            (device / "vendor").write_text(vendor)
-            devices.append(device)
-        result, calls = self.gpu_fixture(pci=devices, wsl=False)
-        self.assertEqual(result, {"vendor": "amd", "names": ["AMD GPU (PCI)"]})
-        self.assertTrue(all("-Command" not in call.args[0] for call in calls))
-
-    def test_unknown_timeout_malformed_and_nvidia_fallback(self):
-        for raw in ("", "not json", "null", "[42]", '{"Name":42}'):
-            with self.subTest(raw=raw):
-                result, _ = self.gpu_fixture(raw=raw)
-                self.assertEqual(result, {"vendor": "unknown", "names": []})
-        result, _ = self.gpu_fixture(raw="", smi="A100-SXM4-80GB\n")
-        self.assertEqual(result, {"vendor": "nvidia", "names": ["A100-SXM4-80GB"]})
-
-    def test_adapter_names_are_bounded_and_normalized(self):
-        adapters = [{"Name": "NVIDIA " + "x" * 500 + str(i)} for i in range(30)]
-        result, _ = self.gpu_fixture(adapters)
-        self.assertLessEqual(len(result["names"]), 16)
-        self.assertTrue(all(len(name) <= 200 for name in result["names"]))
-        result, _ = self.gpu_fixture({"Name": "NVIDIA\n  Test"})
-        self.assertEqual(result["names"], ["NVIDIA Test"])
-
-    def test_gpu_commands_fail_closed_and_kill_on_timeout(self):
-        self.assertEqual(resources.gpu_command(["/not/a/binary"]), "")
-        self.assertEqual(resources.gpu_command([sys.executable, "-c", "print('private error'); raise SystemExit(1)"]), "")
-        self.assertEqual(resources.gpu_command([sys.executable, "-c", "print('x'*12000)"]), "")
-        self.assertEqual(resources.gpu_command([sys.executable, "-c", "import time; time.sleep(10)"], timeout=0.05), "")
-
-    def test_discovery_passes_vendor_to_each_python_probe(self):
-        config = {"python_path": "", "model_dir": "", "native_lib": ""}
-        for vendor, status in [("amd", "missing_rocm_sdk"), ("nvidia", "missing_cuda_runtime"), ("unknown", "gpu_unknown")]:
-            with self.subTest(vendor=vendor), \
-                 patch.object(resources, "detect_gpu", return_value={"vendor": vendor, "names": []}), \
-                 patch.object(resources, "candidates", return_value=[sys.executable]), \
-                 patch.object(resources, "probe", side_effect=lambda p, v: {"path": p, "version": "3.14.4", "ready": False,
-                     "status": resources.python_status("3.14.4", False, v)}) as probe:
-                found = resources.discover(config)
-                probe.assert_called_once_with(sys.executable, vendor)
-                self.assertEqual(found["gpu"]["vendor"], vendor)
-                self.assertEqual(found["python_environments"][0]["status"], status)
-                self.assertFalse(found["python_environments"][0]["ready"])
-
-    def test_probe_failure_is_not_a_missing_dependency(self):
-        result = resources.probe("/not/a/python", "amd")
+    def test_probe_missing_executable_fails_closed(self):
+        result = resources.probe("/not/a/python")
         self.assertEqual(result["status"], "probe_failed")
         self.assertFalse(result["ready"])
 
@@ -535,6 +398,11 @@ class ResourcesTests(unittest.TestCase):
             (packages / "poison.pth").write_text("import pathlib; pathlib.Path(%r).touch()" % str(self.root / "poison"))
         return str(binary)
 
+    def managed_environment(self, sdk=False):
+        fd = resources.initialize_root(self.root, create=True)
+        os.close(fd)
+        return self.environment(sdk=sdk, venv=True, name=resources.SPEECH_ROOT + "/runtime/venv")
+
     def initialize(self, **kwargs):
         return resources.initialize({"python_path": "", "model_dir": "", "native_lib": "", **kwargs})
 
@@ -544,14 +412,14 @@ class ResourcesTests(unittest.TestCase):
             path = Path(command[-1])
             (path / "bin").mkdir(exist_ok=True)
             (path / "bin/python").write_bytes(b"fixture, never executed")
+            (path / "bin/python").chmod(0o700)
             (path / "pyvenv.cfg").write_text("home = /fixture/base\n")
         return False if kwargs.get("optional") and "importlib.util" in command[-1] else True
 
-    def test_initialize_reuses_selected_rocm_without_install_or_gpu_query(self):
-        selected = self.environment(sdk=True)
-        with patch.object(resources, "candidates", return_value=[]), \
+    def test_initialize_reuses_default_without_install_or_site_hooks(self):
+        selected = self.managed_environment(sdk=True)
+        with patch.object(resources, "candidates", return_value=[selected]), \
              patch.object(resources, "run_initialize", side_effect=AssertionError("must not run venv")), \
-             patch.object(resources, "detect_gpu", side_effect=AssertionError("must not query GPU")), \
              patch.object(resources, "opener", side_effect=AssertionError("offline only")):
             result = self.initialize(python_path=selected)
         speech = self.root / resources.SPEECH_ROOT
@@ -563,33 +431,34 @@ class ResourcesTests(unittest.TestCase):
         self.assertEqual((self.root / ".dsh-wsl-desktop").stat().st_mode & 0o777, 0o700)
         self.assertTrue((speech / "models/qwen3-tts-q8").is_dir())
         self.assertTrue(Path(selected).is_symlink())
-        self.assertFalse((speech / "runtime").exists())
+        self.assertTrue((speech / "runtime/venv/pyvenv.cfg").is_file())
+        self.assertFalse((speech / "runtime" / resources.INIT_INTENT).exists())
         self.assertFalse((self.root / "poison").exists())
 
-    def test_initialize_reuses_explicit_existing_venv_even_without_sdk(self):
-        selected = self.environment(venv=True)
-        with patch.object(resources, "candidates", return_value=[]), \
+    def test_initialize_reuses_default_existing_venv_even_without_sdk(self):
+        selected = self.managed_environment()
+        with patch.object(resources, "candidates", return_value=[selected]), \
              patch.object(resources, "run_initialize", side_effect=AssertionError):
             result = self.initialize(python_path=selected)
         self.assertEqual(result["config"]["python_path"], selected)
         self.assertTrue(result["reused_python"])
         self.assertFalse(result["created_venv"])
-        self.assertEqual(resources.probe(selected, "amd")["status"], "missing_rocm_sdk")
+        self.assertEqual(resources.probe(selected)["status"], "ready")
 
-    def test_initialize_discovers_core_metadata_and_keeps_external_paths(self):
-        selected = self.environment(sdk=True)
+    def test_initialize_reuses_default_and_keeps_custom_model_native(self):
+        selected = self.managed_environment(sdk=True)
         model = str(self.root / "external-models")
         native = str(self.root / "libqwen.so")
         with patch.object(resources, "candidates", return_value=[selected]), \
              patch.dict(resources.os.environ, {"DSH_QWEN_NATIVE_LIB": "/ignored/environment.so"}), \
              patch.object(resources, "run_initialize", side_effect=AssertionError):
-            result = self.initialize(model_dir=model, native_lib=native)
+            result = self.initialize(python_path=selected, model_dir=model, native_lib=native)
         self.assertEqual(result["config"], {"python_path": selected, "model_dir": model, "native_lib": native})
         self.assertFalse(Path(model).exists())
         self.assertFalse(Path(native).exists())
         self.assertFalse((self.root / resources.SPEECH_ROOT / "models").exists())
 
-    def test_initialize_readonly_reuses_documented_manually_created_rocm_venv(self):
+    def test_initialize_readonly_reuses_documented_manually_created_venv(self):
         fd = resources.initialize_root(self.root, create=True)
         os.close(fd)
         selected = self.environment(sdk=True, venv=True, name=resources.SPEECH_ROOT + "/runtime/venv")
@@ -613,7 +482,7 @@ class ResourcesTests(unittest.TestCase):
                 raise resources.Refused("initialize_venv_failed")
             return True
         with patch.object(resources, "candidates", return_value=[sys.executable]), \
-             patch.object(resources, "probe", return_value={"status": "missing_rocm_sdk"}), \
+             patch.object(resources, "probe", return_value={"status": "ready"}), \
              patch.object(resources, "run_initialize", side_effect=fail):
             with self.assertRaisesRegex(resources.Refused, "^initialize_venv_failed$"):
                 self.initialize()
@@ -631,8 +500,7 @@ class ResourcesTests(unittest.TestCase):
         previous_umask = os.umask(0o002)
         try:
             with patch.object(resources, "candidates", return_value=[sys.executable]), \
-                 patch.object(resources, "opener", side_effect=AssertionError("offline")), \
-                 patch.object(resources, "detect_gpu", side_effect=AssertionError):
+                 patch.object(resources, "opener", side_effect=AssertionError("offline")):
                 result = self.initialize(python_path=sys.executable)
         finally:
             parent_umask = os.umask(previous_umask)
@@ -652,8 +520,7 @@ class ResourcesTests(unittest.TestCase):
         if (target / "bin/pip").exists():
             self.assertIn(str(target / "bin/python"), (target / "bin/pip").read_text().splitlines()[0])
         before = (target / "pyvenv.cfg").stat().st_mtime_ns
-        with patch.object(resources, "probe", side_effect=AssertionError("idempotent config needs no re-probe")), \
-             patch.object(resources, "run_initialize", side_effect=AssertionError):
+        with patch.object(resources, "run_initialize", side_effect=AssertionError("do not rebuild complete venv")):
             again = self.initialize()
         self.assertEqual(again["config"], result["config"])
         self.assertTrue(again["reused_python"])
@@ -672,7 +539,7 @@ class ResourcesTests(unittest.TestCase):
                 shutil.copy(source, target)  # CPython venv preserves template mode.
             return result
         with patch.object(resources, "candidates", return_value=[sys.executable]), \
-             patch.object(resources, "probe", return_value={"status": "missing_gpu_runtime"}), \
+             patch.object(resources, "probe", return_value={"status": "ready"}), \
              patch.object(resources, "run_initialize", side_effect=create):
             result = self.initialize()
         copied = Path(result["config"]["python_path"]).parent / "activate"
@@ -709,12 +576,12 @@ class ResourcesTests(unittest.TestCase):
             resources.check_managed_venv(tree)
         self.assertEqual(file.stat().st_mode & 0o777, 0o664)
 
-    def test_initialize_plain_python_builds_venv_and_does_not_auto_reuse_sdkless_venv(self):
+    def test_initialize_ignores_explicit_sdkless_external_venv_and_uses_system_base(self):
         external = self.environment(venv=True)
-        with patch.object(resources, "candidates", return_value=[external, sys.executable]), \
-             patch.object(resources, "probe", return_value={"status": "missing_rocm_sdk"}), \
+        with patch.object(resources, "candidates", return_value=[sys.executable]), \
+             patch.object(resources, "probe", return_value={"status": "ready"}), \
              patch.object(resources, "run_initialize", side_effect=self.fake_initialize_run) as run:
-            result = self.initialize(python_path=sys.executable)
+            result = self.initialize(python_path=external)
         self.assertTrue(result["created_venv"])
         self.assertTrue(result["config"]["python_path"].endswith("/speech/runtime/venv/bin/python"))
         venv_command = next(call.args[0] for call in run.call_args_list if "venv" in call.args[0])
@@ -724,8 +591,8 @@ class ResourcesTests(unittest.TestCase):
         self.assertTrue(Path(external).is_symlink())
 
     def test_initialize_uses_only_usable_modern_base(self):
-        def probe(path, vendor):
-            return {"status": {"/old/python": "python_too_old", "/broken/python": "probe_failed"}.get(path, "missing_rocm_sdk")}
+        def probe(path):
+            return {"status": {"/old/python": "python_too_old", "/broken/python": "probe_failed"}.get(path, "ready")}
         with patch.object(resources, "candidates", return_value=["/old/python", "/broken/python", sys.executable]), \
              patch.object(resources, "probe", side_effect=probe), \
              patch.object(resources, "run_initialize", side_effect=self.fake_initialize_run) as run:
@@ -748,14 +615,16 @@ class ResourcesTests(unittest.TestCase):
         outside.mkdir()
         (speech / "models").symlink_to(outside, target_is_directory=True)
         with patch.object(resources, "candidates", return_value=[selected]), \
+             patch.object(resources, "initialize_venv", return_value=(str(speech / "runtime/venv/bin/python"), True)), \
+             patch.object(resources, "run_initialize", side_effect=AssertionError("no real venv")), \
              self.assertRaisesRegex(resources.Refused, "^unsafe_initialize_directory$"):
-            self.initialize()
+            self.initialize(python_path=selected)
         self.assertFalse(list(outside.iterdir()))
         self.assertFalse((speech / "config.json").exists())
         (speech / "models").unlink()
         (speech / "runtime").symlink_to(outside, target_is_directory=True)
         with patch.object(resources, "candidates", return_value=[sys.executable]), \
-             patch.object(resources, "probe", return_value={"status": "missing_rocm_sdk"}), \
+             patch.object(resources, "probe", return_value={"status": "ready"}), \
              patch.object(resources, "run_initialize", side_effect=AssertionError), \
              self.assertRaisesRegex(resources.Refused, "^unsafe_initialize_directory$"):
             self.initialize()
@@ -763,10 +632,10 @@ class ResourcesTests(unittest.TestCase):
         self.assertFalse((speech / "config.json").exists())
 
     def test_initialize_default_native_is_empty_not_environment_override(self):
-        selected = self.environment(sdk=True)
+        selected = self.managed_environment(sdk=True)
         with patch.object(resources, "candidates", return_value=[selected]), \
              patch.dict(resources.os.environ, {"DSH_QWEN_NATIVE_LIB": "/ignored/legacy.so"}):
-            result = self.initialize()
+            result = self.initialize(python_path=selected)
         self.assertEqual(result["config"]["native_lib"], "")
 
     def test_initialize_venv_base_falls_back_if_venv_module_unavailable(self):
@@ -775,7 +644,7 @@ class ResourcesTests(unittest.TestCase):
                 return False
             return self.fake_initialize_run(command, cancelled, error, **kwargs)
         with patch.object(resources, "candidates", return_value=["/fixture/no-venv-python", sys.executable]), \
-             patch.object(resources, "probe", return_value={"status": "missing_rocm_sdk"}), \
+             patch.object(resources, "probe", return_value={"status": "ready"}), \
              patch.object(resources, "run_initialize", side_effect=run) as calls:
             result = self.initialize()
         self.assertTrue(result["created_venv"])
@@ -798,9 +667,9 @@ class ResourcesTests(unittest.TestCase):
         self.assertFalse((self.root / ".dsh-wsl-desktop").exists())
 
     def test_initialize_does_not_overwrite_different_or_damaged_config(self):
-        selected = self.environment(sdk=True)
+        selected = self.managed_environment(sdk=True)
         with patch.object(resources, "candidates", return_value=[selected]):
-            result = self.initialize()
+            result = self.initialize(python_path=selected)
         config = Path(result["config_path"])
         original = config.read_bytes()
         with self.assertRaisesRegex(resources.Refused, "^initialize_config_conflict$"):
@@ -908,7 +777,7 @@ class ResourcesTests(unittest.TestCase):
                 raise resources.Refused("initialize_venv_failed")
             return self.fake_initialize_run(command, cancelled, error, **kwargs)
         with patch.object(resources, "candidates", return_value=[sys.executable]), \
-             patch.object(resources, "probe", return_value={"status": "missing_rocm_sdk"}), \
+             patch.object(resources, "probe", return_value={"status": "ready"}), \
              patch.object(resources, "run_initialize", side_effect=fail_once):
             with self.assertRaisesRegex(resources.Refused, "^initialize_venv_failed$"):
                 self.initialize()
@@ -927,13 +796,13 @@ class ResourcesTests(unittest.TestCase):
                 raise resources.Refused("cancelled")
             return original(fd, name, value, cancelled)
         with patch.object(resources, "candidates", return_value=[sys.executable]), \
-             patch.object(resources, "probe", return_value={"status": "missing_rocm_sdk"}), \
+             patch.object(resources, "probe", return_value={"status": "ready"}), \
              patch.object(resources, "run_initialize", side_effect=self.fake_initialize_run), \
              patch.object(resources, "publish_initialize_json", side_effect=fail_config):
             with self.assertRaisesRegex(resources.Refused, "^cancelled$"):
                 self.initialize()
         with patch.object(resources, "candidates", return_value=[]), \
-             patch.object(resources, "probe", return_value={"status": "missing_rocm_sdk"}), \
+             patch.object(resources, "probe", return_value={"status": "ready"}), \
              patch.object(resources, "run_initialize", side_effect=AssertionError("do not rebuild complete venv")):
             result = self.initialize()
         self.assertTrue(result["reused_python"])
@@ -963,7 +832,7 @@ class ResourcesTests(unittest.TestCase):
             self.fake_initialize_run(command, cancelled, error, **kwargs)
             return True
         with patch.object(resources, "candidates", return_value=[sys.executable]), \
-             patch.object(resources, "probe", return_value={"status": "missing_rocm_sdk"}), \
+             patch.object(resources, "probe", return_value={"status": "ready"}), \
              patch.object(resources, "run_initialize", side_effect=run) as calls:
             self.initialize()
         commands = [call.args[0] for call in calls.call_args_list]
@@ -978,7 +847,7 @@ class ResourcesTests(unittest.TestCase):
                 raise resources.Refused(error)
             return True
         with patch.object(resources, "candidates", return_value=[sys.executable]), \
-             patch.object(resources, "probe", return_value={"status": "missing_rocm_sdk"}), \
+             patch.object(resources, "probe", return_value={"status": "ready"}), \
              patch.object(resources, "run_initialize", side_effect=run), \
              self.assertRaisesRegex(resources.Refused, "^initialize_pip_failed$"):
             self.initialize()
@@ -1007,39 +876,105 @@ class ResourcesTests(unittest.TestCase):
         finally:
             os.close(fd)
 
-    def test_discover_reads_initialized_config_fills_only_empty_fields_without_writes(self):
-        selected = self.environment(sdk=True)
-        with patch.object(resources, "candidates", return_value=[selected]):
-            initialized = self.initialize(model_dir=str(self.root / "selected-model"), native_lib=str(self.root / "selected.so"))
-        original = Path(initialized["config_path"]).read_bytes()
-        request = {"python_path": "", "model_dir": "", "native_lib": ""}
-        with patch.object(resources, "candidates", return_value=[]), \
-             patch.object(resources, "detect_gpu", return_value={"vendor": "unknown", "names": []}), \
-             patch.object(resources.os, "mkdir", side_effect=AssertionError("read only")), \
-             patch.object(resources, "publish_initialize_json", side_effect=AssertionError("read only")):
-            found = resources.discover(request)
-            explicit = resources.discover({"python_path": sys.executable, "model_dir": str(self.root / "override"), "native_lib": str(self.root / "override.so")})
-        self.assertEqual(found["python_environments"][0]["path"], selected)
-        self.assertEqual(found["model_dir"], initialized["config"]["model_dir"])
-        self.assertEqual(found["native_lib"], initialized["config"]["native_lib"])
-        self.assertEqual(explicit["python_environments"][0]["path"], sys.executable)
-        self.assertEqual(explicit["model_dir"], str(self.root / "override"))
-        self.assertEqual(explicit["native_lib"], str(self.root / "override.so"))
-        self.assertEqual(Path(initialized["config_path"]).read_bytes(), original)
-        self.assertEqual(request, {"python_path": "", "model_dir": "", "native_lib": ""})
-
-    def test_discover_ignores_corrupt_or_unsafe_initialized_config_read_only(self):
+    def legacy_config(self, python_path, model_dir=None, native_lib=""):
         fd = resources.initialize_root(self.root, create=True)
         os.close(fd)
         config = self.root / resources.SPEECH_ROOT / "config.json"
-        config.write_text("broken")
+        config.write_text(json.dumps({"schema_version": 1, "config": {
+            "python_path": python_path, "model_dir": model_dir or str(self.root / "legacy-models"),
+            "native_lib": native_lib}}))
         config.chmod(0o600)
-        with patch.object(resources, "candidates", return_value=[]), \
-             patch.object(resources, "detect_gpu", return_value={"vendor": "unknown", "names": []}), \
-             patch.object(resources.os, "mkdir", side_effect=AssertionError):
-            result = resources.discover({"python_path": "", "model_dir": "", "native_lib": ""})
-        self.assertEqual(result["model_dir"], str(config.parent / "models/qwen3-tts-q8"))
-        self.assertEqual(config.read_text(), "broken")
+        return config
+
+    def test_initialize_legacy_config_creates_default_ignoring_external_draft_without_rewrite(self):
+        external = self.environment(sdk=True, venv=True)
+        draft = self.environment(venv=True, name="draft")
+        native = str(self.root / "legacy.so")
+        config = self.legacy_config(external, native_lib=native)
+        original = config.read_bytes()
+        metadata = (config.stat().st_ino, config.stat().st_mtime_ns)
+        managed = str(config.parent / "runtime/venv/bin/python")
+        def probe(path):
+            self.assertNotIn(path, (external, draft))
+            return {"status": "ready"}
+        with patch.object(resources, "candidates", return_value=[sys.executable]), \
+             patch.object(resources, "probe", side_effect=probe), \
+             patch.object(resources, "run_initialize", side_effect=self.fake_initialize_run) as run, \
+             patch.object(resources, "opener", side_effect=AssertionError("offline")):
+            result = self.initialize(python_path=draft)
+        self.assertTrue(result["created_venv"])
+        self.assertFalse(result["reused_python"])
+        self.assertEqual(result["config"], {"python_path": managed, "model_dir": str(self.root / "legacy-models"),
+                                            "native_lib": native})
+        self.assertEqual(result["config_path"], str(config))
+        self.assertTrue(any("venv" in call.args[0] for call in run.call_args_list))
+        self.assertTrue(all(call.args[0][0] not in (external, draft) for call in run.call_args_list))
+        self.assertEqual(config.read_bytes(), original)
+        self.assertEqual((config.stat().st_ino, config.stat().st_mtime_ns), metadata)
+        self.assertTrue(Path(external).is_symlink())
+        self.assertTrue(Path(draft).is_symlink())
+        self.assertFalse(Path(result["config"]["model_dir"]).exists())
+        self.assertFalse(Path(native).exists())
+        self.assertFalse((self.root / "poison").exists())
+
+    def test_initialize_saved_external_python_reuses_only_default_without_rewriting_config(self):
+        managed = self.managed_environment()
+        external = self.environment(sdk=True, venv=True)
+        config = self.legacy_config(external)
+        original = config.read_bytes()
+        with patch.object(resources, "probe", side_effect=AssertionError("no old external probe")), \
+             patch.object(resources, "candidates", side_effect=AssertionError("no scan")), \
+             patch.object(resources, "run_initialize", side_effect=AssertionError("read-only reuse")):
+            result = self.initialize(python_path=external)
+        self.assertEqual(result["config"]["python_path"], managed)
+        self.assertTrue(result["reused_python"])
+        self.assertFalse(result["created_venv"])
+        self.assertEqual(config.read_bytes(), original)
+        self.assertFalse((self.root / "poison").exists())
+
+    def test_initialize_missing_completed_interpreter_rebuild_failure_stays_partial_then_retries(self):
+        with patch.object(resources, "candidates", return_value=[sys.executable]), \
+             patch.object(resources, "probe", return_value={"status": "ready"}), \
+             patch.object(resources, "run_initialize", side_effect=self.fake_initialize_run):
+            initialized = self.initialize()
+        target = Path(initialized["config"]["python_path"])
+        runtime = target.parent.parent.parent
+        config = Path(initialized["config_path"])
+        original = config.read_bytes()
+        complete = runtime / resources.INIT_COMPLETE
+        intent = (runtime / resources.INIT_INTENT).read_bytes()
+        self.assertTrue(complete.is_file())
+        sentinel = target.parent.parent / "keep-user-file"
+        sentinel.write_text("untouched")
+        target.unlink()
+        def fail(command, cancelled, error, **kwargs):
+            self.fake_initialize_run(command, cancelled, error, **kwargs)
+            if "ensurepip" in command:
+                raise resources.Refused("initialize_pip_failed")
+            return True
+        with patch.object(resources, "candidates", return_value=[sys.executable]), \
+             patch.object(resources, "probe", return_value={"status": "ready"}), \
+             patch.object(resources, "run_initialize", side_effect=fail) as run:
+            with self.assertRaisesRegex(resources.Refused, "^initialize_pip_failed$"):
+                self.initialize()
+        self.assertTrue(any("venv" in call.args[0] for call in run.call_args_list))
+        self.assertFalse(complete.exists())
+        self.assertTrue(target.exists())
+        self.assertEqual(config.read_bytes(), original)
+        self.assertEqual((runtime / resources.INIT_INTENT).read_bytes(), intent)
+        with patch.object(resources, "candidates", return_value=[sys.executable]), \
+             patch.object(resources, "probe", return_value={"status": "ready"}), \
+             patch.object(resources, "run_initialize", side_effect=self.fake_initialize_run) as run:
+            restored = self.initialize()
+        self.assertTrue(restored["created_venv"])
+        self.assertFalse(restored["reused_python"])
+        self.assertEqual(restored["config"], initialized["config"])
+        self.assertTrue(any("venv" in call.args[0] for call in run.call_args_list))
+        self.assertTrue(target.is_file())
+        self.assertTrue(os.access(target, os.X_OK))
+        self.assertEqual(json.loads(complete.read_text()), json.loads(intent))
+        self.assertEqual(config.read_bytes(), original)
+        self.assertEqual(sentinel.read_text(), "untouched")
 
     def test_initialize_subprocess_timeout_and_private_output_have_fixed_errors(self):
         with self.assertRaisesRegex(resources.Refused, "^initialize_timeout$"):
@@ -1080,7 +1015,7 @@ class ResourcesTests(unittest.TestCase):
         self.assertEqual(result.stderr, b"")
 
     def test_initialize_cli_success_exits_with_owner_stdin_held(self):
-        selected = self.environment(sdk=True)
+        selected = self.managed_environment(sdk=True)
         process = subprocess.Popen([sys.executable, "-B", str(HELPER), "--resources-initialize"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         try:
@@ -1112,8 +1047,8 @@ class ResourcesTests(unittest.TestCase):
                  "open(%r,'w').write(json.dumps([os.getpid(),p.pid])); time.sleep(30)" % (grandchild, str(pid_file)))
         # Replace only venv execution with a long-running process tree; keep the
         # real owner channel and cancellable process-group runner under test.
-        body = ("m.candidates=lambda home,env: [%r]; "
-                "m.probe=lambda *args: {'status':'missing_rocm_sdk'}; "
+        body = ("m.candidates=lambda home: [%r]; "
+                "m.probe=lambda *args: {'status':'ready'}; "
                 "original=m.run_initialize; "
                 "m.run_initialize=lambda command,cancelled,error,**kw: "
                 "original([%r,'-c',%r] if 'venv' in command else command,cancelled,error,**kw)"
@@ -1160,8 +1095,8 @@ class ResourcesTests(unittest.TestCase):
 
     def test_initialize_cli_failure_has_fixed_error_without_subprocess_output(self):
         secret = "never disclose private subprocess output"
-        body = ("m.candidates=lambda home,env: [%r]; "
-                "m.probe=lambda *args: {'status':'missing_rocm_sdk'}; "
+        body = ("m.candidates=lambda home: [%r]; "
+                "m.probe=lambda *args: {'status':'ready'}; "
                 "original=m.run_initialize; "
                 "m.run_initialize=lambda command,cancelled,error,**kw: "
                 "original([%r,'-c',%r] if 'venv' in command else command,cancelled,error,**kw)"

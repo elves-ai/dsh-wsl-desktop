@@ -64,6 +64,15 @@ def absolute(value):
     return value
 
 
+def default_python(value):
+    # WSL HOME is known only here, not in Windows/Rust. Compare the entire
+    # configured path, not just a suffix (another user/home is not permitted).
+    # Do not resolve the executable: a venv normally symlinks its Python.
+    expected = str(Path.home() / ".dsh-wsl-desktop/speech/runtime/venv/bin/python")
+    require(absolute(value) == expected, "default_python_required")
+    return expected
+
+
 def read_json(stream, cap):
     data = stream.read(cap + 1)
     require(len(data) <= cap, "input_too_large")
@@ -365,6 +374,7 @@ def launch(request, owner_pid=None, cancel=None):
     exact(request, ("script_path", "python_path", "model_dir", "native_lib"))
     for value in request.values():
         absolute(value)
+    default_python(request["python_path"])
     helper = validate_bundle(request["script_path"])
     instance, token = secrets.token_hex(32), secrets.token_hex(32)
     config = dict(request, instance_id=instance, control_token=token)
@@ -431,6 +441,7 @@ def supervise(request):
     instance, token = nonce(request["instance_id"]), nonce(request["control_token"])
     for key in ("script_path", "python_path", "model_dir", "native_lib"):
         absolute(request[key])
+    default_python(request["python_path"])
     helper = validate_bundle(request["script_path"])
     require(sys.argv == [helper, "--supervise"], "not_owned")
     pid = os.getpid()
@@ -639,6 +650,7 @@ def inspect_check():
         exact(request, ("script_path", "python_path", "model_dir", "native_lib"))
         for value in request.values():
             absolute(value)
+        default_python(request["python_path"])
         validate_bundle(request["script_path"])
         checker = str(Path(request["script_path"]).parent / "runtime_check.py")
         cancel = threading.Event()
@@ -683,7 +695,8 @@ def inspect_check():
                     require(len(buffer) <= INSPECT_LINE_CAP, "check_output_too_large")
     except Refused as error:
         code = error.code if error.code in {
-            "check_cancelled", "check_timeout", "check_output_too_large", "invalid_check_output"} else "invalid_config"
+            "check_cancelled", "check_timeout", "check_output_too_large", "invalid_check_output",
+            "default_python_required"} else "invalid_config"
         final = {"kind": "result", "environment_ok": False, "models_ok": False,
                  "gpu_name": None, "error_code": code}
     except BaseException:

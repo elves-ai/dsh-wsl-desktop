@@ -92,7 +92,6 @@ impl WslSpeechRuntime {
             "--stop",
             "--probe-owned",
             "--resources-initialize",
-            "--resources-discover",
             "--resources-browse",
             "--resources-download",
         ]
@@ -394,6 +393,7 @@ impl WslSpeechRuntime {
                     "CUDA / ROCm GPU 计算检测未通过，请检查所选显卡与运行环境。"
                 }
                 "models_unavailable" => "模型目录不可读，请检查两个模型文件及权限。",
+                "default_python_required" => crate::speech_settings::DEFAULT_PYTHON_GUIDANCE,
                 "check_cancelled" => "检测已取消。",
                 "check_timeout" | "gpu_probe_timeout" => "环境或模型检测超时，可重试。",
                 _ => "语音配置检测未通过，请检查运行时、推理库和模型文件。",
@@ -497,21 +497,6 @@ impl crate::speech_resources::Runtime for WslSpeechRuntime {
             &|_| {},
         )?;
         serde_json::from_value(resource_result(result)?).map_err(|_| "语音初始化结果无效。".into())
-    }
-    fn discover(
-        &self,
-        config: &SpeechConfig,
-    ) -> Result<crate::speech_resources::Discovery, String> {
-        let result = self.exchange(
-            &self.config()?,
-            "--resources-discover",
-            json!({"python_path":config.python_path,"model_dir":config.model_dir,"native_lib":config.native_lib}),
-            false,
-            &Cancellation::default(),
-            Duration::from_secs(110),
-            &|_| {},
-        )?;
-        serde_json::from_value(resource_result(result)?).map_err(|_| "Python 候选结果无效。".into())
     }
     fn browse(
         &self,
@@ -680,7 +665,18 @@ impl Runtime for WslSpeechRuntime {
                 }
                 let _ = p.child.kill();
                 let _ = p.child.wait();
-                return Err("语音服务启动失败或已取消。".into());
+                return Err(
+                    if result
+                        .as_ref()
+                        .and_then(|v| v.get("error"))
+                        .and_then(Value::as_str)
+                        == Some("default_python_required")
+                    {
+                        crate::speech_settings::DEFAULT_PYTHON_GUIDANCE.into()
+                    } else {
+                        "语音服务启动失败或已取消。".into()
+                    },
+                );
             }
         };
         self.owned.lock().unwrap_or_else(|e| e.into_inner()).insert(

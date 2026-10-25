@@ -22,6 +22,31 @@ use windows::{
 const LIMIT: usize = 128;
 const GROUP: &str = "dsh-task";
 const SEND_ERROR: &str = "无法提交可点击的系统通知，请检查 Windows 通知设置。";
+
+/// Sound-only path: no toast or Notification Center entry is created.
+/// The caller controls the app notification switch and foreground suppression.
+pub(super) fn play_notification_sound() -> Result<(), String> {
+    use windows_sys::Win32::Media::Audio::{
+        PlaySoundW, SND_ALIAS, SND_ASYNC, SND_NODEFAULT, SND_SYSTEM,
+    };
+
+    // Use the current Windows sound scheme and system-sounds audio session.
+    // SAFETY: w! provides static, NUL-terminated UTF-16 storage for async playback;
+    // an alias needs no module handle, and Windows owns the playback lifetime.
+    let started = unsafe {
+        PlaySoundW(
+            windows_sys::core::w!("SystemNotification"),
+            std::ptr::null_mut(),
+            SND_ALIAS | SND_ASYNC | SND_NODEFAULT | SND_SYSTEM,
+        )
+    };
+    if started == 0 {
+        Err("无法播放系统通知声音，请检查 Windows 声音设置。".to_owned())
+    } else {
+        Ok(())
+    }
+}
+
 type Click = Box<dyn FnOnce() + Send>;
 enum Event {
     Show {

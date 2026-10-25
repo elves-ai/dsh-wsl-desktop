@@ -1,7 +1,7 @@
 //! One read-only, trusted IPC surface for Windows native WSL path selection.
 use super::{assert_local, speech_settings, Controller};
+use crate::settings_path::PathKind;
 use crate::settings_path::{from_unc, to_unc, validate_linux};
-use serde::Deserialize;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -26,16 +26,6 @@ use windows_webview::{
     },
 };
 
-#[derive(Clone, Copy, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum PathKind {
-    Repository,
-    ModelDir,
-    PythonPath,
-    NativeLib,
-    SetupRepository,
-    SetupNode,
-}
 impl PathKind {
     fn setup(self) -> bool {
         matches!(self, Self::SetupRepository | Self::SetupNode)
@@ -47,13 +37,12 @@ impl PathKind {
         )
     }
     fn speech(self) -> bool {
-        matches!(self, Self::ModelDir | Self::PythonPath | Self::NativeLib)
+        matches!(self, Self::ModelDir | Self::NativeLib)
     }
     fn title(self) -> &'static str {
         match self {
             Self::Repository | Self::SetupRepository => "选择 WSL Harness 项目目录",
             Self::ModelDir => "选择 WSL 语音模型目录",
-            Self::PythonPath => "选择 WSL Python 可执行文件",
             Self::NativeLib => "选择 WSL 原生库文件",
             Self::SetupNode => "选择 WSL Node.js 可执行文件",
         }

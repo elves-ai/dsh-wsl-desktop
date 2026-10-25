@@ -15,7 +15,6 @@ fn main() {
                 "cancel_speech_test",
                 "initialize_speech_environment",
                 "cancel_speech_initialization",
-                "discover_speech_resources",
                 "pick_settings_path",
                 "get_speech_download",
                 "download_speech_model",

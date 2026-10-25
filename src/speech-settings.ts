@@ -8,6 +8,7 @@ export type SpeechSnapshot = {
   model_progress: number | null; service_state: string; ownership: string; model_state: string;
   gpu_name: string | null; message: string; error: string | null; logs: string[];
 };
+const defaultPythonSuffix = '/.dsh-wsl-desktop/speech/runtime/venv/bin/python';
 type Action = 'refresh' | 'check' | 'cancel_check' | 'start' | 'stop';
 type ResourceControls = { setVisible(visible: boolean): void; setBlocked(blocked: boolean): void; isBusy(): boolean; dispose(): void };
 type ResourceFactory = (root: HTMLElement, onSelect: (patch: Partial<SpeechConfig>) => void, getDraft: () => SpeechConfig) => ResourceControls;
@@ -46,11 +47,18 @@ export function speechDiagnostics(s?: SpeechSnapshot, p?: SpeechPreferences): st
     ownership: s?.ownership ?? 'unknown', model_state: s?.model_state ?? 'unknown',
     busy: s?.busy ?? false, error_present: !!s?.error, preferences_revision: p?.revision ?? null }, null, 2);
 }
-export const speechSettingsMarkup = `<div class="setting-group"><h2>本地千问语音</h2>
-<p class="setting-help">宠物朗读 · WSL · Q8 · 固定音色。环境要求会按检测到的显卡类型提示。可选择已有模型或手动确认下载；打开本页、刷新状态或切换自动朗读均不会隐式安装、创建环境或加载模型；仅显式点击“初始化语音环境”才准备离线环境与本地配置。</p>
+export const speechSettingsMarkup = `<div class="setting-group"><div class="toggle-row"><div><h2>自动朗读回复</h2><p>默认关闭。与桌宠右键菜单同步，仅朗读以后新完成的短回复。</p></div>
+<label class="switch"><input id="speech-auto" type="checkbox" aria-label="自动朗读回复" disabled><span></span></label></div>
+<label class="speech-volume-label" for="speech-volume">音量 <span id="speech-volume-label">100%</span></label><input id="speech-volume" type="range" min="0" max="100" step="1" value="100" disabled>
+<div class="speech-actions"><button id="speech-test" class="button secondary" disabled>试听固定文本</button><button id="speech-cancel_test" class="button secondary" disabled>停止试听</button></div>
+<p class="setting-help">试听仅允许本页播放，不代表桌宠已获得自动播放权限；请在桌宠点击朗读或开启自动朗读。</p>
+<p id="speech-audio-message" class="setting-help" role="status"></p></div>
+<div class="setting-group"><h2>本地千问语音</h2>
+<p class="setting-help">使用 WSL 中的 Q8 模型和固定音色朗读，需要匹配显卡后端的运行依赖。可选择已有模型或手动确认下载；打开本页、刷新状态或切换自动朗读均不会隐式安装、创建环境或加载模型；仅显式点击“初始化语音环境”才准备离线环境与本地配置。</p>
 <dl class="connection-info"><div><dt>当前 WSL 发行版</dt><dd id="speech-distribution">未知</dd></div></dl>
 <label for="speech-model_dir">模型目录（WSL 绝对路径）</label><input id="speech-model_dir" type="text" maxlength="4096" autocomplete="off" spellcheck="false" readonly aria-readonly="true" disabled>
-<label for="speech-python_path">Python 可执行文件（WSL）</label><input id="speech-python_path" type="text" maxlength="4096" autocomplete="off" spellcheck="false" readonly aria-readonly="true" disabled>
+<label for="speech-python_path">Python（托管默认路径，只读）</label><input id="speech-python_path" type="text" maxlength="4096" autocomplete="off" spellcheck="false" readonly aria-readonly="true" disabled>
+<p class="setting-help">固定使用 ~/.dsh-wsl-desktop/speech/runtime/venv/bin/python，不支持手动指定 Python；旧外置路径将忽略。首次使用请点击“初始化语音环境”准备默认路径。</p>
 <div id="speech-resources"></div>
 <details class="speech-paths"><summary>高级：原生库路径</summary>
 <label for="speech-native_lib">原生库文件</label><input id="speech-native_lib" type="text" maxlength="4096" autocomplete="off" spellcheck="false" readonly aria-readonly="true" disabled>
@@ -66,12 +74,6 @@ export const speechSettingsMarkup = `<div class="setting-group"><h2>本地千问
 <button id="speech-cancel_check" class="button secondary" disabled>取消检测</button><button id="speech-start" class="button primary" disabled>启动并加载模型</button>
 <button id="speech-stop" class="button secondary" disabled>停止并释放显存</button></div>
 <p class="setting-help">停止会取消生成并释放托管模型；外部服务只能到其原终端停止。</p></div>
-<div class="setting-group"><div class="toggle-row"><div><h2>自动朗读回复</h2><p>默认关闭。与桌宠右键菜单同步，仅朗读以后新完成的短回复。</p></div>
-<label class="switch"><input id="speech-auto" type="checkbox" aria-label="自动朗读回复" disabled><span></span></label></div>
-<label for="speech-volume">音量 <span id="speech-volume-label">100%</span></label><input id="speech-volume" type="range" min="0" max="100" step="1" value="100" disabled>
-<div class="speech-actions"><button id="speech-test" class="button primary" disabled>试听固定文本</button><button id="speech-cancel_test" class="button secondary" disabled>停止试听</button></div>
-<p class="setting-help">试听仅允许本页播放，不代表桌宠已获得自动播放权限；请在桌宠点击朗读或开启自动朗读。</p>
-<p id="speech-audio-message" class="setting-help" role="status"></p></div>
 <details class="setting-group"><summary>安全诊断摘要</summary><pre id="speech-diagnostics" tabindex="0"></pre>
 <button id="speech-copy" class="button secondary" disabled>复制诊断</button><p id="speech-copy-message" class="setting-help" role="status"></p></details>`;
 
@@ -202,7 +204,11 @@ export class SpeechSettings {
         this.error = '候选路径检测失败。草稿与原有效配置均保留；请修正路径后重试。';
       }
     }
-    if (!this.dirty) for (const key of ['model_dir', 'python_path', 'native_lib'] as const) this.input(key).value = value.config[key];
+    if (!this.dirty) {
+      for (const key of ['model_dir', 'python_path', 'native_lib'] as const) this.input(key).value = value.config[key];
+      // Do not revive legacy external Python via status polling or save it with other edits.
+      if (!value.config.python_path.endsWith(defaultPythonSuffix)) this.input('python_path').value = '';
+    }
   }
   private acceptPreferences(value: unknown): void {
     if (!isSpeechPreferences(value) || this.preferences && value.revision <= this.preferences.revision) return;
@@ -260,6 +266,9 @@ export class SpeechSettings {
     if (!this.native || !this.visible || !this.subscribed || this.pending || this.operationBusy() || this.resources?.isBusy() || this.player?.state.phase !== 'idle' || !this.dirty) return;
     if (this.pathsLocked()) { this.error = '请先停止语音服务，再保存修改后的路径；草稿会保留。'; this.render(); return; }
     const config = this.getDraft();
+    if (!config.python_path.endsWith(defaultPythonSuffix)) {
+      this.error = 'Python 固定使用托管默认路径，请先点击“初始化语音环境”准备。'; this.render(); return;
+    }
     if (Object.values(config).some(path => !path.startsWith('/') || path.startsWith('//') || path.includes(String.fromCharCode(92)) || Array.from(path).some(char => char.charCodeAt(0) < 32))) {
       this.error = '请填写三个已有文件或目录的 WSL 绝对路径，再保存并检测。'; this.render(); return;
     }
