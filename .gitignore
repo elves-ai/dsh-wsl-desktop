@@ -1,9 +1,28 @@
+# Local tooling and dependencies
 .codegraph/
-node_modules/
-dist/
-src-tauri/target/
 .tools/
+node_modules/
+.venv/
+venv/
+
+# Build output (keep checked-in runtime and installer assets)
+/dist/
+/src-tauri/target/
+/src-tauri/gen/
+
+# Disposable experiments, generated audio, and test reports
+/artifacts/
+/outputs/
+coverage/
+htmlcov/
+playwright-report/
+test-results/
+.pytest_cache/
+.coverage
+.coverage.*
 *.log
+
+# Python bytecode and incremental compiler caches
 __pycache__/
-src-tauri/gen/
-artifacts/
+*.py[cod]
+*.tsbuildinfo

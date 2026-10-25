@@ -62,7 +62,8 @@ for j in range(N):
 import sys
 if sys.byteorder != 'little':
     frames.byteswap()
-output = Path(__file__).parent / '大肥鱼饿了-不锈钢饭盆-v2.wav'
+output = Path(__file__).resolve().parents[1] / 'outputs' / 'fish-basin-notification' / '大肥鱼饿了-不锈钢饭盆-v2.wav'
+output.parent.mkdir(parents=True, exist_ok=True)
 with wave.open(str(output), 'wb') as wav:
     wav.setnchannels(2)
     wav.setsampwidth(2)
