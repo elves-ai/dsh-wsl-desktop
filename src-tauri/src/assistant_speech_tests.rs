@@ -79,6 +79,42 @@ fn fixture(f: impl FnOnce(TcpStream) + Send + 'static) -> (SocketAddr, thread::J
 }
 
 #[test]
+fn timings_serialize_as_numeric_milliseconds_with_submillisecond_precision() {
+    let timings = SpeechTimings::from_durations(
+        Duration::from_micros(1250),
+        Duration::from_millis(2500),
+        Duration::from_micros(125),
+        Duration::from_millis(2600),
+    );
+    assert_eq!(
+        serde_json::to_value(timings).unwrap(),
+        serde_json::json!({
+            "readiness_ms": 1.25,
+            "synthesis_ms": 2500.0,
+            "encode_ms": 0.125,
+            "total_ms": 2600.0,
+        })
+    );
+}
+
+#[test]
+fn timing_duration_bounds_remain_finite_nonnegative_json_numbers() {
+    for duration in [Duration::ZERO, Duration::from_nanos(1), Duration::MAX] {
+        let timings = SpeechTimings::from_durations(duration, duration, duration, duration);
+        let value = serde_json::to_value(timings).unwrap();
+        let fields = value.as_object().unwrap();
+        assert_eq!(fields.len(), 4);
+        for number in fields.values() {
+            let milliseconds = number.as_f64().expect("numeric milliseconds, never null");
+            assert!(milliseconds.is_finite() && milliseconds >= 0.0);
+            if !duration.is_zero() {
+                assert!(milliseconds > 0.0);
+            }
+        }
+    }
+}
+
+#[test]
 fn ids_are_ascii_bounded_and_not_urls_or_paths() {
     for id in ["Ab_19--x".to_string(), "a".repeat(80)] {
         assert!(validate_id(&id).is_ok());
@@ -279,6 +315,100 @@ fn only_one_active_and_latest_pending_survive_supersession() {
     bridge.release(&latest);
     assert!(bridge.begin(&request("latest-1")).is_err());
 }
+#[test]
+fn continuation_requires_the_still_current_predecessor_even_after_audio_is_released() {
+    let bridge = SpeechBridge::default();
+    let (first, _) = bridge.begin(&request("pet-first")).unwrap();
+    bridge.acquire(&first).unwrap();
+    bridge.release(&first);
+    let (second, replaced) = bridge
+        .begin_after(&request("pet-next1"), Some("pet-first"))
+        .unwrap();
+    assert_eq!(replaced, ["pet-first"]);
+    assert!(bridge.is_current(&second));
+    let (audition, replaced) = bridge.begin(&request("audition1")).unwrap();
+    assert_eq!(replaced, ["pet-next1"]);
+    // The UI has not received stop(pet-next1) yet and tries to prefetch another segment.
+    assert_eq!(
+        bridge
+            .begin_after(&request("pet-next2"), Some("pet-next1"))
+            .err()
+            .unwrap(),
+        CANCELLED
+    );
+    assert!(bridge.is_current(&audition));
+    // Cleanup of a rejected continuation must not cancel the newer audition either.
+    bridge.cancel("pet-next2").unwrap();
+    assert!(bridge.is_current(&audition));
+    bridge.acquire(&audition).unwrap();
+    bridge.release(&audition);
+}
+
+#[test]
+fn cancelled_invalidated_and_mismatched_predecessors_cannot_restart_narration() {
+    for invalidate in [false, true] {
+        let bridge = SpeechBridge::default();
+        bridge.begin(&request("pet-first")).unwrap();
+        if invalidate {
+            bridge.invalidate();
+        } else {
+            bridge.cancel("pet-first").unwrap();
+        }
+        assert_eq!(
+            bridge
+                .begin_after(&request("pet-next1"), Some("pet-first"))
+                .err()
+                .unwrap(),
+            CANCELLED
+        );
+        assert!(bridge.requests.lock().unwrap().current.is_none());
+    }
+    let bridge = SpeechBridge::default();
+    let (current, _) = bridge.begin(&request("pet-first")).unwrap();
+    assert_eq!(
+        bridge
+            .begin_after(&request("pet-next1"), Some("not-first"))
+            .err()
+            .unwrap(),
+        CANCELLED
+    );
+    assert!(bridge
+        .begin_after(&request("pet-next1"), Some("bad"))
+        .is_err());
+    assert!(bridge.is_current(&current));
+    let (next, _) = bridge
+        .begin_after(&request("pet-next1"), Some("pet-first"))
+        .unwrap();
+    // No branching or duplicate continuation from an earlier link in the chain.
+    assert_eq!(
+        bridge
+            .begin_after(&request("pet-next2"), Some("pet-first"))
+            .err()
+            .unwrap(),
+        CANCELLED
+    );
+    assert!(bridge.is_current(&next));
+}
+
+#[test]
+fn new_user_request_wins_both_atomic_orderings_against_old_background_continuation() {
+    for _ in 0..32 {
+        let bridge = Arc::new(SpeechBridge::default());
+        bridge.begin(&request("pet-first")).unwrap();
+        let gate = Arc::new(std::sync::Barrier::new(2));
+        let worker = bridge.clone();
+        let worker_gate = gate.clone();
+        let old = thread::spawn(move || {
+            worker_gate.wait();
+            worker.begin_after(&request("pet-next1"), Some("pet-first"))
+        });
+        gate.wait();
+        let (newest, _) = bridge.begin(&request("audition1")).unwrap();
+        let _ = old.join().unwrap();
+        assert!(bridge.is_current(&newest));
+    }
+}
+
 #[test]
 fn native_lifetime_invalidation_rejects_current_and_pending() {
     let bridge = SpeechBridge::default();

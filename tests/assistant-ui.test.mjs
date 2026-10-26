@@ -700,6 +700,7 @@ test('unknown slingshot click only retries reading and pending read prevents dup
   clickSlingshot(ui);clickSlingshot(ui);
   assert.equal(button.disabled,true);
   assert.equal(ui.calls.filter(c=>c.name==='get_pet_preferences').length,2);
+
   assert.equal(ui.calls.filter(c=>c.name==='set_pet_slingshot_enabled').length,0);
   reply.resolve(slingshotState(0,false));await tick();
   assert.equal(button.disabled,false);assert.equal(button.getAttribute('aria-checked'),'false');
@@ -1269,6 +1270,19 @@ test('action submenu lists renderer actions and selecting an action stops moveme
   assert.equal(ui.nodes.get('pet-animation').hidden, true);
   ui.window.emit('pagehide');
   assert.equal(button.handlers.get('click').length, 0);
+});
+
+test('pet narration passes continuation guard separately from strict synthesis request JSON', async () => {
+ const ui=setup({view:'pet',speechSupported:true});await tick();
+ const synthesize=ui.narration.engine.options.synthesize;
+ await synthesize({request_id:'request-first',text:'第一段'});
+ await synthesize({request_id:'request-next1',text:'下一段',previous_request_id:'request-first'});
+ const calls=ui.calls.filter(c=>c.name==='assistant_speech_synthesize');
+ assert.deepEqual(JSON.parse(JSON.stringify(calls.map(c=>c.args))),[
+  {request:{request_id:'request-first',text:'第一段'},previousRequestId:null},
+  {request:{request_id:'request-next1',text:'下一段'},previousRequestId:'request-first'},
+ ]);
+ ui.window.emit('pagehide');
 });
 
 test('closing the speech bubble silences narration without cancelling the model task',async()=>{

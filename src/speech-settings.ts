@@ -159,6 +159,7 @@ export class SpeechSettings {
       this.player = new QwenSpeech({ view: this.view, enabled: true,
         synthesize: request => this.bridge.invoke<QwenAudio>('test_speech', { requestId: request.request_id }),
         cancel: requestId => this.bridge.invoke('cancel_speech_test', { requestId }),
+        onTiming: timing => console.debug('[speech-test:timing]', timing),
         onComplete: () => { if (this.live(epoch)) this.audition = 'completed'; },
         onChange: state => {
           if (!this.live(epoch)) return;

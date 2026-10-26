@@ -169,6 +169,7 @@ pub(super) async fn test_speech(
             text: "你好呀，今天也要一起加油哦！".into(),
         },
         true,
+        None,
     )
     .await
 }

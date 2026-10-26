@@ -31,6 +31,32 @@ pub struct SpeechRequest {
     pub text: String,
 }
 
+/// Native wall-clock stages, in milliseconds (including fractional milliseconds).
+#[derive(Debug, Serialize)]
+pub(crate) struct SpeechTimings {
+    pub readiness_ms: f64,
+    /// Full bridge call: queueing, health, HTTP and WAV validation, not just GPU work.
+    pub synthesis_ms: f64,
+    pub encode_ms: f64,
+    /// From generate entry through the final permission/cancellation checks.
+    pub total_ms: f64,
+}
+impl SpeechTimings {
+    pub(crate) fn from_durations(
+        readiness: Duration,
+        synthesis: Duration,
+        encode: Duration,
+        total: Duration,
+    ) -> Self {
+        Self {
+            readiness_ms: readiness.as_secs_f64() * 1000.0,
+            synthesis_ms: synthesis.as_secs_f64() * 1000.0,
+            encode_ms: encode.as_secs_f64() * 1000.0,
+            total_ms: total.as_secs_f64() * 1000.0,
+        }
+    }
+}
+
 pub fn validate_id(id: &str) -> Result<(), String> {
     if !(8..=80).contains(&id.len())
         || !id
@@ -275,8 +301,29 @@ pub struct SpeechBridge {
 impl SpeechBridge {
     /// Called before spawning, so cancellation/supersession cannot be reordered by worker scheduling.
     pub fn begin(&self, request: &SpeechRequest) -> Result<(Ticket, Vec<String>), String> {
+        self.begin_after(request, None)
+    }
+    /// A background continuation may only replace its own still-current predecessor.
+    /// Check and admission share one lock: a delayed WebView stop cannot let an old
+    /// narration reclaim ownership from a newer user-initiated request in another window.
+    pub fn begin_after(
+        &self,
+        request: &SpeechRequest,
+        previous_request_id: Option<&str>,
+    ) -> Result<(Ticket, Vec<String>), String> {
         request.validate()?;
+        if let Some(previous) = previous_request_id {
+            validate_id(previous)?;
+        }
         let mut state = self.requests.lock().unwrap_or_else(|e| e.into_inner());
+        if previous_request_id.is_some_and(|previous| {
+            !state
+                .current
+                .as_ref()
+                .is_some_and(|ticket| ticket.id == previous)
+        }) {
+            return Err(CANCELLED.into());
+        }
         if state.history.contains(&request.request_id)
             || [&state.active, &state.pending, &state.current]
                 .iter()

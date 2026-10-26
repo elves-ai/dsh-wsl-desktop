@@ -314,8 +314,9 @@ function mountPetNarration() {
   if (view !== 'pet') return;
   // Default stays off until the real revisioned native preferences arrive.
   petSpeech = new QwenSpeech({ view: window, enabled: native,
-    synthesize: request => unlistenSpeechStop ? invoke<QwenAudio>('assistant_speech_synthesize', { request }) : Promise.reject(new Error('无法监听语音停止事件，请重新打开桌宠')),
+    synthesize: ({ previous_request_id, ...request }) => unlistenSpeechStop ? invoke<QwenAudio>('assistant_speech_synthesize', { request, previousRequestId: previous_request_id ?? null }) : Promise.reject(new Error('无法监听语音停止事件，请重新打开桌宠')),
     cancel: requestId => invoke('assistant_speech_cancel', { requestId }),
+    onTiming: timing => console.debug('[pet-speech:timing]', timing),
     onChange: next => {
     if (disposed) return;
     const wasActive = narrationState.phase !== 'idle';

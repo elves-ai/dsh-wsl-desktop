@@ -1,15 +1,36 @@
 import type { PetSpeechState } from './speech';
 
-export type QwenAudio = { request_id: string; voice_id: string; wav_base64: string };
+export type QwenNativeTimings = { readiness_ms: number; synthesis_ms: number; encode_ms: number; total_ms: number };
+export type QwenAudio = { request_id: string; voice_id: string; wav_base64: string; timings?: QwenNativeTimings };
+/** Anonymous durations only: never include reply text, WAV data or reference assets. */
+export type QwenSpeechTiming = {
+  request_id: string; segment: number; phase: 'prepared' | 'playback_started';
+  synthesis_ms: number; decode_ms: number; audio_ms: number; elapsed_ms: number;
+  first_audio_ms?: number; gap_ms?: number; native?: QwenNativeTimings;
+};
+type PreparedAudio = { request_id: string; buffer: AudioBuffer; timing: QwenSpeechTiming };
+type PreparedResult = { ok: true; audio: PreparedAudio } | { ok: false; error: unknown };
+type PreparedJob = { settled: boolean; result: Promise<PreparedResult> };
 type PlaybackWindow = Window & { AudioContext?: typeof AudioContext; webkitAudioContext?: typeof AudioContext };
 const VOICE = 'pet-airhead-v1';
 const MAX_WAV = 2 * 1024 * 1024;
 class Cancelled extends Error {}
 
-/** Bound each CPU synthesis without splitting Unicode scalar values. */
+/** A short first clause reduces time to first audio; later chunks amortize TTS overhead. */
 export function qwenChunks(text: string): string[] {
   const result: string[] = [];
   let rest = Array.from(text.trim());
+  // Keep already short replies whole rather than leaving a tiny/punctuation-only tail.
+  if (rest.length > 24) {
+    let end = 0;
+    // Prefer a natural 8–20 character boundary, then a word boundary, then a scalar-safe cut.
+    for (let i = 7; i < 20; i++) if (/[。！？!?；;，,]/.test(rest[i])) end = i + 1;
+    if (!end) for (let i = 19; i >= 7; i--) if (/\s/.test(rest[i])) { end = i + 1; break; }
+    if (!end) end = 20;
+    const first = rest.slice(0, end).join('').trim();
+    if (first) result.push(first);
+    rest = rest.slice(end);
+  }
   while (rest.length > 60) {
     let end = 0;
     for (let i = 15; i < 60; i++) if (/[。！？!?；;，,]/.test(rest[i])) end = i + 1;
@@ -57,10 +78,12 @@ export function qwenWav(encoded: string, decode: (value: string) => string): Arr
 export class QwenSpeech {
   private readonly options: {
     view: Window; enabled: boolean; onChange(state: PetSpeechState): void;
-    synthesize(request: { request_id: string; text: string }): Promise<QwenAudio>;
+    synthesize(request: { request_id: string; text: string; previous_request_id?: string }): Promise<QwenAudio>;
     cancel(requestId: string): Promise<unknown>;
     newId?: () => string;
     onComplete?: () => void;
+    onTiming?: (timing: QwenSpeechTiming) => void;
+    now?: () => number;
   };
   private current: PetSpeechState;
   private generation = 0;
@@ -69,8 +92,9 @@ export class QwenSpeech {
   private source?: AudioBufferSourceNode;
   private gain?: GainNode;
   private volume = 100;
-  private requestId?: string;
-  private interrupt?: () => void;
+  // A generation is one narration; keep both playing and prefetched segment IDs cancellable.
+  private readonly requestIds = new Set<string>();
+  private readonly interrupts = new Set<() => void>();
   private readonly Context?: typeof AudioContext;
 
   constructor(options: QwenSpeech['options']) {
@@ -80,7 +104,7 @@ export class QwenSpeech {
   }
   get state(): PetSpeechState { return { ...this.current }; }
 
-  /** Call in the opt-in click too: Web Audio permission must not wait for slow CPU synthesis. */
+  /** Call in the opt-in click too: Web Audio permission must not wait for synthesis. */
   unlock(): void {
     if (this.disposed || !this.current.supported) return;
     try { const ctx = this.getContext(); if (ctx.state !== 'running') void ctx.resume().catch(() => {}); } catch { /* play reports an actionable error. */ }
@@ -90,14 +114,15 @@ export class QwenSpeech {
     const generation = this.reset();
     if (!text.trim()) { this.publish('idle'); return; }
     if (!this.current.supported) { this.publish('idle', '本地千问朗读仅在桌面应用中可用'); return; }
+    const startedAt = this.now();
     this.unlock();
     this.publish('loading');
-    if (this.active(generation)) void this.run(generation, qwenChunks(text));
+    if (this.active(generation)) void this.run(generation, qwenChunks(text), startedAt);
   }
   stop(): void { if (!this.disposed) { this.reset(); this.publish('idle'); } }
   /** Ignore delayed cross-window stops for an older request, including during playback. */
   stopRequest(request_id: string): void {
-    if (request_id && request_id === this.requestId) this.stop();
+    if (request_id && this.requestIds.has(request_id)) this.stop();
   }
   setVolume(volume: number): void {
     if (!Number.isFinite(volume)) return;
@@ -131,9 +156,10 @@ export class QwenSpeech {
   }
   private reset(): number {
     this.generation++;
-    this.interrupt?.(); this.interrupt = undefined;
-    const id = this.requestId; this.requestId = undefined;
-    if (id) try { void Promise.resolve(this.options.cancel(id)).catch(() => {}); } catch { /* Result guards still prevent stale playback. */ }
+    for (const interrupt of [...this.interrupts]) interrupt();
+    this.interrupts.clear();
+    const ids = [...this.requestIds]; this.requestIds.clear();
+    for (const id of ids) try { void Promise.resolve(this.options.cancel(id)).catch(() => {}); } catch { /* Result guards still prevent stale playback. */ }
     this.releaseSource();
     return this.generation;
   }
@@ -150,12 +176,12 @@ export class QwenSpeech {
       const finish = (callback: () => void) => {
         if (settled) return;
         settled = true; this.options.view.clearTimeout(timer);
-        if (this.interrupt === cancel) this.interrupt = undefined;
+        this.interrupts.delete(cancel);
         callback();
       };
       const cancel = () => finish(() => reject(new Cancelled()));
       const timer = this.options.view.setTimeout(() => finish(() => reject(new Error(message))), timeout);
-      this.interrupt = cancel;
+      this.interrupts.add(cancel);
       task.then(value => finish(() => resolve(value)), error => finish(() => reject(error)));
       if (!this.active(generation)) cancel();
     });
@@ -170,7 +196,47 @@ export class QwenSpeech {
     if (!/^[A-Za-z0-9_-]{8,80}$/.test(value)) throw new Error('无法创建朗读请求标识');
     return value;
   }
-  private async run(generation: number, parts: string[]): Promise<void> {
+  private now(): number { return this.options.now?.() ?? performance.now(); }
+  private timing(generation: number, timing: QwenSpeechTiming): void {
+    if (!this.active(generation)) return;
+    try { this.options.onTiming?.({ ...timing, ...(timing.native ? { native: { ...timing.native } } : {}) }); } catch { /* Diagnostics must never interrupt speech. */ }
+  }
+  private prefetch(generation: number, ctx: AudioContext, text: string, segment: number, startedAt: number, previous_request_id?: string): PreparedJob {
+    // Attach rejection handling immediately, even while the previous segment is still playing.
+    const job: PreparedJob = { settled: false, result: this.prepare(generation, ctx, text, segment, startedAt, previous_request_id).then(
+      audio => { job.settled = true; return { ok: true, audio }; },
+      error => { job.settled = true; return { ok: false, error }; },
+    ) };
+    return job;
+  }
+  private async prepare(generation: number, ctx: AudioContext, text: string, segment: number, startedAt: number, previous_request_id?: string): Promise<PreparedAudio> {
+    if (!this.active(generation)) throw new Cancelled();
+    const request_id = this.id(); this.requestIds.add(request_id);
+    const requestedAt = this.now();
+    const reply = await this.wait(generation, this.options.synthesize({ request_id, text, ...(previous_request_id ? { previous_request_id } : {}) }), 210000, '本地千问生成超时，请停止后重试');
+    if (!this.active(generation)) throw new Cancelled();
+    const receivedAt = this.now();
+    if (reply.request_id !== request_id || reply.voice_id !== VOICE) throw new Error('本地语音服务返回了不匹配的音色或请求');
+    const bytes = qwenWav(reply.wav_base64, value => this.options.view.atob(value));
+    const buffer = await this.wait(generation, ctx.decodeAudioData(bytes), 10000, '本地音频解码超时');
+    if (!this.active(generation)) throw new Cancelled();
+    if (!Number.isFinite(buffer.duration) || buffer.duration <= 0 || buffer.duration > 30.1) throw new Error('合成音频时长无效');
+    const preparedAt = this.now();
+    // Whitelist numeric metadata rather than logging arbitrary backend fields.
+    let native: QwenNativeTimings | undefined;
+    if (reply.timings) {
+      const { readiness_ms, synthesis_ms, encode_ms, total_ms } = reply.timings;
+      if ([readiness_ms, synthesis_ms, encode_ms, total_ms].every(value => typeof value === 'number' && Number.isFinite(value) && value >= 0)) {
+        native = { readiness_ms, synthesis_ms, encode_ms, total_ms };
+      }
+    }
+    const timing: QwenSpeechTiming = { request_id, segment, phase: 'prepared',
+      synthesis_ms: receivedAt - requestedAt, decode_ms: preparedAt - receivedAt,
+      audio_ms: buffer.duration * 1000, elapsed_ms: preparedAt - startedAt, ...(native ? { native } : {}) };
+    this.timing(generation, timing);
+    return { request_id, buffer, timing };
+  }
+  private async run(generation: number, parts: string[], startedAt: number): Promise<void> {
     try {
       const ctx = this.getContext();
       const running = () => ctx.state === 'running';
@@ -178,29 +244,35 @@ export class QwenSpeech {
         await this.wait(generation, ctx.resume(), 5000, '请点击「朗读」允许音频播放');
         if (!running()) throw new Error('请点击「朗读」允许音频播放');
       }
-      for (const text of parts) {
+      if (!this.active(generation) || !parts.length) return;
+      let pending = this.prefetch(generation, ctx, parts[0], 0, startedAt);
+      let endedAt: number | undefined;
+      for (let index = 0; index < parts.length; index++) {
         if (!this.active(generation)) return;
-        this.publish('loading');
+        if (!pending.settled) this.publish('loading');
         if (!this.active(generation)) return;
-        const request_id = this.id(); this.requestId = request_id;
-        const reply = await this.wait(generation, this.options.synthesize({ request_id, text }), 210000, '本地千问生成超时，请停止后重试');
+        const result = await pending.result;
         if (!this.active(generation)) return;
-        if (reply.request_id !== request_id || reply.voice_id !== VOICE) throw new Error('本地语音服务返回了不匹配的音色或请求');
-        // Keep the identity while decoding and playing so targeted stops remain effective.
-        const bytes = qwenWav(reply.wav_base64, value => this.options.view.atob(value));
-        const buffer = await this.wait(generation, ctx.decodeAudioData(bytes), 10000, '本地音频解码超时');
-        if (!this.active(generation)) return;
-        if (!Number.isFinite(buffer.duration) || buffer.duration <= 0 || buffer.duration > 30.1) throw new Error('合成音频时长无效');
+        if (!result.ok) throw result.error;
+        const { request_id, buffer, timing } = result.audio;
         const source = ctx.createBufferSource(); this.source = source; source.buffer = buffer; source.connect(this.gain!);
-        const ended = new Promise<void>(resolve => { source.onended = () => resolve(); });
+        const ended = new Promise<void>(resolve => { source.onended = () => { endedAt = this.now(); resolve(); }; });
         // start() can throw; do not leave a rejecting watchdog without an awaiter.
         source.start();
+        const playbackAt = this.now();
         const playback = this.wait(generation, ended, Math.ceil(buffer.duration * 1000) + 10000, '音频播放未正常结束，请重试');
+        // Reentrant UI callbacks may stop playback; always observe watchdog rejection.
+        void playback.catch(() => {});
         if (this.active(generation)) this.publish('speaking');
+        this.timing(generation, { ...timing, phase: 'playback_started', elapsed_ms: playbackAt - startedAt,
+          ...(index === 0 ? { first_audio_ms: playbackAt - startedAt } : { gap_ms: playbackAt - endedAt! }) });
+        // Only one lookahead, after validated playback starts. The native predecessor check
+        // prevents a background continuation from superseding a newer request in another window.
+        if (this.active(generation) && index + 1 < parts.length) pending = this.prefetch(generation, ctx, parts[index + 1], index + 1, startedAt, request_id);
         await playback;
         if (!this.active(generation)) return;
         this.releaseSource();
-        this.requestId = undefined;
+        this.requestIds.delete(request_id);
       }
       if (this.active(generation)) {
         this.options.onComplete?.();
