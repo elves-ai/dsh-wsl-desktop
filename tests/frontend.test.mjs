@@ -21,7 +21,7 @@ async function mount(native, initial = base(), options = {}) {
   let savedNotification = options.initialNotification || notification();
   let savedPower = options.initialPower || power();
   let savedPet = options.initialPet || pet();
-  const nodes = new Map(); const subscriptions = new Map(); const calls = []; const windowHandlers = new Map(); const listenCalls = []; const unlistened = []; const speechVisibility = [];
+  const nodes = new Map(); const subscriptions = new Map(); const calls = []; const windowHandlers = new Map(); const listenCalls = []; const unlistened = [];
   const node = id => {
     if (!nodes.has(id)) nodes.set(id, { id, textContent: '', value: '', children: [], replaceChildren(...children) { this.children = children; }, dataset: {}, hidden: false, disabled: false, checked: false, open: false, scrollTop: 0, scrollHeight: 0, clientHeight: 0, handlers: {}, attributes: {}, set innerHTML(_) { throw new Error('Native data must not use HTML'); }, addEventListener(name, fn) { this.handlers[name] = fn; }, setAttribute(name, value) { this.attributes[name] = value; }, removeAttribute(name) { delete this.attributes[name]; if (name === 'value') delete this.value; }, focus() { this.focused = true; }, scrollIntoView() { this.scrolled = true; } });
     return nodes.get(id);
@@ -32,7 +32,6 @@ async function mount(native, initial = base(), options = {}) {
     appIconUrl: 'app-icon.png',
     PetMemory: class { setVisible() {} refresh() {} dispose() {} },
     PetWorkspace: class { setVisible(visible) { workspaceVisibility.push(visible); } refresh() { workspaceRefreshes++; } dispose() { workspaceDisposed++; } },
-    SpeechSettings: class { setVisible(visible) { speechVisibility.push(visible); } dispose() {} },
     URL, console, document: { addEventListener() {}, querySelector: () => root, getElementById: id => nodes.get(id), createElement: tag => ({ tagName: tag, value: '', textContent: '', set innerHTML(_) { throw new Error('Native data must not use HTML'); } }) }, window: { location, addEventListener(name, handler) { windowHandlers.set(name, handler); } },
     isTauri: () => native,
     listen: async (name, callback) => { listenCalls.push(name); if (options.listen) await options.listen(name, callback); subscriptions.set(name, callback); return () => { unlistened.push(name); subscriptions.delete(name); }; },
@@ -69,7 +68,7 @@ async function mount(native, initial = base(), options = {}) {
     },
   });
   vm.runInContext(source, context); await flush();
-  return { async pick(id, path) { pickerResult = path; const button = id === 'repository-input' ? 'pick-repository' : id.replace('setup-', 'setup-pick-'); nodes.get(button)?.handlers.click?.(); await flush(); }, workspaceVisibility, get workspaceRefreshes() { return workspaceRefreshes; }, get workspaceDisposed() { return workspaceDisposed; }, speechVisibility, template: root.template, pet(snapshot) { subscriptions.get('pet-settings-state')?.({ payload: snapshot }); }, power(snapshot) { subscriptions.get('launcher-power-state')?.({ payload: snapshot }); }, node(id) { assert.ok(nodes.has(id), 'Missing DOM node: ' + id); return nodes.get(id); }, has: id => nodes.has(id), location, calls, subscriptions, listenCalls, unlistened, async fill(id, value) { const item = nodes.get(id); item.value = value; item.handlers.input?.(); await flush(); }, async choose(id, value) { const item = nodes.get(id); item.value = value; item.handlers.change?.(); await flush(); }, async submit() { nodes.get('setup-form')?.handlers.submit?.({ preventDefault() {} }); await flush(); }, async change(id, checked) { const item = nodes.get(id); if (!item) return; item.checked = checked; item.handlers.change?.(); await flush(); }, notification(snapshot) { subscriptions.get('launcher-notification-state')?.({ payload: snapshot }); }, unload() { windowHandlers.get('beforeunload')?.(); }, event(snapshot) { subscriptions.get('launcher-state')?.({ payload: snapshot }); }, update(snapshot) { subscriptions.get('launcher-update-state')?.({ payload: snapshot }); }, async click(id) { nodes.get(id)?.handlers.click?.(); await flush(); } };
+  return { async pick(id, path) { pickerResult = path; const button = id === 'repository-input' ? 'pick-repository' : id.replace('setup-', 'setup-pick-'); nodes.get(button)?.handlers.click?.(); await flush(); }, workspaceVisibility, get workspaceRefreshes() { return workspaceRefreshes; }, get workspaceDisposed() { return workspaceDisposed; }, template: root.template, pet(snapshot) { subscriptions.get('pet-settings-state')?.({ payload: snapshot }); }, power(snapshot) { subscriptions.get('launcher-power-state')?.({ payload: snapshot }); }, node(id) { assert.ok(nodes.has(id), 'Missing DOM node: ' + id); return nodes.get(id); }, has: id => nodes.has(id), location, calls, subscriptions, listenCalls, unlistened, async fill(id, value) { const item = nodes.get(id); item.value = value; item.handlers.input?.(); await flush(); }, async choose(id, value) { const item = nodes.get(id); item.value = value; item.handlers.change?.(); await flush(); }, async submit() { nodes.get('setup-form')?.handlers.submit?.({ preventDefault() {} }); await flush(); }, async change(id, checked) { const item = nodes.get(id); if (!item) return; item.checked = checked; item.handlers.change?.(); await flush(); }, notification(snapshot) { subscriptions.get('launcher-notification-state')?.({ payload: snapshot }); }, unload() { windowHandlers.get('beforeunload')?.(); }, event(snapshot) { subscriptions.get('launcher-state')?.({ payload: snapshot }); }, update(snapshot) { subscriptions.get('launcher-update-state')?.({ payload: snapshot }); }, async click(id) { nodes.get(id)?.handlers.click?.(); await flush(); } };
 }
 
 const petControls = ['pet-visible', 'pet-startup-visible', 'pet-roaming-enabled', 'pet-slingshot-enabled', 'pet-bubble-notifications'];
@@ -88,27 +87,6 @@ test('workspace lifecycle refreshes pet entry and native re-entry independently 
   assert.equal(app.workspaceVisibility.length, count + 1); assert.equal(app.workspaceVisibility.at(-1), true);
   await app.click('pet-refresh'); assert.equal(app.workspaceRefreshes, 1);
   app.unload(); assert.equal(app.workspaceDisposed, 1);
-});
-
-test('speech auto discovery waits until native settings has actually been revealed', async () => {
-  const pending=deferred();
-  const app=await mount(true,base(),{location:'http://127.0.0.1:1420/index.html?view=settings&section=pet',invoke(name,args,{fallback}){return name==='settings_page_ready'?pending.promise:fallback();}});
-  assert.equal(app.speechVisibility.includes(true),false);
-  pending.resolve('pet');await flush();assert.equal(app.speechVisibility.at(-1),true);
-});
-
-test('speech lives inside pet settings and legacy routes open pet with correct speech visibility', async () => {
-  for (const legacy of [false, true]) {
-    const app = await mount(true, base(), { location: 'http://127.0.0.1:1420/index.html?view=settings&section=' + (legacy ? 'speech' : 'pet') });
-    assert.equal(app.node('settings-pet').hidden, false);
-    assert.equal(app.has('nav-speech'), false);
-    assert.equal(app.node('nav-pet').attributes['aria-current'], 'page');
-    assert.equal(app.speechVisibility.at(-1), true);
-    await app.click('nav-updates'); assert.equal(app.speechVisibility.at(-1), false);
-    app.subscriptions.get('launcher-show-settings')({payload:'speech'}); await flush();
-    assert.equal(app.node('settings-pet').hidden, false);
-    assert.equal(app.speechVisibility.at(-1), true);
-  }
 });
 
 test('pet category supports URL, native routing, sidebar navigation and unchanged neighboring routes', async () => {
@@ -1680,7 +1658,6 @@ test('settings design uses shared tokens, labelled icons and preserves collapsib
   const app = await mount(false);
   const css = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8');
   const tokens = readFileSync(new URL('../src/ui-tokens.css', import.meta.url), 'utf8');
-  const speech = readFileSync(new URL('../src/speech-settings.ts', import.meta.url), 'utf8');
   assert.match(css, /@import "\.\/ui-tokens\.css"/);
   assert.match(tokens, /\.settings-shell[\s\S]*--ui-bg: #202124/);
   assert.doesNotMatch(app.template, /nav-index|class="eyebrow"/);
@@ -1691,8 +1668,6 @@ test('settings design uses shared tokens, labelled icons and preserves collapsib
   assert.match(app.template, /<div class="setting-path"><input id="repository-input"[^>]*readonly/);
   assert.match(css, /\.settings-sidebar nav \{[^}]*overflow-x: auto/);
   assert.match(css, /prefers-reduced-motion: reduce/);
-  assert.ok(speech.indexOf('id="speech-auto"') < speech.indexOf('id="speech-resources"'));
-  assert.doesNotMatch(speech, /id="speech-(?:model_dir|python_path|native_lib|save)"/);
 });
 
 test('changing settings categories resets content scroll without resetting the current category', async () => {
@@ -2305,4 +2280,30 @@ test('setup system picker is distribution scoped, preserves cancel and rejects o
   // Native owner is modal, but even programmatic target changes cannot apply a previous result.
   late.node('setup-distribution').value = 'Debian'; pending.resolve('/old/ubuntu/project'); await flush();
   assert.equal(late.node('setup-repository').value, '');
+});
+
+test('settings retain pet controls without narration entry points or TTS IPC', async () => {
+  for (const native of [false, true]) {
+    const app = await mount(native, base(), { location: 'http://127.0.0.1:1420/index.html?view=settings&section=pet' });
+    assert.equal(app.node('settings-pet').hidden, false);
+    assert.doesNotMatch(app.template, /朗读|语音|id="(?:nav-speech|settings-speech|speech-[^"]*|pet-speech-settings)"/);
+    for (const id of petControls) assert.equal(app.has(id), true, id);
+    await app.click('nav-updates'); await app.click('nav-pet');
+    if (native) {
+      app.subscriptions.get('launcher-show-settings')({ payload: 'pet' }); await flush();
+      await app.change('pet-visible', true);
+    }
+    app.unload(); await flush();
+    assert.deepEqual(app.calls.filter(([name]) => /speech|tts|narrat/i.test(name)), []);
+    assert.deepEqual(app.listenCalls.filter(name => /speech|tts|narrat/i.test(name)), []);
+  }
+});
+
+test('removed speech settings route falls back to environment instead of restoring narration', async () => {
+  const app = await mount(true, base(), { location: 'http://127.0.0.1:1420/index.html?view=settings&section=speech' });
+  assert.equal(app.node('settings-environment').hidden, false);
+  assert.equal(app.node('settings-pet').hidden, true);
+  assert.equal(app.node('nav-environment').attributes['aria-current'], 'page');
+  assert.deepEqual(app.calls.filter(([name]) => /speech|tts|narrat/i.test(name)), []);
+  app.unload();
 });

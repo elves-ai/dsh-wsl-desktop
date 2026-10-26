@@ -165,7 +165,7 @@ h2 { font-size: 13px; font-weight: 600; line-height: 1.7; }
 .switch input:hover:not(:disabled) + span { border-color: var(--ui-secondary); }
 .switch input:disabled { cursor: not-allowed; }
 .switch:has(input:disabled) { opacity: .45; }
-.setting-actions, .speech-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.setting-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .settings-shell .button { min-height: 34px; padding: 6px 12px; border-radius: var(--ui-radius); font: 13px/20px var(--ui-font); }
 .settings-shell .primary { color: var(--ui-on-accent); background: var(--ui-accent); border-color: transparent; }
 .settings-shell .primary:hover:not(:disabled) { background: color-mix(in srgb, var(--ui-accent), white 12%); }
@@ -176,7 +176,7 @@ h2 { font-size: 13px; font-weight: 600; line-height: 1.7; }
 .settings-shell .text-button { color: var(--ui-accent); min-height: 28px; padding: 4px; }
 .settings-shell :is(button, summary, a, input, pre):focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 3px; }
 .settings-shell button { transition: background var(--ui-duration), border-color var(--ui-duration), color var(--ui-duration); }
-.settings-shell .error-notice, #pet-message[data-error="true"], #notification-message[data-error="true"], #update-message[data-error="true"], #speech-message[data-error="true"] { color: var(--ui-error); }
+.settings-shell .error-notice, #pet-message[data-error="true"], #notification-message[data-error="true"], #update-message[data-error="true"] { color: var(--ui-error); }
 .settings-shell .error-notice { border-color: var(--ui-error); background: color-mix(in srgb, var(--ui-error) 7%, var(--ui-bg)); }
 .setting-details { margin-top: 8px; }
 .settings-shell summary { width: fit-content; max-width: 100%; cursor: pointer; color: var(--ui-secondary); font-size: 12px; line-height: 24px; border-radius: 2px; }
@@ -185,7 +185,7 @@ h2 { font-size: 13px; font-weight: 600; line-height: 1.7; }
 .settings-shell details[open] > summary { margin-bottom: 12px; }
 .settings-shell .setting-details p { margin: 8px 0 0; }
 #update-new-version { color: var(--ui-accent); }
-#update-notes, #log-output, #speech-diagnostics { padding: 16px; border: 1px solid var(--ui-line); border-radius: var(--ui-radius); background: var(--ui-field); color: var(--ui-secondary); font: 12px/20px var(--ui-mono); max-height: 400px; white-space: pre-wrap; overflow: auto; overflow-wrap: anywhere; }
+#update-notes, #log-output { padding: 16px; border: 1px solid var(--ui-line); border-radius: var(--ui-radius); background: var(--ui-field); color: var(--ui-secondary); font: 12px/20px var(--ui-mono); max-height: 400px; white-space: pre-wrap; overflow: auto; overflow-wrap: anywhere; }
 #update-notes { font-family: var(--ui-font); max-height: 240px; margin: 16px 0; }
 #update-progress-row { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 16px 0; color: var(--ui-secondary); font-size: 12px; }
 #update-progress { flex: 1; height: 6px; accent-color: var(--ui-accent); }
@@ -210,14 +210,6 @@ h2 { font-size: 13px; font-weight: 600; line-height: 1.7; }
 #settings-pet-memory .pet-memory-source { margin: 0; font-size: 11px; }
 .pet-memory-editor, .pet-memory-confirm { padding: 16px; margin-top: 16px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius); background: var(--ui-subtle); }
 #settings-pet-memory .pet-memory-danger, #pet-memory-message[data-error="true"] { color: var(--ui-error); }
-
-/* Speech uses the same fields and rows, not a second visual system. */
-#settings-speech label:not(.switch) { display: block; margin: 16px 0 8px; color: var(--ui-secondary); font-size: 12px; }
-#settings-speech label.speech-volume-label { display: flex; justify-content: space-between; max-width: 350px; }
-#speech-volume-label { color: var(--ui-muted); font-variant-numeric: tabular-nums; }
-#settings-speech input[type="range"] { display: block; margin: 8px 0; width: min(100%, 350px); accent-color: var(--ui-accent); }
-.speech-actions { margin: 16px 0; }
-#speech-progress { width: 100%; accent-color: var(--ui-accent); }
 
 @keyframes breathe { 50% { opacity: .3; } }
 @keyframes travel { 0% { transform: translateX(-110%); } 100% { transform: translateX(400%); } }

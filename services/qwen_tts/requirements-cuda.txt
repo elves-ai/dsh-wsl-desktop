@@ -1,7 +1,0 @@
-# Optional CUDA 12 runtime libraries for the ctypes driver + cuBLAS path.
-# Explicit user installation only; discovery/initialization never installs these.
-# libcuda.so.1 is supplied by the Windows NVIDIA driver via WSL, NOT by pip.
-# Native libqwen also needs libcudart and the matching adjacent libggml*.so.
-# Building requires a separately installed full CUDA toolkit/nvcc; no Torch.
-nvidia-cuda-runtime-cu12==12.8.90
-nvidia-cublas-cu12==12.8.4.1

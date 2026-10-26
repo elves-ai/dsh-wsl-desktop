@@ -1,8 +1,6 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import './style.css';
-import { SpeechSettings } from './speech-settings';
-import { SpeechResources } from './speech-resources';
 import { PetWorkspace } from './pet-workspace';
 import { PetMemory } from './pet-memory';
 import appIconUrl from '../app-icon.png';
@@ -83,7 +81,7 @@ const parameters = new URL(window.location.href).searchParams;
 const settingsView = parameters.get('view') === 'settings';
 const settingsSections = ['environment', 'notifications', 'power', 'pet', 'updates', 'logs'] as const;
 type SettingsSection = typeof settingsSections[number];
-const initialSection = parameters.get('section') === 'speech' ? 'pet' : parameters.get('section');
+const initialSection = parameters.get('section');
 let settingsSection: SettingsSection = settingsSections.find(section => section === initialSection) || 'environment';
 const settingsIcons: Record<SettingsSection, string> = {
   environment: '<path d="M3 7V5a1 1 0 0 1 1-1h6l2 3h8a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7Z"/>',
@@ -124,7 +122,6 @@ app.innerHTML = settingsView ? `
       </div>
       <div id="settings-pet-memory" class="setting-group" role="region" aria-label="人格与长期记忆"></div>
       <div id="settings-pet-workspace" class="setting-group" role="region" aria-label="对话工作目录"></div>
-      <div id="settings-speech" role="region" aria-label="宠物语音设置"></div>
       <p class="setting-help pet-source">来源：<a href="https://github.com/PC2005-cloud/dsh-pet" target="_blank" rel="noopener noreferrer">PC2005-cloud/dsh-pet</a>。动画素材仅限非商业使用。</p>
     </section>
     <section id="settings-updates" aria-label="软件更新" hidden><div class="setting-group"><div class="group-heading"><h2>DSH WSL Desktop</h2><span id="update-current-version" class="muted">正在读取版本</span></div><p id="update-new-version" hidden></p><p id="update-message" role="status" aria-live="polite" tabindex="-1">正在读取更新状态。</p><pre id="update-notes" aria-label="更新说明" hidden></pre><div id="update-progress-row" hidden><progress id="update-progress" aria-label="更新下载进度"></progress><span id="update-progress-label"></span></div><div class="setting-actions"><button class="button secondary" id="check-update" type="button" disabled>检查更新</button><button class="button primary" id="install-update" type="button" hidden disabled>下载并安装</button></div></div><p class="setting-help">仅更新 Windows 启动器，不会更新或停止 WSL 中的 DSH。安装前需要你确认。</p></section>
@@ -186,8 +183,6 @@ let settingsReturnError = '';
 let settingsReadyError = '';
 let settingsSectionRevision = 0;
 let settingsPageRevealed = !native;
-const speechSettings = settingsView ? new SpeechSettings(document.getElementById('settings-speech')!, window, native, { invoke, listen },
-  (root) => new SpeechResources(root, window, native, { invoke, listen })) : undefined;
 const petWorkspace = settingsView ? new PetWorkspace(document.getElementById('settings-pet-workspace')!, native, { invoke }, () => { void petMemory?.refresh(); }) : undefined;
 const petMemory = settingsView ? new PetMemory(document.getElementById('settings-pet-memory')!, native, { invoke }) : undefined;
 const repositoryInput = document.getElementById('repository-input') as HTMLInputElement;
@@ -767,7 +762,7 @@ async function performUpdate(command: 'check_update' | 'install_update'): Promis
 
 function selectSettings(section: string, focus = false): void {
   if (!settingsView) return;
-  const selected = settingsSections.find(item => item === (section === 'speech' ? 'pet' : section));
+  const selected = settingsSections.find(item => item === section);
   if (!selected) return;
   if (selected !== settingsSection) {
     pathPickerEpoch++;
@@ -776,14 +771,13 @@ function selectSettings(section: string, focus = false): void {
   settingsSection = selected;
   const index = settingsSections.indexOf(selected);
   element('settings-title').textContent = ['环境与目录', '系统通知', '电源管理', '桌面宠物', '软件更新', '诊断日志'][index] || '';
-  element('settings-description').textContent = ['指定已有的 DSH 项目，查看本地运行配置。', '管理后台任务的系统提醒。', '管理任务期间的系统自动休眠保护。', '管理桌面宠物的显示、人格记忆与本地语音。', '检查并安装 Windows 启动器的新版本。', '查看本次启动和服务操作的脱敏记录。'][index] || '';
+  element('settings-description').textContent = ['指定已有的 DSH 项目，查看本地运行配置。', '管理后台任务的系统提醒。', '管理任务期间的系统自动休眠保护。', '管理桌面宠物的显示、对话目录与人格记忆。', '检查并安装 Windows 启动器的新版本。', '查看本次启动和服务操作的脱敏记录。'][index] || '';
   for (const item of settingsSections) {
     element('settings-' + item).hidden = item !== selected;
     element('nav-' + item).dataset.active = String(item === selected);
     element('nav-' + item).setAttribute('aria-current', item === selected ? 'page' : 'false');
   }
   element('nav-' + selected).scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
-  speechSettings?.setVisible(selected === 'pet' && !document.hidden && settingsPageRevealed);
   petWorkspace?.setVisible(selected === 'pet' && !document.hidden && settingsPageRevealed);
   petMemory?.setVisible(selected === 'pet' && !document.hidden && settingsPageRevealed);
   if (focus) element('settings-title').focus({ preventScroll: true });
@@ -1059,7 +1053,6 @@ for (const action of actions) buttons[action]?.addEventListener('click', () => {
 window.addEventListener('beforeunload', () => {
   setupDisposed = true; setupIdentityRevision += 1;
   settingsDisposed = true;
-  speechSettings?.dispose();
   petWorkspace?.dispose();
   petMemory?.dispose();
   notificationsDisposed = true; unlistenNotifications?.(); unlistenNotifications = undefined;
@@ -1069,11 +1062,10 @@ window.addEventListener('beforeunload', () => {
 }, { once: true });
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) pathPickerEpoch++;
-  speechSettings?.setVisible(settingsSection === 'pet' && !document.hidden && settingsPageRevealed);
   petWorkspace?.setVisible(settingsSection === 'pet' && !document.hidden && settingsPageRevealed);
   petMemory?.setVisible(settingsSection === 'pet' && !document.hidden && settingsPageRevealed);
 });
-window.addEventListener('pagehide', () => { speechSettings?.dispose(); petWorkspace?.dispose(); petMemory?.dispose(); }, { once: true });
+window.addEventListener('pagehide', () => { petWorkspace?.dispose(); petMemory?.dispose(); }, { once: true });
 render();
 const initialization = initialize();
 const updatesInitialization = initializeUpdates();

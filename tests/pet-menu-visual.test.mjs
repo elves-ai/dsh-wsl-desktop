@@ -45,15 +45,15 @@ test('pet menu groups existing actions, exposes an action submenu and uses unifo
   assert.equal(groups.length, 3);
   const actions = group => [...group.matchAll(/data-(?:pet-command|action)="([^"]+)"/g)].map(match => match[1]);
   assert.deepEqual(actions(groups[0]), ['close-menu','talk','replay','toggle_chat','open_dsh']);
-  assert.deepEqual(actions(groups[1]), ['auto-read','slingshot','topmost']);
+  assert.deepEqual(actions(groups[1]), ['slingshot','topmost']);
   assert.deepEqual(actions(groups[2]), ['pet_settings','hide']);
   assert.ok(groups[1].includes('aria-haspopup="menu" aria-controls="pet-animation" aria-expanded="false"'));
   assert.ok(root.innerHTML.includes('id="pet-animation" class="pet-menu pet-submenu" role="menu"'));
   assert.doesNotMatch(menu, /<select/);
-  assert.ok(menu.includes('class="pet-menu-label">自动朗读</span>'));
+  assert.doesNotMatch(root.innerHTML, /自动朗读|停止朗读|id="pet-(?:auto-read|read|read-status)"|data-pet-command="auto-read"/);
   assert.ok(menu.includes('class="pet-menu-label">窗口置顶</span>'));
   const icons = [...menu.matchAll(/<svg [^>]*>/g)];
-  assert.equal(icons.length, 12); // Ten action rows, close, submenu chevron.
+  assert.equal(icons.length, 11); // Nine action rows, close, submenu chevron.
   for (const [icon] of icons) {
     for (const attribute of ['viewBox="0 0 24 24"','stroke-width="1.5"','stroke-linecap="round"','aria-hidden="true"','focusable="false"']) assert.ok(icon.includes(attribute));
   }
@@ -66,7 +66,7 @@ test('evaluated menu markup contains only whitespace text nodes between menu ele
 test('menu text regression guard rejects punctuation and words at every row boundary', () => {
   // Cover header/button, button/button, button/separator and separator/button gaps.
   const boundaries = [...menu.matchAll(/(?:<\/header>|<\/button>|<hr\b[^>]*>)(\s*)(?=<(?:button|hr)\b)/g)];
-  assert.ok(boundaries.length >= 10, 'must exercise the actual evaluated menu rows');
+  assert.ok(boundaries.length >= 9, 'must exercise the actual evaluated menu rows');
   for (const boundary of boundaries) {
     const offset = boundary.index + boundary[0].length;
     const prefix = menu.slice(0, offset);
@@ -91,7 +91,6 @@ test('menu styles import shared tokens and constrain dimensions without moving t
   assert.doesNotMatch(menu, /pet-menu-indicator[^>]*><svg/);
   assert.ok(css.includes('.pet-menu button:focus-visible { outline: 2px solid var(--ui-accent)'));
   assert.ok(css.includes('@media (prefers-reduced-motion: reduce)'));
-  assert.ok(css.includes("content: '保存失败'"), 'save failure remains visible alongside the stable label');
 });
 
 test('topmost keeps stable children and distinguishes unknown, pending, checked and unavailable states', () => {
@@ -138,36 +137,4 @@ test('slingshot preserves its icon and label across unknown, pending, checked an
   context.native = false; context.renderPetSlingshot();
   assert.equal(button.disabled, true); assert.equal(button.getAttribute('data-state'), 'unavailable');
   assert.match(menu, /id="pet-slingshot"[^>]+role="switch"[^>]+aria-label="允许弹弓"/);
-});
-
-test('auto-read retains confirmed check state and stable children through save failures and pending states', () => {
-  const button = toggleNode();
-  const context = vm.createContext({
-    view: 'pet', disposed: false, narrationState: { phase: 'idle', supported: true, error: '' },
-    root: { dataset: {} }, autoRead: false, speechPreferences: {}, unlistenSpeechPreferences: () => {},
-    speechPreferencesPending: false, autoReadSaveFailed: false, narrationNote: '',
-    el: id => id === 'pet-auto-read' ? button : null, scheduleHitRegions() {},
-  });
-  vm.runInContext(render('renderPetNarration'), context);
-  context.renderPetNarration();
-  assert.equal(button.getAttribute('aria-checked'), 'false');
-  context.speechPreferencesPending = true;
-  context.renderPetNarration();
-  assert.equal(button.disabled, true);
-  assert.equal(button.getAttribute('aria-busy'), 'true');
-  assert.equal(button.getAttribute('aria-checked'), 'false');
-  context.speechPreferencesPending = false;
-  context.autoReadSaveFailed = true;
-  context.renderPetNarration();
-  assert.equal(button.getAttribute('data-state'), 'error');
-  assert.match(button.getAttribute('aria-description'), /保存失败，请重试/);
-  assert.equal(button.getAttribute('aria-checked'), 'false');
-  context.autoReadSaveFailed = false;
-  context.autoRead = true;
-  context.renderPetNarration();
-  assert.equal(button.getAttribute('aria-checked'), 'true');
-  context.narrationState.supported = false;
-  context.renderPetNarration();
-  assert.equal(button.disabled, true);
-  assert.equal(button.getAttribute('data-state'), 'unavailable');
 });

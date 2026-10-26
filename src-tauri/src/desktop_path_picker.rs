@@ -1,5 +1,5 @@
 //! One read-only, trusted IPC surface for Windows native WSL path selection.
-use super::{assert_local, speech_settings, Controller};
+use super::{assert_local, settings_page, Controller};
 use crate::settings_path::PathKind;
 use crate::settings_path::{from_unc, to_unc, validate_linux};
 use std::sync::{
@@ -31,19 +31,11 @@ impl PathKind {
         matches!(self, Self::SetupRepository | Self::SetupNode)
     }
     fn folder(self) -> bool {
-        matches!(
-            self,
-            Self::Repository | Self::ModelDir | Self::SetupRepository
-        )
-    }
-    fn speech(self) -> bool {
-        matches!(self, Self::ModelDir | Self::NativeLib)
+        matches!(self, Self::Repository | Self::SetupRepository)
     }
     fn title(self) -> &'static str {
         match self {
             Self::Repository | Self::SetupRepository => "选择 WSL Harness 项目目录",
-            Self::ModelDir => "选择 WSL 语音模型目录",
-            Self::NativeLib => "选择 WSL 原生库文件",
             Self::SetupNode => "选择 WSL Node.js 可执行文件",
         }
     }
@@ -88,7 +80,7 @@ pub(super) async fn pick_settings_path(
         let distro = distribution.ok_or("请先选择 WSL 发行版。")?;
         (distro, "/".to_string())
     } else {
-        speech_settings::assert_page(&view, true)?;
+        settings_page::assert_active_page(&view)?;
         if distribution.is_some() {
             return Err("设置路径只能使用已配置的 WSL 发行版。".into());
         }
@@ -102,9 +94,6 @@ pub(super) async fn pick_settings_path(
             .to_string();
         (config.distribution, fallback)
     };
-    if kind.speech() {
-        speech_settings::assert_picker_available(view.app_handle())?;
-    }
     let supplied = current_path.filter(|p| !p.is_empty());
     let is_file = !kind.folder() && supplied.is_some();
     let current = supplied.unwrap_or(fallback);
@@ -151,12 +140,9 @@ pub(super) async fn pick_settings_path(
     .await
     .map_err(|_| "系统路径选择任务未完成。".to_string())??;
     if !kind.setup() {
-        speech_settings::assert_page(&view, true)?;
+        settings_page::assert_active_page(&view)?;
     }
     assert_available(&controller)?;
-    if kind.speech() {
-        speech_settings::assert_picker_available(view.app_handle())?;
-    }
     if kind.setup() {
         assert_local(&view)?;
         if !view.window().is_visible().unwrap_or(false) || !controller.snapshot().setup_required {

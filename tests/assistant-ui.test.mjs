@@ -6,8 +6,6 @@ import ts from 'typescript';
 const source = await readFile(new URL('../src/assistant.ts', import.meta.url), 'utf8');
 const petConversationSource = await readFile(new URL('../src/pet/conversation.ts', import.meta.url), 'utf8');
 const petConversation = await import('data:text/javascript;base64,' + Buffer.from(ts.transpileModule(petConversationSource, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText).toString('base64'));
-const speechSource = await readFile(new URL('../src/pet/speech.ts', import.meta.url), 'utf8');
-const speech = await import('data:text/javascript;base64,' + Buffer.from(ts.transpileModule(speechSource, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText).toString('base64'));
 const modelSource = await readFile(new URL('../src/assistant-model.ts', import.meta.url), 'utf8');
 const markdownSource = await readFile(new URL('../src/assistant-markdown.ts', import.meta.url), 'utf8');
 const menuSource = await readFile(new URL('../src/pet/menu.ts', import.meta.url), 'utf8');
@@ -46,9 +44,9 @@ class Node {
   getClientRects() { return [{}]; }
   getBoundingClientRect() { return { x: 10, y: 20, left: 10, top: 20, right: 110, bottom: 120, width: 100, height: 100 }; }
 }
-function setup({ native = true, view = 'chat', speechSupported = false, autoRead = false, legacyAutoRead = false, storageDenied = false, getSpeechPreferences, setSpeechPreferences, listenGate, getSnapshot, getPreferences, getInbox, openNotification, getInteractions, submitInteraction, openInteraction, setTopmost, setSlingshot, actionResult, getGeometry, movePet, dragPet, now = () => performance.now() } = {}) {
+function setup({ native = true, view = 'chat', listenGate, getSnapshot, getPreferences, getInbox, openNotification, getInteractions, submitInteraction, openInteraction, setTopmost, setSlingshot, actionResult, getGeometry, movePet, dragPet, now = () => performance.now() } = {}) {
   const nodes = new Map();
-  const ids = ['initialize', 'pet-initialize', 'pet-read', 'pet-read-status', 'pet-auto-read', 'assistant-root', 'pet-dialogue', 'pet-speech', 'pet-speech-label', 'pet-speech-text', 'pet-speech-close', 'pet-speech-expand', 'pet-composer', 'pet-input-close', 'pet-enable', 'preview', 'pet', 'pet-media', 'pet-animation-trigger', 'pet-animation', 'pet-animation-list', 'pet-menu', 'pet-bubble', 'pet-interaction', 'pet-topmost', 'pet-slingshot', 'pet-fixed', 'notice', 'status', 'setup', 'conversation', 'sessions', 'new-session', 'session-bar', 'composer-footnote', 'runtime-message', 'draft-hint', 'retry', 'send', 'cancel', 'enable', 'workspace', 'consent', 'enable-form', 'send-form', 'draft'];
+  const ids = ['initialize', 'pet-initialize', 'assistant-root', 'pet-dialogue', 'pet-speech', 'pet-speech-label', 'pet-speech-text', 'pet-speech-close', 'pet-speech-expand', 'pet-composer', 'pet-input-close', 'pet-enable', 'preview', 'pet', 'pet-media', 'pet-animation-trigger', 'pet-animation', 'pet-animation-list', 'pet-menu', 'pet-bubble', 'pet-interaction', 'pet-topmost', 'pet-slingshot', 'pet-fixed', 'notice', 'status', 'setup', 'conversation', 'sessions', 'new-session', 'session-bar', 'composer-footnote', 'runtime-message', 'draft-hint', 'retry', 'send', 'cancel', 'enable', 'workspace', 'consent', 'enable-form', 'send-form', 'draft'];
   ids.forEach(id => nodes.set(id, new Node(id)));
   nodes.get('pet-menu').hidden = true;
   nodes.get('pet-menu').append(nodes.get('pet-animation-trigger'));
@@ -72,25 +70,14 @@ function setup({ native = true, view = 'chat', speechSupported = false, autoRead
   const listeners = new Map(); let stopped = 0;
   let topmost = true; let slingshot = true; let petRevision = 0;
   const window = new Node(); window.confirm = () => false;
-  const preferences = new Map([['dsh-assistant:qwen-auto-read', String(autoRead)], ['dsh-assistant:auto-read', String(legacyAutoRead)]]);
-  window.localStorage = { getItem:key=>{if(storageDenied)throw new Error('storage denied');return preferences.get(key)??null;},setItem:(key,value)=>{if(storageDenied)throw new Error('storage denied');preferences.set(key,value);},removeItem:key=>preferences.delete(key) };
-  let nativeSpeechPreferences = { revision:0, initialized:false, auto_read:false, volume:100 };
-  const narration = { played:[], stops:0, disposed:false };
   const document = Object.assign(new Node(), { defaultView:window, body:{dataset:{}}, querySelector:()=>root, getElementById:id=>nodes.get(id), createDocumentFragment:()=>new Node(), createElement:()=>new Node(), getSelection:()=>null });
   for (const node of nodes.values()) node.ownerDocument = document;
   const menuTimers = new Map(); let menuTimerId = 0;
-  const speechTimers = new Map(); let speechTimerId = 0;
-  window.setTimeout = callback => { speechTimers.set(++speechTimerId, callback); return speechTimerId; };
-  window.clearTimeout = id => speechTimers.delete(id);
+  const bubbleTimers = new Map(); let bubbleTimerId = 0;
+  window.setTimeout = callback => { bubbleTimers.set(++bubbleTimerId, callback); return bubbleTimerId; };
+  window.clearTimeout = id => bubbleTimers.delete(id);
   const invoke = async (name, args) => {
     calls.push({ name, args });
-    if (name === 'get_speech_preferences') return getSpeechPreferences ? getSpeechPreferences() : nativeSpeechPreferences;
-    if (name === 'set_speech_preferences') {
-      if (setSpeechPreferences) return setSpeechPreferences(args.patch);
-      const {migrate,...patch}=args.patch;
-      if (!migrate || !nativeSpeechPreferences.initialized) nativeSpeechPreferences={...nativeSpeechPreferences,...patch,initialized:true,revision:nativeSpeechPreferences.revision+1};
-      return nativeSpeechPreferences;
-    }
     if (name === 'get_pet_geometry') return getGeometry ? getGeometry() : geometry();
     if (name === 'move_pet') return movePet ? movePet(args) : geometry();
     if (name === 'drag_pet') return dragPet ? dragPet(args) : geometry();
@@ -116,18 +103,8 @@ function setup({ native = true, view = 'chat', speechSupported = false, autoRead
     return actionResult ? actionResult(args.request) : undefined;
   };
   const context = {
-    ...model, ...markdown, ...petConversation, toSpeechText:speech.toSpeechText, invoke, isTauri: () => native,
+    ...model, ...markdown, ...petConversation, invoke, isTauri: () => native,
     HIT_BOX: { x0: 200, y0: 50, x1: 440, y1: 335 }, SLINGSHOT_DOUBLE_MS: 200, physics: {}, PET_UPSTREAM_URL: 'https://github.com/PC2005-cloud/dsh-pet',
-    QwenSpeech: class {
-      constructor(options) { this.options=options;this.state={supported:speechSupported,phase:'idle',error:''};narration.engine=this; }
-      publish(phase,error='') {if(narration.disposed)return;this.state={supported:speechSupported,phase,error};this.options.onChange(this.state);}
-      setVolume(value) {narration.volume=value;}
-      stopRequest(id) {narration.stopRequests ??= [];narration.stopRequests.push(id);}
-      unlock() {narration.unlocks=(narration.unlocks??0)+1;}
-      play(text) {narration.played.push(text);this.publish('loading');}
-      stop() {narration.stops++;this.publish('idle');}
-      dispose() {narration.disposed=true;}
-    },
     PetInteractions: class {
       constructor(root,options) {this.root=root;this.options=options;this.active=true;this.snapshot={connected:true,items:[]};petEvents.push(['interaction-mounted',options]);}
       update(snapshot) {this.snapshot=snapshot;petEvents.push(['interaction-update',snapshot]);this.show();}
@@ -178,7 +155,7 @@ function setup({ native = true, view = 'chat', speechSupported = false, autoRead
     requestAnimationFrame: callback => { frames.set(++frameId, callback); return frameId; }, cancelAnimationFrame(id) { frames.delete(id); }, ResizeObserver: class { observe() {} disconnect() {} }, console,
   };
   vm.runInNewContext(script, context);
-  return { nodes, calls, events, petEvents, narration, preferences, window, document, menuTimers, speechTimers, storage, flushSpeechTimer: () => { const callbacks=[...speechTimers.values()]; speechTimers.clear(); callbacks.forEach(callback=>callback()); }, flushMenuTimer: () => { const callbacks=[...menuTimers.values()]; menuTimers.clear(); callbacks.forEach(callback=>callback()); }, flushFrames: () => { const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach(callback => callback()); return callbacks.length; }, emit: state => listeners.get('assistant-state')({ payload: state }), emitEvent: (name,value) => listeners.get(name)?.({ payload:value }), stopped: () => stopped };
+  return { nodes, calls, events, petEvents, window, document, menuTimers, bubbleTimers, storage, flushBubbleTimer: () => { const callbacks=[...bubbleTimers.values()]; bubbleTimers.clear(); callbacks.forEach(callback=>callback()); }, flushMenuTimer: () => { const callbacks=[...menuTimers.values()]; menuTimers.clear(); callbacks.forEach(callback=>callback()); }, flushFrames: () => { const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach(callback => callback()); return callbacks.length; }, emit: state => listeners.get('assistant-state')({ payload: state }), emitEvent: (name,value) => listeners.get(name)?.({ payload:value }), stopped: () => stopped };
 }
 function geometry(patch = {}) { return { position:{x:100,y:100}, size:{width:360,height:320}, scale:1, areas:[{x:0,y:0,width:1920,height:1080}], cursor:{x:200,y:200}, cursor_down:false, horizontal_inset:112.5, ...patch }; }
 function ready(revision = 1, patch = {}) { return { ...model.initialSnapshot(), enabled: true, connected: true, phase: 'ready', workspace_id: 'w', session_id: 's', sessions: [{ id: 's', title: 'hello' }], revision, ...patch }; }
@@ -486,7 +463,7 @@ test('native pet visibility stops motion and rejects roaming until restored', as
   ui.emitEvent('pet-visibility',{visible:true,revision:2});
   assert.equal(hooks.onMove('move',{durationSec:10},{facing:'left',video:{}}),true);
   ui.window.emit('pagehide');
-  assert.equal(ui.stopped(),7);
+  assert.equal(ui.stopped(),ui.events.length);
 });
 
 
@@ -501,7 +478,7 @@ test('pet preference events beat a delayed initial read and same-state events do
   assert.equal(ui.petEvents.filter(e=>e[0]==='fixed').length,before);
   ui.emitEvent('pet-settings-state',{visible:true,slingshot_enabled:true,roaming_enabled:true,revision:5});
   assert.equal(ui.petEvents.filter(e=>e[0]==='fixed').at(-1)[1],false);
-  ui.window.emit('pagehide');assert.equal(ui.stopped(),5);
+  ui.window.emit('pagehide');assert.equal(ui.stopped(),ui.events.length);
 });
 
 test('pet rejects reordered visibility events independently of roaming preference revisions', async () => {
@@ -864,7 +841,7 @@ test('late bubble listener registration after unload is released without reading
   const gate=deferred();
   const ui=setup({view:'pet',listenGate:name=>name==='pet-notification'?gate.promise:undefined});await tick();
   ui.window.emit('pagehide');gate.resolve();await tick();
-  assert.equal(ui.stopped(),7);assert.equal(ui.calls.filter(c=>c.name==='get_pet_notifications').length,0);
+  assert.equal(ui.stopped(),ui.events.length);assert.equal(ui.calls.filter(c=>c.name==='get_pet_notifications').length,0);
   ui.emitEvent('pet-notification',bubbleMessage('late'));
   assert.equal(ui.petEvents.filter(e=>e[0]==='bubble-enqueue').length,0);
   assert.equal(ui.petEvents.filter(e=>e[0]==='bubble-dispose').length,1);
@@ -925,7 +902,7 @@ test('withdrawn passive reminder ids do not become a second waiting bubble', asy
 test('late interactive listener is cleaned after unload and no snapshot or answer is sent', async () => {
   const gate=deferred();const ui=setup({view:'pet',listenGate:name=>name==='pet-interactions-state'?gate.promise:undefined});await tick();
   ui.window.emit('pagehide');gate.resolve();await tick();
-  assert.equal(ui.stopped(),7);assert.equal(ui.calls.filter(c=>c.name==='get_pet_interactions').length,0);
+  assert.equal(ui.stopped(),ui.events.length);assert.equal(ui.calls.filter(c=>c.name==='get_pet_interactions').length,0);
   ui.emitEvent('pet-interactions-state',interactionState(1,[interactionCard()]));
   assert.equal(ui.petEvents.filter(e=>e[0]==='interaction-update').length,0);
   assert.equal(ui.petEvents.filter(e=>e[0]==='interaction-dispose').length,1);
@@ -984,14 +961,14 @@ test('pet shows current-turn thinking then streamed reply without stealing keybo
   assert.equal(ui.nodes.get('pet-speech-text').textContent,'让我想想…');
   assert.equal(ui.nodes.get('cancel').hidden,false);
   ui.emit(ready(3,{running:true,messages:[old,user,{id:'answer',role:'assistant',text:'你好，'}]}));
-  assert.equal(ui.nodes.get('pet-speech-text').textContent,'你好，');assert.equal(ui.speechTimers.size,0);
+  assert.equal(ui.nodes.get('pet-speech-text').textContent,'你好，');assert.equal(ui.bubbleTimers.size,0);
   ui.emit(ready(4,{messages:[old,user,{id:'answer',role:'assistant',text:'你好，我在呢。'}]}));
-  assert.equal(ui.nodes.get('pet-speech-text').textContent,'你好，我在呢。');assert.equal(ui.speechTimers.size,1);
+  assert.equal(ui.nodes.get('pet-speech-text').textContent,'你好，我在呢。');assert.equal(ui.bubbleTimers.size,1);
   assert.equal(ui.document.activeElement,undefined);
   assert.equal(ui.calls.filter(c=>c.args?.request?.action==='pet_input').length,0);
-  ui.nodes.get('pet-dialogue').emit('pointerenter');assert.equal(ui.speechTimers.size,0);
-  ui.nodes.get('pet-dialogue').emit('pointerleave');assert.equal(ui.speechTimers.size,1);
-  ui.flushSpeechTimer();assert.equal(ui.nodes.get('pet-dialogue').hidden,true);
+  ui.nodes.get('pet-dialogue').emit('pointerenter');assert.equal(ui.bubbleTimers.size,0);
+  ui.nodes.get('pet-dialogue').emit('pointerleave');assert.equal(ui.bubbleTimers.size,1);
+  ui.flushBubbleTimer();assert.equal(ui.nodes.get('pet-dialogue').hidden,true);
   ui.nodes.get('pet').emit('click',{detail:1});await tick();
   assert.equal(ui.nodes.get('pet-speech-text').textContent,'你好，我在呢。');
   ui.window.emit('pagehide');
@@ -1017,7 +994,7 @@ test('long pet replies stay readable, expand locally and do not inject HTML', as
   const ui=setup({view:'pet'});await tick();
   const text='<img src=x onerror=alert(1)>\n'+ '这是长回复。'.repeat(60);
   ui.emit(ready(2,{messages:[{id:'a',role:'assistant',text}]}));
-  assert.equal(ui.nodes.get('pet-speech-text').textContent,text);assert.equal(ui.speechTimers.size,0);
+  assert.equal(ui.nodes.get('pet-speech-text').textContent,text);assert.equal(ui.bubbleTimers.size,0);
   ui.nodes.get('pet-speech-expand').emit('click');
   assert.equal(ui.nodes.get('pet-dialogue').dataset.expanded,'true');
   ui.nodes.get('pet-speech-close').emit('click');
@@ -1110,202 +1087,6 @@ test('IME Escape neither sends nor closes the pet composer',async()=>{
   ui.window.emit('pagehide');
 });
 
-function toggleReading(ui) {
-  const button=ui.nodes.get('pet-auto-read');button.dataset.petCommand='auto-read';
-  ui.nodes.get('assistant-root').emit('click',{target:button});
-}
-const spokenAnswer=(id='a',text='你好，我在呢。')=>({id,role:'assistant',text,status:'completed'});
-
-test('PET speech preferences subscribe before read, reject older replies and update live volume',async()=>{
- const pending=deferred();const ui=setup({view:'pet',speechSupported:true,getSpeechPreferences:()=>pending.promise});await tick();
- assert.equal(ui.nodes.get('pet-auto-read').disabled,true);assert.equal(ui.nodes.get('pet-auto-read').getAttribute('aria-checked'),'false');
- assert.ok(ui.events.includes('launcher-speech-preferences'));assert.ok(ui.events.includes('launcher-speech-stop'));
- ui.emitEvent('launcher-speech-preferences',{revision:10,initialized:true,auto_read:true,volume:24});pending.resolve({revision:1,initialized:false,auto_read:false,volume:100});await tick();
- assert.equal(ui.nodes.get('pet-auto-read').getAttribute('aria-checked'),'true');assert.equal(ui.narration.volume,24);
- ui.emitEvent('launcher-speech-preferences',{revision:9,initialized:true,auto_read:false,volume:90});assert.equal(ui.narration.volume,24);
- ui.emitEvent('launcher-speech-preferences',{revision:11,initialized:true,auto_read:false,volume:0});assert.equal(ui.nodes.get('pet-auto-read').getAttribute('aria-checked'),'false');assert.equal(ui.narration.volume,0);ui.window.emit('pagehide');
-});
-test('legacy Qwen opt-in migrates once only when native preferences are uninitialized',async()=>{
- const ui=setup({view:'pet',speechSupported:true,autoRead:true});await tick();
- const writes=ui.calls.filter(c=>c.name==='set_speech_preferences');assert.equal(writes.length,1);assert.deepEqual(JSON.parse(JSON.stringify(writes[0].args)),{patch:{auto_read:true,volume:100,migrate:true}});assert.equal(ui.preferences.has('dsh-assistant:qwen-auto-read'),false);ui.window.emit('pagehide');
- const explicit=setup({view:'pet',speechSupported:true,autoRead:true,getSpeechPreferences:()=>({revision:4,initialized:true,auto_read:false,volume:35})});await tick();assert.equal(explicit.calls.some(c=>c.name==='set_speech_preferences'),false);assert.equal(explicit.nodes.get('pet-auto-read').getAttribute('aria-checked'),'false');assert.equal(explicit.narration.volume,35);explicit.window.emit('pagehide');
-});
-test('new native choice received during legacy read cannot be overwritten by migration',async()=>{
- const gate=deferred();const ui=setup({view:'pet',speechSupported:true,autoRead:true,getSpeechPreferences:()=>gate.promise});await tick();ui.emitEvent('launcher-speech-preferences',{revision:8,initialized:true,auto_read:false,volume:40});gate.resolve({revision:0,initialized:false,auto_read:false,volume:100});await tick();assert.equal(ui.calls.some(c=>c.name==='set_speech_preferences'),false);assert.equal(ui.nodes.get('pet-auto-read').getAttribute('aria-checked'),'false');ui.window.emit('pagehide');
-});
-test('native preference write failure retains old value and never creates session-only truth',async()=>{
- const failure=deferred();const ui=setup({view:'pet',speechSupported:true,setSpeechPreferences:()=>failure.promise});await tick();toggleReading(ui);toggleReading(ui);assert.equal(ui.calls.filter(c=>c.name==='set_speech_preferences').length,1);assert.equal(ui.nodes.get('pet-auto-read').getAttribute('aria-checked'),'false');failure.reject(Error('secret detail'));await tick();assert.equal(ui.nodes.get('pet-auto-read').getAttribute('aria-checked'),'false');assert.equal(ui.nodes.get('pet-auto-read').getAttribute('data-state'),'error');assert.match(ui.nodes.get('pet-auto-read').getAttribute('aria-description'),/保存失败/);assert.doesNotMatch(ui.nodes.get('pet-auto-read').getAttribute('aria-description'),/仅本次|secret/);ui.window.emit('pagehide');
-});
-test('native volume updates while auto-read is off preserve manual playback',async()=>{
- const ui=setup({view:'pet',speechSupported:true});await tick();ui.emit(ready(2,{messages:[spokenAnswer()]}));ui.nodes.get('pet-read').emit('click');ui.narration.engine.publish('speaking');const stops=ui.narration.stops;
- ui.emitEvent('launcher-speech-preferences',{revision:4,initialized:true,auto_read:false,volume:20});assert.equal(ui.narration.engine.state.phase,'speaking');assert.equal(ui.narration.stops,stops);assert.equal(ui.narration.volume,20);ui.window.emit('pagehide');
-});
-test('PET targeted stops pass opaque request id and late preferences cannot render after disposal',async()=>{
- const ui=setup({view:'pet',speechSupported:true});await tick();ui.emitEvent('launcher-speech-stop',{request_id:'request-old'});assert.deepEqual(ui.narration.stopRequests,['request-old']);ui.window.emit('pagehide');const before=ui.nodes.get('pet-auto-read').textContent;ui.emitEvent('launcher-speech-preferences',{revision:99,initialized:true,auto_read:true,volume:1});ui.emitEvent('launcher-speech-stop',{request_id:'request-new'});assert.equal(ui.nodes.get('pet-auto-read').textContent,before);assert.deepEqual(ui.narration.stopRequests,['request-old']);
-});
-test('Qwen auto-read does not inherit legacy system-voice opt-in',async()=>{
-  const ui=setup({view:'pet',speechSupported:true,legacyAutoRead:true});await tick();
-  ui.emit(ready(2,{messages:[spokenAnswer()]}));
-  assert.equal(ui.nodes.get('pet-auto-read').getAttribute('aria-checked'),'false');
-  assert.deepEqual(ui.narration.played,[]);ui.window.emit('pagehide');
-});
-
-test('automatic narration defaults off and enabling it never reads the current answer',async()=>{
-  const ui=setup({view:'pet',speechSupported:true});await tick();
-  ui.emit(ready(2,{messages:[spokenAnswer()]}));
-  assert.equal(ui.nodes.get('pet-auto-read').getAttribute('aria-checked'),'false');
-  assert.deepEqual(ui.narration.played,[]);
-  toggleReading(ui);await tick();assert.equal(ui.nodes.get('pet-auto-read').getAttribute('aria-checked'),'true');
-  assert.deepEqual(ui.narration.played,[]);
-  ui.emit(ready(3,{messages:[spokenAnswer()]}));assert.deepEqual(ui.narration.played,[]);
-  ui.emit(ready(4,{messages:[spokenAnswer(),{id:'u',role:'user',text:'再说一句'},spokenAnswer('b','新的回复')]}));
-  assert.deepEqual(ui.narration.played,['新的回复']);
-  toggleReading(ui);await tick();assert.equal(ui.nodes.get('pet-read').textContent,'朗读');
-  assert.equal(ui.nodes.get('pet-auto-read').getAttribute('aria-checked'),'false');ui.window.emit('pagehide');
-});
-
-test('stored opt-in reads only a new completed reply once, not history, stream chunks or renders',async()=>{
-  const ui=setup({view:'pet',speechSupported:true,autoRead:true,getSnapshot:()=>ready(1,{messages:[spokenAnswer('history','历史回复')]})});await tick();
-  assert.deepEqual(ui.narration.played,[]);
-  ui.nodes.get('pet').emit('click',{detail:1});await tick();assert.deepEqual(ui.narration.played,[]);
-  const user={id:'u',role:'user',text:'问题'};
-  ui.emit(ready(2,{running:true,messages:[user,{...spokenAnswer(),text:'你好',status:'streaming'}]}));
-  assert.deepEqual(ui.narration.played,[]);assert.equal(ui.nodes.get('pet-read').disabled,true);
-  ui.emit(ready(3,{messages:[user,spokenAnswer()]}));assert.deepEqual(ui.narration.played,['你好，我在呢。']);
-  ui.emit(ready(4,{messages:[user,spokenAnswer()]}));ui.nodes.get('draft').emit('input');
-  assert.equal(ui.narration.played.length,1);ui.window.emit('pagehide');
-});
-
-test('manual narration cleans markdown without changing reply text and pins its bubble while playing',async()=>{
-  const ui=setup({view:'pet',speechSupported:true});await tick();
-  const text='**你好**，看[说明](https://example.com)\n\n'+String.fromCharCode(96).repeat(3)+'js\nsecret()\n'+String.fromCharCode(96).repeat(3);
-  ui.emit(ready(2,{messages:[spokenAnswer('a',text)]}));ui.nodes.get('pet-read').emit('click');
-  assert.deepEqual(ui.narration.played,['你好，看说明']);
-  assert.equal(ui.nodes.get('pet-read-status').textContent,'正在生成本地语音，首次加载可能较慢，可随时停止…');
-  assert.doesNotMatch(ui.nodes.get('pet-read-status').textContent,/CPU|系统音色/);
-  assert.equal(ui.nodes.get('pet-speech-text').textContent,text);assert.equal(ui.speechTimers.size,0);
-  ui.narration.engine.publish('speaking');assert.equal(ui.nodes.get('assistant-root').dataset.speaking,'true');
-  assert.equal(ui.nodes.get('pet-read').textContent,'停止朗读');
-  ui.nodes.get('pet-read').emit('click');assert.equal(ui.nodes.get('assistant-root').dataset.speaking,'false');
-  assert.equal(ui.nodes.get('pet-read').textContent,'朗读');ui.window.emit('pagehide');
-});
-
-test('opening or closing input does not stop narration, but sending a new message does',async()=>{
-  const ui=setup({view:'pet',speechSupported:true});await tick();ui.emit(ready(2,{messages:[spokenAnswer()]}));
-  ui.nodes.get('pet-read').emit('click');ui.narration.engine.publish('speaking');
-  ui.nodes.get('pet').emit('click',{detail:1});await tick();ui.nodes.get('pet-input-close').emit('click');await tick();
-  assert.equal(ui.narration.engine.state.phase,'speaking');
-  ui.nodes.get('pet').emit('click',{detail:1});await tick();
-  ui.nodes.get('draft').value='新问题';ui.nodes.get('draft').emit('input');ui.nodes.get('send-form').emit('submit');await tick();
-  assert.equal(ui.narration.engine.state.phase,'idle');assert.ok(ui.narration.stops>0);ui.window.emit('pagehide');
-});
-
-test('long replies require manual narration and code-only replies are not read',async()=>{
-  const ui=setup({view:'pet',speechSupported:true,autoRead:true});await tick();
-  const text='这是一条长回复。'.repeat(70);ui.emit(ready(2,{messages:[spokenAnswer('long',text)]}));
-  assert.deepEqual(ui.narration.played,[]);assert.match(ui.nodes.get('pet-read-status').textContent,/回复较长/);
-  ui.nodes.get('pet-read').emit('click');assert.equal(ui.narration.played[0],text);
-  ui.narration.engine.publish('idle');const code=String.fromCharCode(96).repeat(3)+'js\nconsole.log(1)\n'+String.fromCharCode(96).repeat(3);
-  ui.emit(ready(3,{messages:[{id:'u',role:'user',text:'代码'},spokenAnswer('code',code)]}));
-  assert.equal(ui.narration.played.length,1);assert.equal(ui.nodes.get('pet-read').disabled,true);ui.window.emit('pagehide');
-});
-
-test('manual narration survives unchanged terminal chat status snapshots', async () => {
-  for (const phase of ['cancelled', 'interrupted']) {
-    const messages = [spokenAnswer()];
-    const ui = setup({view:'pet', speechSupported:true, getSnapshot:()=>ready(1,{phase,messages})});
-    await tick();
-    ui.nodes.get('pet').emit('click',{detail:1}); await tick();
-    ui.nodes.get('pet-read').emit('click');
-    ui.emit(ready(2,{phase,messages}));
-    assert.equal(ui.narration.engine.state.phase,'loading',phase + ' must not cancel explicit playback on a metadata refresh');
-    assert.equal(ui.speechTimers.size,0);
-    ui.narration.engine.publish('speaking');
-    ui.emit(ready(3,{phase,messages}));
-    assert.equal(ui.narration.engine.state.phase,'speaking');
-    ui.emit(ready(4,{phase:'sending',messages}));
-    assert.equal(ui.narration.engine.state.phase,'idle','a new operation still interrupts narration');
-    assert.match(ui.nodes.get('pet-read-status').textContent,/朗读已停止/);
-    ui.window.emit('pagehide');
-  }
-});
-
-test('stable completed snapshots preserve synthesis and playback but new terminal transitions stop them', async () => {
-  for (const phase of ['cancelled','interrupted']) {
-    const ui=setup({view:'pet',speechSupported:true}); await tick();
-    const messages=[spokenAnswer()]; ui.emit(ready(2,{messages}));
-    ui.nodes.get('pet-read').emit('click');
-    ui.emit(ready(3,{messages}));
-    assert.equal(ui.narration.engine.state.phase,'loading');
-    ui.narration.engine.publish('speaking'); ui.emit(ready(4,{messages}));
-    assert.equal(ui.narration.engine.state.phase,'speaking');
-    ui.emit(ready(5,{phase,messages}));
-    assert.equal(ui.narration.engine.state.phase,'idle');
-    assert.match(ui.nodes.get('pet-read-status').textContent,/朗读已停止/);
-    ui.window.emit('pagehide');
-  }
-});
-
-test('narration failures pin the bubble until retry or explicit dismissal', async () => {
-  const ui=setup({view:'pet',speechSupported:true}); await tick();
-  ui.emit(ready(2,{messages:[spokenAnswer()]}));
-  ui.nodes.get('pet-read').emit('click');
-  ui.narration.engine.publish('idle','本地千问朗读失败：测试服务错误');
-  assert.equal(ui.speechTimers.size,0,'failure must not start an auto-dismiss timer');
-  ui.nodes.get('pet-dialogue').emit('pointerleave'); ui.flushSpeechTimer();
-  assert.equal(ui.nodes.get('pet-dialogue').hidden,false);
-  assert.match(ui.nodes.get('pet-read-status').textContent,/测试服务错误/);
-  ui.nodes.get('pet-read').emit('click');
-  assert.equal(ui.narration.engine.state.phase,'loading');
-  assert.doesNotMatch(ui.nodes.get('pet-read-status').textContent,/测试服务错误/);
-  ui.nodes.get('pet-speech-close').emit('click');
-  assert.equal(ui.nodes.get('pet-dialogue').hidden,true);
-  ui.window.emit('pagehide');
-});
-
-test('speech errors remain inline and never replace the answer or affect chat sending',async()=>{
-  const ui=setup({view:'pet',speechSupported:true});await tick();ui.emit(ready(2,{messages:[spokenAnswer()]}));
-  ui.nodes.get('pet-read').emit('click');ui.narration.engine.publish('idle','本地千问语音服务未启动');
-  assert.equal(ui.nodes.get('pet-speech-text').textContent,'你好，我在呢。');
-  assert.match(ui.nodes.get('pet-read-status').textContent,/本地千问语音服务未启动/);
-  assert.equal(ui.nodes.get('pet-read').disabled,false);
-  ui.nodes.get('pet-read').emit('click');assert.equal(ui.narration.played.length,2);ui.window.emit('pagehide');
-});
-
-test('hidden pet suppresses new auto speech and does not queue it for a later show',async()=>{
-  const ui=setup({view:'pet',speechSupported:true,autoRead:true});await tick();
-  ui.emitEvent('pet-visibility',{visible:false,revision:10});ui.emit(ready(2,{messages:[spokenAnswer()]}));
-  assert.deepEqual(ui.narration.played,[]);
-  ui.emitEvent('pet-visibility',{visible:true,revision:11});ui.emit(ready(3,{messages:[spokenAnswer()]}));
-  assert.deepEqual(ui.narration.played,[]);ui.window.emit('pagehide');
-});
-
-test('disconnects, session switches and approvals stop speech without reading restored history',async()=>{
-  const ui=setup({view:'pet',speechSupported:true,autoRead:true});await tick();
-  ui.emit(ready(2,{messages:[spokenAnswer()]}));ui.narration.engine.publish('speaking');
-  ui.emit(ready(3,{connected:false,messages:[spokenAnswer()]}));assert.equal(ui.narration.engine.state.phase,'idle');
-  ui.emit(ready(4,{messages:[spokenAnswer('restored','恢复的历史')]}));assert.equal(ui.narration.played.length,1);
-  ui.emit(ready(5,{session_id:'other',messages:[spokenAnswer('other','其他会话的历史')]}));assert.equal(ui.narration.played.length,1);
-  ui.emit(ready(6,{session_id:'other',messages:[spokenAnswer('new','新回复')]}));assert.equal(ui.narration.played.length,2);
-  ui.emitEvent('pet-interactions-state',interactionState(1,[interactionCard()]));assert.equal(ui.narration.engine.state.phase,'idle');
-  ui.window.emit('pagehide');
-});
-
-test('unsupported speech keeps chat usable and cannot auto-read even with stored opt-in',async()=>{
-  const ui=setup({view:'pet',speechSupported:false,autoRead:true});await tick();
-  ui.emit(ready(2,{messages:[spokenAnswer()]}));
-  assert.equal(ui.nodes.get('pet-read').disabled,true);assert.equal(ui.nodes.get('pet-auto-read').disabled,true);
-  assert.deepEqual(ui.narration.played,[]);ui.nodes.get('pet').emit('click',{detail:1});await tick();
-  assert.equal(ui.nodes.get('pet-composer').hidden,false);ui.window.emit('pagehide');
-});
-
-test('local storage failure does not create a second truth beside native preferences',async()=>{
-  const ui=setup({view:'pet',speechSupported:true,storageDenied:true});await tick();
-  assert.equal(ui.nodes.get('pet-auto-read').getAttribute('aria-checked'),'false');toggleReading(ui);await tick();
-  assert.equal(ui.nodes.get('pet-auto-read').getAttribute('aria-checked'),'true');assert.doesNotMatch(ui.nodes.get('pet-auto-read').textContent,/仅本次/);
-  ui.emit(ready(2,{messages:[spokenAnswer()]}));assert.equal(ui.narration.played.length,1);ui.window.emit('pagehide');
-});
-
 test('action submenu lists renderer actions and selecting an action stops movement then closes the menu', async () => {
   const ui = setup({view:'pet'}); await tick();
   const list = ui.nodes.get('pet-animation-list');
@@ -1325,23 +1106,30 @@ test('action submenu lists renderer actions and selecting an action stops moveme
   assert.equal(button.handlers.get('click').length, 0);
 });
 
-test('pet narration passes continuation guard separately from strict synthesis request JSON', async () => {
- const ui=setup({view:'pet',speechSupported:true});await tick();
- const synthesize=ui.narration.engine.options.synthesize;
- await synthesize({request_id:'request-first',text:'第一段'});
- await synthesize({request_id:'request-next1',text:'下一段',previous_request_id:'request-first'});
- const calls=ui.calls.filter(c=>c.name==='assistant_speech_synthesize');
- assert.deepEqual(JSON.parse(JSON.stringify(calls.map(c=>c.args))),[
-  {request:{request_id:'request-first',text:'第一段'},previousRequestId:null},
-  {request:{request_id:'request-next1',text:'下一段'},previousRequestId:'request-first'},
- ]);
- ui.window.emit('pagehide');
-});
-
-test('closing the speech bubble silences narration without cancelling the model task',async()=>{
-  const ui=setup({view:'pet',speechSupported:true});await tick();ui.emit(ready(2,{messages:[spokenAnswer()]}));
-  ui.nodes.get('pet-read').emit('click');ui.nodes.get('pet-speech-close').emit('click');
-  assert.equal(ui.narration.engine.state.phase,'idle');assert.equal(ui.nodes.get('pet-dialogue').hidden,true);
-  assert.equal(ui.calls.some(c=>c.args?.request?.action==='cancel'),false);ui.window.emit('pagehide');
-  assert.equal(ui.narration.disposed,true);
+test('pet and chat keep text conversation without narration controls, events or TTS IPC', async () => {
+  for (const view of ['pet', 'chat']) {
+    const ui = setup({ view }); await tick();
+    const markup = ui.nodes.get('assistant-root').innerHTML;
+    assert.doesNotMatch(markup, /朗读|语音|id="pet-(?:read|read-status|auto-read)"|data-pet-command="auto-read"/);
+    if (view === 'pet') {
+      for (const id of ['pet-speech-text', 'pet-speech-close', 'pet-speech-expand', 'pet-composer']) assert.ok(markup.includes('id="' + id + '"'), id);
+      ui.nodes.get('pet').emit('click', { detail: 1 }); await tick();
+      ui.nodes.get('draft').value = '只用文字回答'; ui.nodes.get('draft').emit('input');
+      ui.nodes.get('send-form').emit('submit'); await tick();
+    }
+    const user = { id: 'u', role: 'user', text: '只用文字回答' };
+    ui.emit(ready(2, { running: true, messages: [user, { id: 'a', role: 'assistant', text: '文字', status: 'streaming' }] }));
+    ui.emit(ready(3, { messages: [user, { id: 'a', role: 'assistant', text: '文字回复。', status: 'completed' }] }));
+    if (view === 'pet') {
+      assert.equal(ui.nodes.get('pet-speech-text').textContent, '文字回复。');
+      ui.nodes.get('pet-speech-close').emit('click');
+      assert.equal(ui.nodes.get('pet-dialogue').hidden, true);
+      assert.equal(ui.calls.some(call => call.args?.request?.action === 'cancel'), false);
+      ui.emitEvent('pet-visibility', { visible: false, revision: 10 });
+      ui.emitEvent('pet-visibility', { visible: true, revision: 11 });
+    }
+    ui.window.emit('pagehide'); await tick();
+    assert.deepEqual(ui.calls.filter(call => /speech|tts|narrat/i.test(call.name)), []);
+    assert.deepEqual(ui.events.filter(name => /speech|tts|narrat/i.test(name)), []);
+  }
 });

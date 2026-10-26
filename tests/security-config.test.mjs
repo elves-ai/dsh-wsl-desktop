@@ -5,7 +5,7 @@ const read = path => readFileSync(new URL('../' + path, import.meta.url), 'utf8'
 test('only trusted local content and titlebar views receive narrowly scoped IPC capabilities', () => {
   const config = JSON.parse(read('src-tauri/tauri.conf.json'));
   const capability = JSON.parse(read('src-tauri/capabilities/launcher.json'));
-  assert.deepEqual([...config.app.security.capabilities].sort(), ['assistant', 'launcher', 'pet-interactions', 'pet-motion', 'pet-notifications', 'pet-settings', 'pet-speech', 'settings-navigation', 'speech-preferences', 'speech-settings', 'titlebar']);
+  assert.deepEqual([...config.app.security.capabilities].sort(), ['assistant', 'launcher', 'pet-interactions', 'pet-motion', 'pet-notifications', 'pet-settings', 'settings-navigation', 'titlebar']);
   assert.deepEqual(capability.webviews, ['launcher', 'launcher-settings', 'dsh-settings']);
   assert.equal(capability.windows, undefined);
   const titlebar = JSON.parse(read('src-tauri/capabilities/titlebar.json'));
@@ -421,7 +421,7 @@ test('power commands are local fixed-purpose settings with no remote power-contr
     assert.ok(read('src-tauri/src/desktop.rs').includes('power::' + command));
     assert.ok(capability.permissions.includes('allow-' + command.replaceAll('_', '-')));
   }
-  assert.ok(read('src-tauri/src/desktop.rs').includes('"notifications" | "power" | "pet" | "speech" | "updates"'));
+  assert.ok(read('src-tauri/src/desktop.rs').includes('"notifications" | "power" | "pet" | "updates"'));
   assert.ok(read('src-tauri/src/desktop_settings.rs').includes('"power" => "power"'));
 });
 

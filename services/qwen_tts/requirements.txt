@@ -1,5 +1,0 @@
-# Runtime only: official AMD ROCm SDK 10.1 libraries for WSL gfx1201.
-# Building the external native library additionally needs the compiler dev extra;
-# see the native build documentation. No Torch, Qwen Python SDK, or model downloads.
---index-url https://stable.repo.amd.com/rocm/whl-next/
-rocm[libraries,device-gfx1201]==10.1.0

@@ -156,7 +156,3 @@ textarea::placeholder { color: #9dabbc; }
 #pet-enable { width: 100%; min-height: 32px; border-radius: var(--ui-radius); background: var(--ui-selected); color: var(--ui-accent); font-size: 12px; }
 .pet-dialogue button:hover:not(:disabled), .pet-composer button:not(#send):hover:not(:disabled) { background: var(--ui-hover); }
 .pet-dialogue button:focus-visible, .pet-speech-text:focus-visible, .pet-composer button:focus-visible, .pet-composer #draft:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: -2px; }
-.pet-read-status { margin: 4px 0 0; flex-shrink: 0; max-height: 32px; overflow: auto; font-size: 11px; line-height: 16px; color: var(--ui-error); overflow-wrap: anywhere; user-select: text; }
-[data-speaking=true] .pet-media { animation: pet-speaking .55s ease-in-out infinite alternate; }
-[data-narrating=true] #pet-read { color: #276baf; font-weight: 600; }
-@keyframes pet-speaking { to { transform: translateY(-1.5px); } }

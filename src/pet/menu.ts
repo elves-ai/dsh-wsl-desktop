@@ -14,7 +14,7 @@ export interface PetMenuOptions {
   onChange(open: boolean): void;
   getGeometry?: () => Promise<PetMenuGeometry>;
   clock?: PetMenuClock;
-  /** Keep adjacent speech actions stable while an inline composer is open. */
+  /** Keep adjacent dialogue actions stable while an inline composer is open. */
   dismissBoundary?: HTMLElement;
   /** Disable for input surfaces whose native focus handoff can emit a transient blur. */
   dismissOnBlur?: boolean;

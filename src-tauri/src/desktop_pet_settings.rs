@@ -195,8 +195,6 @@ impl PetControls {
                 {
                     interactions.prepare_hide(app)?;
                 }
-                // Cancel native synthesis even if a hidden WebView cannot process JS immediately.
-                super::speech::stop(app);
                 if let Some(window) = app.get_window("assistant-pet") {
                     window.hide().map_err(|_| "无法隐藏桌面宠物。")?;
                 }

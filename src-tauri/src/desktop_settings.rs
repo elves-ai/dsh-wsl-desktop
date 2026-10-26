@@ -55,6 +55,14 @@ fn assert_page(view: &Webview) -> Result<Window, String> {
     }
     Ok(window)
 }
+pub(super) fn assert_active_page(view: &Webview) -> Result<(), String> {
+    let window = assert_page(view)?;
+    if !is_active(window.label()) || !window.is_visible().unwrap_or(false) {
+        return Err("设置页面已关闭，请重新打开。".into());
+    }
+    Ok(())
+}
+
 fn reveal(window: &Window, page: &Webview) -> Result<(), String> {
     let content = window
         .app_handle()
@@ -96,7 +104,6 @@ pub(super) fn show_in(window: &Window, section: &str) -> Result<(), String> {
         "notifications" => "notifications",
         "power" => "power",
         "pet" => "pet",
-        "speech" => "pet",
         "updates" => "updates",
         "logs" => "logs",
         _ => "environment",
@@ -209,7 +216,6 @@ pub(super) fn restore_in(window: &Window) -> Result<(), String> {
     let _guard = NAVIGATION.lock().unwrap_or_else(|e| e.into_inner());
     let app = window.app_handle();
     let content = app.get_webview(window.label()).ok_or("原页面不可用。")?;
-    super::speech_settings::cancel_tests(app, page_label);
     content.show().map_err(|_| "无法恢复原页面。")?;
     if let Some(page) = app.get_webview(page_label) {
         page.hide().map_err(|_| "无法关闭设置页面。")?;

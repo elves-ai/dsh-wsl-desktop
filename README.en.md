@@ -14,7 +14,6 @@ Pet code and animations originate from PC2005-cloud’s [dsh-pet](<https://githu
 
 - [Download and installation guide](<DOWNLOADS.md>)
 - [Privacy policy](<PRIVACY.md>)
-- [Local Qwen narration setup](<QWEN_SPEECH.md>): Settings → 桌面宠物 (Desktop pet) → 本地千问语音 offers one-click installation into managed default directories, including Python, GPU dependencies, the pinned native library and Q8 models. No directory selection or separate save step is required. Installation uses the network and supports progress, cancellation and retry; it does not change system GPU drivers, load models or enable automatic narration. CUDA0 is preferred, followed by ROCm0, without CPU fallback. See the speech guide for supported prerequisites and remaining hardware acceptance tests.
 - [Code signing policy](<CODE_SIGNING.md>): current builds are unsigned. A SignPath Foundation application was submitted on 2026-10-22 and is pending review; approval has not been granted.
 
 ## Quick start
@@ -146,7 +145,7 @@ Legacy import source:      %LOCALAPPDATA%\DeepSeekHarnessLauncher\config.json
 
 ### First-run generated configuration
 
-New WSL-side application data uses `~/.dsh-wsl-desktop/`. The pet workspace defaults to `assistant/` beneath that root without a separate transcript store. Local speech one-click installation manages models, the fixed Python environment and native builds beneath `speech/`; no paths need selecting and legacy external Python interpreters are not executed. Opening settings only reads state. Explicit installation downloads resources and saves configuration after validation, without changing system GPU drivers, loading models or enabling automatic narration. See the [speech directory layout](<QWEN_SPEECH.md#默认数据目录>). Windows settings retain their native user-configuration locations. Existing external environments, Harness checkouts and DSH_HOME are not automatically migrated.
+New WSL-side application data uses `~/.dsh-wsl-desktop/`. The pet workspace defaults to `assistant/` beneath that root without a separate transcript store. Windows settings retain their native user-configuration locations. Existing external environments, Harness checkouts and DSH_HOME are not automatically migrated.
 
 The project’s own MIT-licensed Python manager **1.0.0** is embedded in the desktop package using Rust `include_str!`. Its version is paired with the desktop application; setup does not download a remote “latest” manager. After you click “完成配置并启动” (Complete setup and start) and the pre-deployment read-only checks pass, it uses these paths under the selected Linux user:
 

@@ -4,8 +4,6 @@
 #[serde(rename_all = "snake_case")]
 pub enum PathKind {
     Repository,
-    ModelDir,
-    NativeLib,
     SetupRepository,
     SetupNode,
 }
@@ -81,15 +79,11 @@ pub fn from_unc(distribution: &str, selected: &str) -> Result<String, String> {
 mod tests {
     use super::*;
     #[test]
-    fn native_picker_ipc_refuses_python_and_keeps_model_native_selection() {
-        assert!(serde_json::from_str::<PathKind>(r#""python_path""#).is_err());
-        for kind in [
-            "repository",
-            "model_dir",
-            "native_lib",
-            "setup_repository",
-            "setup_node",
-        ] {
+    fn native_picker_ipc_only_accepts_harness_paths() {
+        for kind in ["python_path", "model_dir", "native_lib"] {
+            assert!(serde_json::from_value::<PathKind>(serde_json::json!(kind)).is_err());
+        }
+        for kind in ["repository", "setup_repository", "setup_node"] {
             assert!(serde_json::from_value::<PathKind>(serde_json::json!(kind)).is_ok());
         }
     }
@@ -97,7 +91,7 @@ mod tests {
     fn roundtrip_configured_distribution_and_unicode_hidden_paths() {
         for path in [
             "/",
-            "/home/用户/.dsh-wsl-desktop/speech",
+            "/home/用户/.dsh-wsl-desktop/settings",
             "/home/user/a b/python",
         ] {
             let unc = to_unc("Ubuntu-24.04", path).unwrap();

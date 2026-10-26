@@ -50,10 +50,7 @@ class AssistantDirectoryTests(unittest.TestCase):
                         operation(raw)
             self.assertEqual(list(Path(directory).iterdir()), [])
 
-    def test_assistant_first_creates_private_root_compatible_with_speech(self):
-        speech_spec = importlib.util.spec_from_file_location("speech_resources_for_assistant", Path(__file__).parents[1] / "src-tauri/helpers/speech_resources.py")
-        speech = importlib.util.module_from_spec(speech_spec)
-        speech_spec.loader.exec_module(speech)
+    def test_assistant_creates_private_root_and_preserves_sibling_directory(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(Path, "home", return_value=Path(directory)):
             old_umask = os.umask(0o022)
             try:
@@ -61,9 +58,17 @@ class AssistantDirectoryTests(unittest.TestCase):
                 data = Path(directory) / ".dsh-wsl-desktop"
                 self.assertEqual(data.stat().st_mode & 0o777, 0o700)
                 self.assertEqual((data / "assistant").stat().st_mode & 0o777, 0o700)
-                fd = speech.initialize_root(Path(directory), create=True)
-                os.close(fd)
-                self.assertEqual((data / "speech").stat().st_mode & 0o777, 0o700)
+                sibling = data / "unrelated-data"
+                sibling.mkdir(mode=0o750)
+                marker = sibling / "keep.txt"
+                marker.write_text("existing sibling data")
+                sibling_mode = sibling.stat().st_mode
+                helper.prepare()
+                helper.inspect()
+                self.assertEqual(marker.read_text(), "existing sibling data")
+                self.assertEqual(sibling.stat().st_mode, sibling_mode)
+                self.assertEqual(list(sibling.iterdir()), [marker])
+                self.assertEqual(list((data / "assistant").iterdir()), [])
             finally:
                 os.umask(old_umask)
 

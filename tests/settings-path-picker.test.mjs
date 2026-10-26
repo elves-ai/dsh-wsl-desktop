@@ -3,20 +3,13 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 const read = path => readFileSync(new URL('../' + path, import.meta.url), 'utf8');
 
-test('project paths retain native pickers while speech installation needs no path selection', () => {
+test('project paths retain native read-only pickers', () => {
   const source = read('src/main.ts');
   for (const id of ['repository-input', 'setup-repository', 'setup-node']) {
     const input = source.match(new RegExp('<input id="' + id + '"[^>]*>'))?.[0];
     assert.ok(input, id); assert.match(input, /readonly/); assert.match(input, /aria-readonly="true"/);
   }
-  const resource = read('src/speech-resources.ts');
-  const speech = read('src/speech-settings.ts');
-  assert.doesNotMatch(resource + speech, /pick_settings_path|browse_speech_path|speech-resource-(?:model-browse|native-browse|python-browse)|id="speech-(?:model_dir|python_path|native_lib|save)"/);
-  assert.ok(resource.includes("invoke<unknown>('install_speech')"));
-  assert.match(resource, /检查系统环境/);
-  assert.match(resource, /安装语音组件与模型/);
-  assert.match(resource, /check_speech_prerequisites/);
-  assert.doesNotMatch(resource + speech, /暂不支持 NVIDIA CUDA|当前语音后端仅实现 AMD ROCm/);
+
 });
 
 test('one native picker command is registered only for local trusted launcher/settings views', () => {
@@ -37,12 +30,12 @@ test('one native picker command is registered only for local trusted launcher/se
 
 test('Windows picker is actual COM with strict scope, hidden files and cancellation, not shell or web browsing', () => {
   const native = read('src-tauri/src/desktop_path_picker.rs');
-  for (const token of ['IFileOpenDialog', 'CoInitializeEx', 'COINIT_APARTMENTTHREADED', 'CoUninitialize', 'FOS_PICKFOLDERS', 'FOS_FILEMUSTEXIST', 'FOS_FORCEFILESYSTEM', 'FOS_FORCESHOWHIDDEN', 'FOS_DONTADDTORECENT', 'dialog.SetFolder', 'dialog.Show', 'SIGDN_FILESYSPATH', 'CoTaskMemFree', 'ERROR_CANCELLED', 'return Ok(None)', 'from_unc(distro', 'OPEN.compare_exchange', 'speech_settings::assert_page', 'controller.snapshot().setup_required', 'crate::setup::distributions', 'view.label() != "launcher"', 'distribution.is_some()']) assert.ok(native.replace(/\s+/g, '').includes(token.replace(/\s+/g, '')), token);
+  for (const token of ['IFileOpenDialog', 'CoInitializeEx', 'COINIT_APARTMENTTHREADED', 'CoUninitialize', 'FOS_PICKFOLDERS', 'FOS_FILEMUSTEXIST', 'FOS_FORCEFILESYSTEM', 'FOS_FORCESHOWHIDDEN', 'FOS_DONTADDTORECENT', 'dialog.SetFolder', 'dialog.Show', 'SIGDN_FILESYSPATH', 'CoTaskMemFree', 'ERROR_CANCELLED', 'return Ok(None)', 'from_unc(distro', 'OPEN.compare_exchange', 'settings_page::assert_active_page', 'controller.snapshot().setup_required', 'crate::setup::distributions', 'view.label() != "launcher"', 'distribution.is_some()']) assert.ok(native.replace(/\s+/g, '').includes(token.replace(/\s+/g, '')), token);
   assert.doesNotMatch(native, /std::process|Command::new|save_config|\.execute\(|\.eval\(|\.navigate\(/);
   assert.match(native, /use crate::settings_path::PathKind/);
   const kinds = read('src-tauri/src/settings_path.rs').match(/enum PathKind\s*\{([^}]+)\}/)?.[1];
   assert.ok(kinds, 'native picker uses the shared typed IPC kinds');
-  assert.deepEqual(kinds.split(',').map(s => s.trim()).filter(Boolean), ['Repository', 'ModelDir', 'NativeLib', 'SetupRepository', 'SetupNode']);
+  assert.deepEqual(kinds.split(',').map(s => s.trim()).filter(Boolean), ['Repository', 'SetupRepository', 'SetupNode']);
   assert.doesNotMatch(native, /PythonPath|选择 WSL Python/);
   assert.ok(!read('src-tauri/Cargo.toml').includes('rfd'));
 });
