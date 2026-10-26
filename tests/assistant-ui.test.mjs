@@ -1210,6 +1210,59 @@ test('long replies require manual narration and code-only replies are not read',
   assert.equal(ui.narration.played.length,1);assert.equal(ui.nodes.get('pet-read').disabled,true);ui.window.emit('pagehide');
 });
 
+test('manual narration survives unchanged terminal chat status snapshots', async () => {
+  for (const phase of ['cancelled', 'interrupted']) {
+    const messages = [spokenAnswer()];
+    const ui = setup({view:'pet', speechSupported:true, getSnapshot:()=>ready(1,{phase,messages})});
+    await tick();
+    ui.nodes.get('pet').emit('click',{detail:1}); await tick();
+    ui.nodes.get('pet-read').emit('click');
+    ui.emit(ready(2,{phase,messages}));
+    assert.equal(ui.narration.engine.state.phase,'loading',phase + ' must not cancel explicit playback on a metadata refresh');
+    assert.equal(ui.speechTimers.size,0);
+    ui.narration.engine.publish('speaking');
+    ui.emit(ready(3,{phase,messages}));
+    assert.equal(ui.narration.engine.state.phase,'speaking');
+    ui.emit(ready(4,{phase:'sending',messages}));
+    assert.equal(ui.narration.engine.state.phase,'idle','a new operation still interrupts narration');
+    assert.match(ui.nodes.get('pet-read-status').textContent,/朗读已停止/);
+    ui.window.emit('pagehide');
+  }
+});
+
+test('stable completed snapshots preserve synthesis and playback but new terminal transitions stop them', async () => {
+  for (const phase of ['cancelled','interrupted']) {
+    const ui=setup({view:'pet',speechSupported:true}); await tick();
+    const messages=[spokenAnswer()]; ui.emit(ready(2,{messages}));
+    ui.nodes.get('pet-read').emit('click');
+    ui.emit(ready(3,{messages}));
+    assert.equal(ui.narration.engine.state.phase,'loading');
+    ui.narration.engine.publish('speaking'); ui.emit(ready(4,{messages}));
+    assert.equal(ui.narration.engine.state.phase,'speaking');
+    ui.emit(ready(5,{phase,messages}));
+    assert.equal(ui.narration.engine.state.phase,'idle');
+    assert.match(ui.nodes.get('pet-read-status').textContent,/朗读已停止/);
+    ui.window.emit('pagehide');
+  }
+});
+
+test('narration failures pin the bubble until retry or explicit dismissal', async () => {
+  const ui=setup({view:'pet',speechSupported:true}); await tick();
+  ui.emit(ready(2,{messages:[spokenAnswer()]}));
+  ui.nodes.get('pet-read').emit('click');
+  ui.narration.engine.publish('idle','本地千问朗读失败：测试服务错误');
+  assert.equal(ui.speechTimers.size,0,'failure must not start an auto-dismiss timer');
+  ui.nodes.get('pet-dialogue').emit('pointerleave'); ui.flushSpeechTimer();
+  assert.equal(ui.nodes.get('pet-dialogue').hidden,false);
+  assert.match(ui.nodes.get('pet-read-status').textContent,/测试服务错误/);
+  ui.nodes.get('pet-read').emit('click');
+  assert.equal(ui.narration.engine.state.phase,'loading');
+  assert.doesNotMatch(ui.nodes.get('pet-read-status').textContent,/测试服务错误/);
+  ui.nodes.get('pet-speech-close').emit('click');
+  assert.equal(ui.nodes.get('pet-dialogue').hidden,true);
+  ui.window.emit('pagehide');
+});
+
 test('speech errors remain inline and never replace the answer or affect chat sending',async()=>{
   const ui=setup({view:'pet',speechSupported:true});await tick();ui.emit(ready(2,{messages:[spokenAnswer()]}));
   ui.nodes.get('pet-read').emit('click');ui.narration.engine.publish('idle','本地千问语音服务未启动');

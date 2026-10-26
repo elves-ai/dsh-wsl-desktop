@@ -300,8 +300,15 @@ function acceptPetNarration(previous: typeof state) {
   const reply = replyTracker.observe(transportFailed ? { ...state, connected: false } : state);
   const userId = (snapshot: typeof state) => [...snapshot.messages].reverse().find(message => message.role === 'user')?.id;
   const changedSession = previous.session_id !== state.session_id || previous.workspace_id !== state.workspace_id;
+  // A terminal status can describe the reply the user explicitly chose to read.
+  // Repeated metadata snapshots are not a new cancellation of that narration.
+  const terminalChanged = previous.phase !== state.phase && ['cancelled', 'interrupted'].includes(state.phase);
   if (narrationState.phase !== 'idle' && (changedSession || userId(previous) !== userId(state) || !state.enabled || !state.connected || state.running || state.waiting ||
-      ['sending', 'cancelling', 'error', 'failed', 'cancelled', 'interrupted'].includes(state.phase) || (reply && reply.key !== narratingKey))) petSpeech?.stop();
+      ['sending', 'cancelling', 'error', 'failed'].includes(state.phase) || terminalChanged || (reply && reply.key !== narratingKey))) {
+    petSpeech?.stop();
+    narrationNote = '朗读已停止：对话状态已变化，可在回复就绪后重新点击「朗读」。';
+    renderPetNarration();
+  }
   if (!reply) return;
   narrationNote = '';
   if (!native || !autoRead || !narrationState.supported || !petVisible || interactionPending || !el('pet-menu')?.hidden || localError || !petSpeechVisible || dismissedSpeechKey === reply.key) { renderPetNarration(); return; }
@@ -338,7 +345,7 @@ function clearSpeechTimer() {
 }
 function armSpeechTimer() {
   clearSpeechTimer();
-  if (!petSpeechVisible || !petCue || petCue.busy || petCue.kind !== 'reply' || petInputOpen || petSpeechExpanded || petSpeechHovered || petSpeechSelected || narrationState.phase !== 'idle' || el('pet-dialogue')?.hidden) return;
+  if (!petSpeechVisible || !petCue || petCue.busy || petCue.kind !== 'reply' || petInputOpen || petSpeechExpanded || petSpeechHovered || petSpeechSelected || narrationState.phase !== 'idle' || narrationState.error || el('pet-dialogue')?.hidden) return;
   const delay = speechReadingTime(petCue.text);
   if (delay === null) return;
   speechTimer = window.setTimeout(() => { speechTimer = undefined; petSpeechVisible = false; renderPetConversation(); }, delay);
