@@ -6,6 +6,9 @@ pub mod backend;
 pub mod config;
 #[cfg(windows)]
 mod desktop;
+#[cfg(all(test, not(windows)))]
+#[path = "desktop_auth.rs"]
+mod desktop_auth_tests;
 pub mod environment;
 pub mod notification_audio;
 pub mod notification_channels;
@@ -30,5 +33,7 @@ pub mod speech_settings;
 pub mod speech_wsl;
 pub mod update;
 pub mod user_attention;
+#[cfg(any(windows, test))]
+mod window_activation;
 #[cfg(windows)]
 pub use desktop::run;

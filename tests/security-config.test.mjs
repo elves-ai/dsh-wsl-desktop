@@ -48,7 +48,8 @@ test('titlebar settings opens its own verified parent directly and removes all p
   assert.equal((desktop.match(/titlebar::attach\(&/g) || []).length, 2);
   assert.doesNotMatch(desktop, /initialization_script/);
   const handler = desktop.slice(desktop.indexOf('fn handle_menu_action('), desktop.indexOf('pub fn run()'));
-  for (const action of ['open', 'logs', 'start', 'stop', 'restart', 'quit', 'exit']) assert.ok(handler.includes('"' + action + '" => dispatch(app, "' + action + '")'));
+  assert.ok(handler.includes('"open" => activate(app)'), 'explicit tray open shares left-click and second-instance activation');
+  for (const action of ['logs', 'start', 'stop', 'restart', 'quit', 'exit']) assert.ok(handler.includes('"' + action + '" => dispatch(app, "' + action + '")'));
   assert.ok(handler.includes('updates::show_updates(&app)'));
   assert.ok(handler.includes('updates::check(&app, &state).await'));
   assert.doesNotMatch(handler, /settings_page::show_in|"settings"\s*\||"environment"\s*\||"notifications"\s*=>/);
@@ -387,9 +388,19 @@ test('notification commands stay local, fixed-purpose and independent of DSH IPC
     assert.ok(read('src-tauri/build.rs').includes('\"' + command + '\"'));
     assert.ok(read('src-tauri/src/desktop.rs').includes('notifications::' + command));
   }
-  assert.ok(source.includes('cookies_for_url'));
-  assert.ok(source.includes('Sha256::digest(authority.as_bytes())'));
-  assert.ok(source.includes('cookie.name() == name'));
+  assert.doesNotMatch(source, /[.]cookies_for_url[(]/, 'worker cookie reads must not enter the framework UI nested pump');
+  assert.ok(source.includes('super::auth::auth_cookie(app, origin)'));
+  const auth = read('src-tauri/src/desktop_auth.rs');
+  assert.ok(auth.includes('Sha256::digest(authority.as_bytes())'));
+  assert.ok(auth.includes('with_webview'));
+  assert.ok(auth.includes('GetCookiesCompletedHandler::create'));
+  assert.ok(auth.includes('recv_timeout(timeout)'));
+  assert.ok(auth.includes('Duration::from_secs(5)'));
+  assert.ok(auth.includes('take_pwstr'));
+  assert.ok(auth.includes('name != expected_name'));
+  assert.ok(auth.includes('url.origin() == expected.origin()'));
+  assert.equal((auth.match(/verify_origin\(&core, &url\)/g) || []).length, 2, 'origin is checked at registration and completion');
+  assert.doesNotMatch(auth, /wait_with_pump|[.]cookies_for_url[(]|println!|eprintln!|[.]eval[(]|initialization_script/);
   assert.ok(source.includes('NoticeKind::Completed'));
   assert.ok(source.includes('NoticeKind::Failed'));
   assert.ok(source.includes('foreground(app)'));

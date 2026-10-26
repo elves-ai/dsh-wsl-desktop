@@ -10,8 +10,6 @@ use crate::{
     pet_notifications::BubbleKind,
     user_attention::AttentionTracker,
 };
-use base64::Engine;
-use sha2::{Digest, Sha256};
 use std::{
     path::PathBuf,
     sync::{
@@ -270,38 +268,7 @@ pub(super) fn client(app: &tauri::AppHandle, origin: &str) -> Result<RpcClient, 
 
 /// Native authentication shared by fixed-purpose desktop clients. Never expose to JavaScript.
 pub(super) fn auth_cookie(app: &tauri::AppHandle, origin: &str) -> Result<String, String> {
-    let url = Url::parse(origin).map_err(|_| "本机服务地址无效。".to_owned())?;
-    let window = app
-        .get_webview("dsh")
-        .ok_or("等待 DSH 工作窗口完成登录。")?;
-    if window
-        .url()
-        .map_err(|_| "无法验证 DSH 工作窗口。")?
-        .origin()
-        != url.origin()
-    {
-        return Err("等待 DSH 工作窗口返回本机服务。".into());
-    }
-    let authority = match url.port() {
-        Some(port) => format!("127.0.0.1:{port}"),
-        None => "127.0.0.1".into(),
-    };
-    let name = format!(
-        "dsh-auth-{}",
-        base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(Sha256::digest(authority.as_bytes()))
-    );
-    // Called only on the worker thread: WebView2's synchronous cookie getter must
-    // not block the Windows UI thread. Credentials never enter snapshots or disk.
-    let cookies = window
-        .cookies_for_url(url)
-        .map_err(|_| "无法读取 DSH 登录状态，请重新打开工作窗口。")?;
-    let cookie = cookies
-        .into_iter()
-        .find(|cookie| cookie.name() == name)
-        .map(|cookie| format!("{}={}", cookie.name(), cookie.value()))
-        .unwrap_or_default();
-    Ok(cookie)
+    super::auth::auth_cookie(app, origin)
 }
 
 fn foreground(app: &tauri::AppHandle) -> bool {

@@ -29,6 +29,8 @@ use url::Url;
 
 #[path = "desktop_assistant.rs"]
 mod assistant;
+#[path = "desktop_auth.rs"]
+mod auth;
 #[path = "desktop_context_menu.rs"]
 mod context_menu;
 #[path = "desktop_setup.rs"]
@@ -359,18 +361,25 @@ pub fn show_settings(app: &tauri::AppHandle, section: &str) -> Result<(), String
 }
 
 fn activate(app: &tauri::AppHandle) {
-    if let Some(controller) = app.try_state::<Arc<Controller>>() {
-        let snapshot = controller.snapshot();
-        if snapshot.state == "ready" && app.get_window("dsh").is_some() {
-            show_dsh(app);
-        } else {
+    use crate::window_activation::{explicit_activation, Activation};
+
+    let snapshot = app
+        .try_state::<Arc<Controller>>()
+        .map(|controller| controller.snapshot());
+    // Explicit tray/second-instance activation restores existing windows; automatic
+    // startup retains its separate open_dsh/settings anti-focus-stealing policy.
+    match explicit_activation(
+        snapshot.as_ref().map(|snapshot| snapshot.state.as_str()),
+        snapshot.as_ref().is_some_and(|snapshot| snapshot.busy),
+        app.get_window("dsh").is_some(),
+    ) {
+        Activation::Workspace => show_dsh(app),
+        Activation::Launcher { open_workspace } => {
             show_launcher(app);
-            if !snapshot.busy {
+            if open_workspace {
                 dispatch(app, "open");
             }
         }
-    } else {
-        show_launcher(app);
     }
 }
 
@@ -867,7 +876,7 @@ fn handle_menu_action(app: &tauri::AppHandle, id: &str) {
                 }
             });
         }
-        "open" => dispatch(app, "open"),
+        "open" => activate(app),
         "logs" => dispatch(app, "logs"),
         "updates" => {
             let app = app.clone();
